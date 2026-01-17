@@ -19,26 +19,43 @@
         let targetVolume = 100;
         let isReady = false;
 
-        // Load YouTube IFrame API
+        // --- Remote Debugging & Communication ---
+        function debugLog(level, ...args) {
+            const message = args.map(arg => {
+                if (typeof arg === 'object') {
+                    try { return JSON.stringify(arg); } catch (e) { return 'Unserializable Object'; }
+                }
+                return String(arg);
+            }).join(' ');
+
+            const logString = `[YTPlayer][${level.toUpperCase()}] ${message}`;
+            console[level](logString); // Log locally just in case
+            send('LOG', logString); // Send to space
+        }
+
+        function send(type, data) {
+            if (window.bantermessage) {
+                window.bantermessage(JSON.stringify({ type, data }));
+            } else {
+                // Cannot debugLog here as it would cause an infinite loop
+                console.warn('[YTPlayer] Cannot send message, window.bantermessage is not defined.');
+            }
+        }
+
+        // --- YouTube IFrame API Setup ---
         const tag = document.createElement('script');
         tag.src = 'https://www.youtube.com/iframe_api';
         document.head.appendChild(tag);
 
-        // Called by YouTube API when ready
         window.onYouTubeIframeAPIReady = function() {
+            debugLog('info', 'YouTube IFrame API is ready.');
             player = new YT.Player('player', {
                 width: '100%',
                 height: '100%',
                 playerVars: {
-                    autoplay: 1,
-                    controls: 0,
-                    disablekb: 1,
-                    fs: 0,
-                    modestbranding: 1,
-                    rel: 0,
-                    showinfo: 0,
-                    iv_load_policy: 3,
-                    playsinline: 1,
+                    autoplay: 1, controls: 0, disablekb: 1, fs: 0,
+                    modestbranding: 1, rel: 0, showinfo: 0,
+                    iv_load_policy: 3, playsinline: 1,
                     origin: window.location.origin
                 },
                 events: {
@@ -49,83 +66,68 @@
             });
         };
 
+        // --- Player Event Handlers ---
         function onPlayerReady(event) {
             isReady = true;
             player.setVolume(targetVolume);
+            debugLog('info', 'Player is ready.');
             sendStatus('ready');
         }
 
         function onPlayerStateChange(event) {
-            const states = {
-                [-1]: 'unstarted',
-                [0]: 'ended',
-                [1]: 'playing',
-                [2]: 'paused',
-                [3]: 'buffering',
-                [5]: 'cued'
-            };
-            sendStatus(states[event.data] || 'unknown');
-            
-            // Auto-advance when video ends
+            const stateMap = { [-1]:'unstarted', [0]:'ended', [1]:'playing', [2]:'paused', [3]:'buffering', [5]:'cued' };
+            const status = stateMap[event.data] || 'unknown';
+            debugLog('info', 'Player state changed to:', status);
+            sendStatus(status);
+
             if (event.data === YT.PlayerState.ENDED) {
+                debugLog('info', 'Video ended, sending VIDEO_ENDED command.');
                 send('VIDEO_ENDED');
             }
         }
 
         function onPlayerError(event) {
-            console.error('YouTube Error:', event.data);
+            debugLog('error', 'YouTube Player Error. Code:', event.data);
             send('VIDEO_ERROR', { code: event.data });
         }
 
         function sendStatus(status) {
-            send('PLAYER_STATUS', { 
-                status, 
+            const statusData = {
+                status,
                 time: player ? player.getCurrentTime() : 0,
                 duration: player ? player.getDuration() : 0
-            });
+            };
+            // This is noisy, so only send if needed for debugging, or keep it light.
+            // send('PLAYER_STATUS', statusData);
         }
 
-        function send(type, data) {
-            if (window.bantermessage) {
-                window.bantermessage(JSON.stringify({ type, data }));
-            }
-        }
-
-        // Listen for commands from native script via postMessage
+        // --- Command Handling ---
         window.addEventListener('bantermessage', (e) => {
-            // e.detail is the message from RunActions's postmessage
-            if (!e.detail) return;
+            if (!e.detail || !e.detail.message) return;
 
+            debugLog('info', 'Received bantermessage:', e.detail.message);
             try {
-                const msg = JSON.parse(e.data.message);
+                const msg = JSON.parse(e.detail.message);
                 handleCommand(msg);
             } catch (err) {
-                // It might not be JSON, but a simple string command.
-                // This is not used in the current implementation, but good to have.
-                if (typeof e.detail.message === 'string') {
-                    handleCommand({ type: e.detail.message });
-                }
-                console.error('Parse error or invalid data:', err, e.detail);
+                debugLog('error', 'Failed to parse incoming command.', err, e.detail.message);
             }
         });
 
         function handleCommand(msg) {
-            if (!player) return;
-            
+            if (!msg || !msg.type) return;
+            debugLog('info', `Handling command: ${msg.type}`, msg.data || '');
+
+            if (!player || !isReady) {
+                debugLog('warn', `Player not ready, ignoring command: ${msg.type}`);
+                // Could queue commands here if needed
+                return;
+            }
+
             switch (msg.type) {
                 case 'LOAD_VIDEO':
                     currentVideoId = msg.data.id;
-                    if (isReady) {
-                        player.loadVideoById(msg.data.id, msg.data.startTime || 0);
-                    } else {
-                        // Wait for ready then load
-                        const checkReady = setInterval(() => {
-                            if (isReady) {
-                                clearInterval(checkReady);
-                                player.loadVideoById(msg.data.id, msg.data.startTime || 0);
-                            }
-                        }, 100);
-                    }
+                    player.loadVideoById(msg.data.id, msg.data.startTime || 0);
                     break;
                 case 'PLAY':
                     player.playVideo();

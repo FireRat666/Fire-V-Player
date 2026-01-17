@@ -179,9 +179,22 @@
 
         // Listen for state updates from native script
         window.addEventListener("bantermessage", (e) => {
-            console.log('[Playlist] Received bantermessage:', e.detail);
+            console.log('[Playlist] Received bantermessage with detail:', e.detail);
+            let messageString;
+
+            // The payload from the new SDK might be directly in e.detail, while older methods
+            // might have used e.detail.message. We check for the string in either place.
+            if (typeof e.detail === 'string') {
+                messageString = e.detail;
+            } else if (e.detail && typeof e.detail.message === 'string') {
+                messageString = e.detail.message;
+            } else {
+                console.log('[Playlist] Received bantermessage, but payload is in an unrecognized format.');
+                return;
+            }
+
             try {
-                const msg = JSON.parse(e.detail.message);
+                const msg = JSON.parse(messageString);
                 console.log('[Playlist] Parsed message type:', msg.type);
                 if (msg.type === "STATE") {
                     currentState = msg.data;
@@ -189,7 +202,7 @@
                     render();
                 }
             } catch (err) {
-                console.error("[Playlist] Failed to parse message:", err);
+                console.error("[Playlist] Failed to parse message string:", messageString, err);
             }
         });
 

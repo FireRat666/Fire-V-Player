@@ -97,7 +97,7 @@
             if (!e.detail) return;
 
             try {
-                const msg = JSON.parse(e.detail.message);
+                const msg = JSON.parse(e.data);
                 handleCommand(msg);
             } catch (err) {
                 // It might not be JSON, but a simple string command.

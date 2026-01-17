@@ -91,13 +91,21 @@
             }
         }
 
-        // Listen for commands from native script
-        window.addEventListener('bantermessage', (e) => {
+        // Listen for commands from native script via postMessage
+        window.addEventListener('message', (e) => {
+            // e.data is the message from RunActions's postmessage
+            if (!e.data) return;
+
             try {
-                const msg = JSON.parse(e.detail.message);
+                const msg = JSON.parse(e.data);
                 handleCommand(msg);
             } catch (err) {
-                console.error('Parse error:', err);
+                // It might not be JSON, but a simple string command.
+                // This is not used in the current implementation, but good to have.
+                if (typeof e.data === 'string') {
+                    handleCommand({ type: e.data });
+                }
+                console.error('Parse error or invalid data:', err, e.data);
             }
         });
 

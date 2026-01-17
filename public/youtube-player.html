@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>YouTube Player</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
+        #player { width: 100%; height: 100%; }
+    </style>
+</head>
+<body>
+    <div id="player"></div>
+
+    <script>
+        let player;
+        let currentVideoId = '';
+        let targetVolume = 100;
+        let isReady = false;
+
+        // Load YouTube IFrame API
+        const tag = document.createElement('script');
+        tag.src = 'https://www.youtube.com/iframe_api';
+        document.head.appendChild(tag);
+
+        // Called by YouTube API when ready
+        window.onYouTubeIframeAPIReady = function() {
+            player = new YT.Player('player', {
+                width: '100%',
+                height: '100%',
+                playerVars: {
+                    autoplay: 1,
+                    controls: 0,
+                    disablekb: 1,
+                    fs: 0,
+                    modestbranding: 1,
+                    rel: 0,
+                    showinfo: 0,
+                    iv_load_policy: 3,
+                    playsinline: 1,
+                    origin: window.location.origin
+                },
+                events: {
+                    onReady: onPlayerReady,
+                    onStateChange: onPlayerStateChange,
+                    onError: onPlayerError
+                }
+            });
+        };
+
+        function onPlayerReady(event) {
+            isReady = true;
+            player.setVolume(targetVolume);
+            sendStatus('ready');
+        }
+
+        function onPlayerStateChange(event) {
+            const states = {
+                [-1]: 'unstarted',
+                [0]: 'ended',
+                [1]: 'playing',
+                [2]: 'paused',
+                [3]: 'buffering',
+                [5]: 'cued'
+            };
+            sendStatus(states[event.data] || 'unknown');
+            
+            // Auto-advance when video ends
+            if (event.data === YT.PlayerState.ENDED) {
+                send('VIDEO_ENDED');
+            }
+        }
+
+        function onPlayerError(event) {
+            console.error('YouTube Error:', event.data);
+            send('VIDEO_ERROR', { code: event.data });
+        }
+
+        function sendStatus(status) {
+            send('PLAYER_STATUS', { 
+                status, 
+                time: player ? player.getCurrentTime() : 0,
+                duration: player ? player.getDuration() : 0
+            });
+        }
+
+        function send(type, data) {
+            if (window.bantermessage) {
+                window.bantermessage(JSON.stringify({ type, data }));
+            }
+        }
+
+        // Listen for commands from native script
+        window.addEventListener('bantermessage', (e) => {
+            try {
+                const msg = JSON.parse(e.detail.message);
+                handleCommand(msg);
+            } catch (err) {
+                console.error('Parse error:', err);
+            }
+        });
+
+        function handleCommand(msg) {
+            if (!player) return;
+            
+            switch (msg.type) {
+                case 'LOAD_VIDEO':
+                    currentVideoId = msg.data.id;
+                    if (isReady) {
+                        player.loadVideoById(msg.data.id, msg.data.startTime || 0);
+                    } else {
+                        // Wait for ready then load
+                        const checkReady = setInterval(() => {
+                            if (isReady) {
+                                clearInterval(checkReady);
+                                player.loadVideoById(msg.data.id, msg.data.startTime || 0);
+                            }
+                        }, 100);
+                    }
+                    break;
+                case 'PLAY':
+                    player.playVideo();
+                    break;
+                case 'PAUSE':
+                    player.pauseVideo();
+                    break;
+                case 'SET_VOLUME':
+                    targetVolume = msg.data;
+                    player.setVolume(msg.data);
+                    break;
+                case 'MUTE':
+                    player.mute();
+                    break;
+                case 'UNMUTE':
+                    player.unMute();
+                    break;
+                case 'SEEK':
+                    player.seekTo(msg.data, true);
+                    break;
+                case 'GET_TIME':
+                    sendStatus(player.getPlayerState() === 1 ? 'playing' : 'paused');
+                    break;
+            }
+        }
+    </script>
+</body>
+</html>

@@ -149,6 +149,9 @@
         // --- Communication with Native Script ---
         // This page is opened via window.openPage() in Banter
         // It receives state via bantermessage events and sends commands back
+        
+        console.log('[Playlist] Page loaded');
+        console.log('[Playlist] window.bantermessage available:', typeof window.bantermessage === 'function');
 
         let currentState = {
             playlist: [],
@@ -168,29 +171,37 @@
         }
         const instanceId = urlParams.get('instance') || 'default-room';
         const mode = urlParams.get('mode') || 'playlist';
+        
+        console.log('[Playlist] URL params - instance:', instanceId, 'mode:', mode, 'user:', myUserId);
 
         // Update mode label
         document.getElementById('modeLabel').textContent = mode === 'karaoke' ? 'Karaoke Mode' : 'Playlist Mode';
 
         // Listen for state updates from native script
         window.addEventListener("bantermessage", (e) => {
+            console.log('[Playlist] Received bantermessage:', e.detail);
             try {
                 const msg = JSON.parse(e.detail.message);
+                console.log('[Playlist] Parsed message type:', msg.type);
                 if (msg.type === "STATE") {
                     currentState = msg.data;
+                    console.log('[Playlist] State received, playlist length:', currentState.playlist?.length);
                     render();
                 }
             } catch (err) {
-                console.error("Failed to parse message:", err);
+                console.error("[Playlist] Failed to parse message:", err);
             }
         });
 
         // Send command to native script
         function send(type, data) {
+            console.log('[Playlist] Sending command:', type, data);
             if (window.bantermessage) {
-                window.bantermessage(JSON.stringify({ type, data }));
+                const msg = JSON.stringify({ type, data });
+                console.log('[Playlist] Calling bantermessage with:', msg);
+                window.bantermessage(msg);
             } else {
-                console.log("No bantermessage available, command:", type, data);
+                console.warn("[Playlist] No bantermessage available!");
             }
         }
 

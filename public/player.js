@@ -387,6 +387,32 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
           this.disableAutoSync(true);
         }
         break;
+      case 'pause-state-changed':
+        console.log("[PLAYER] PAUSE_STATE_CHANGED received from world", json.data);
+        if (this.player && this.readyToPlay) {
+          const { paused, currentTime, lastStartTime } = json.data;
+          if (this.playerData) {
+            this.playerData.paused = paused;
+            this.playerData.currentTime = currentTime;
+            this.playerData.lastStartTime = lastStartTime;
+          }
+          if (paused) {
+            console.log("[PLAYER] Pausing YouTube");
+            this.player.pauseVideo();
+            this.core.showToast("Host paused playback.");
+            this.disableAutoSync(); // Disable auto-sync while paused
+          } else {
+            console.log("[PLAYER] Resuming YouTube at", currentTime);
+            // Seek to the exact time the host resumed at.
+            this.player.seekTo(currentTime);
+            this.player.playVideo();
+            this.core.showToast("Host resumed playback.");
+            this.enableAutoSync(); // Re-enable auto-sync
+          }
+        } else {
+          console.log("[PLAYER] Player not ready or missing", { player: !!this.player, ready: this.readyToPlay });
+        }
+        break;
       case Commands.MUTE:
         this.core.params.mute = json.data;
         this.core.showToast(this.core.params.mute === true || this.core.params.mute === 'true' ? "mute" : "unmute");
@@ -434,7 +460,7 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
             break; // Exit the SYNC_TIME handler for this message
           }
 
-          if (this.autoSync) {
+          if (this.autoSync && !this.playerData.paused) {
             // If the player is paused but should be auto-syncing, play it.
             // This handles accidental pauses from media keys, etc. A state of PAUSED (2)
             // is the primary one to correct. BUFFERING (3) should be allowed to continue.
@@ -528,7 +554,11 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
       if(this.lastUrl !== this.playerData.playlist[currentTrack].link || force) {
         const url = this.playerData.playlist[currentTrack].link;
         this.player.loadVideoById(this.core.getId(url), currentTime);
-        this.player.playVideo();
+        if (this.playerData.paused) {
+          this.player.pauseVideo();
+        } else {
+          this.player.playVideo();
+        }
         this.core.showToast("Playing: " + this.playerData.playlist[currentTrack].title);
         this.setVolume("spatial");
       }

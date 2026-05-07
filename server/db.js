@@ -1,30 +1,21 @@
 const { Sequelize, DataTypes, Op } = require('sequelize');
 const { Umzug, SequelizeStorage } = require('umzug');
-const { createClient } = require('@libsql/client');
 
 const mainDbUrl = process.env.NEW_DATABASE_URL || process.env.DATABASE_URL;
 
-// --- Postgres-specific performance fix ---
-// This fix is applied only when a Postgres database is in use to avoid compatibility
-// issues with other database dialects like MySQL or SQLite.
-if (mainDbUrl && mainDbUrl.startsWith('postgres')) {
-  const { types } = require('pg');
-  // By default, node-postgres (the driver for Sequelize) queries pg_timezone_names on
-  // each new connection to correctly parse TIMESTAMPTZ columns. This is very slow on some platforms.
-  // The fix is to override the type parser and return the raw string value instead.
-  // This is safe as the application logic handles timestamps as numbers or lets Sequelize manage them.
-  const TIMESTAMPTZ_OID = 1184;
-  const TIMESTAMP_OID = 1114;
-  types.setTypeParser(TIMESTAMPTZ_OID, val => val);
-  types.setTypeParser(TIMESTAMP_OID, val => val);
-}
+const { types } = require('pg');
+// By default, node-postgres (the driver for Sequelize) queries pg_timezone_names on
+// each new connection to correctly parse TIMESTAMPTZ columns. This is very slow on some platforms.
+// The fix is to override the type parser and return the raw string value instead.
+// This is safe as the application logic handles timestamps as numbers or lets Sequelize manage them.
+const TIMESTAMPTZ_OID = 1184;
+const TIMESTAMP_OID = 1114;
+types.setTypeParser(TIMESTAMPTZ_OID, val => val);
+types.setTypeParser(TIMESTAMP_OID, val => val);
 
 // Helper to create a sequelize instance from a URL.
 // It's defined here so it can be used by both the main connection and the one-time migrator.
 const createSequelizeInstance = (dbUrl) => {
-  if (!dbUrl) {
-    return null;
-  }
   const options = {
     logging: false, // Set to console.log for debugging
     // Pool settings optimized for a persistent server environment
@@ -55,30 +46,33 @@ const createSequelizeInstance = (dbUrl) => {
       ]
     }
   };
-  if (dbUrl.startsWith('postgres')) {
-    options.dialect = 'postgres';
-    options.dialectOptions = {
-      ssl: { require: true, rejectUnauthorized: false },
-      // Enable TCP keep-alives to prevent idle connections from being
-      // terminated by the database server or intermediate proxies.
-      // This is crucial for long-running applications on cloud platforms.
-      // A 30-second interval is a safe and common value.
-      keepalives: true,
-      keepalives_idle: 30000
-      // The 'useUTC: false' option was not effective for the 'pg' driver
-      // and did not prevent the slow timezone query. The type parser override above is the correct solution.
-    };
-    return new Sequelize(dbUrl, options);
-  } else if (dbUrl.startsWith('mysql')) {
-    options.dialect = 'mysql';
-    return new Sequelize(dbUrl, options);
-  } else { // Assume sqlite/libsql file path
-    options.dialect = 'sqlite';
-    // When using a custom dialect module like @libsql/client, we initialize it
-    // and pass it to Sequelize. The constructor signature changes to a single options object.
-    options.dialectModule = createClient({ url: `file:${dbUrl}` });
-    return new Sequelize(options);
+  options.dialect = 'postgres';
+  options.dialectOptions = {
+    // Enable TCP keep-alives to prevent idle connections from being
+    // terminated by the database server or intermediate proxies.
+    // This is crucial for long-running applications on cloud platforms.
+    // A 30-second interval is a safe and common value.
+    keepalives: true,
+    keepalives_idle: 30000
+    // The 'useUTC: false' option was not effective for the 'pg' driver
+    // and did not prevent the slow timezone query. The type parser override above is the correct solution.
+  };
+
+  // To address the 'pg-connection-string' warning and prepare for future updates,
+  // we explicitly add the recommended SSL parameters to the connection URL.
+  // 'uselibpqcompat=true' opts into the modern libpq-compatible behavior.
+  // 'sslmode=require' ensures SSL is used without strict certificate verification,
+  // matching the original intent of 'ssl: { require: true, rejectUnauthorized: false }'.
+  let newDbUrl = dbUrl;
+  const sslParams = 'uselibpqcompat=true&sslmode=require';
+  if (!newDbUrl.includes('sslmode')) {
+    if (newDbUrl.includes('?')) {
+      newDbUrl += `&${sslParams}`;
+    } else {
+      newDbUrl += `?${sslParams}`;
+    }
   }
+  return new Sequelize(newDbUrl, options);
 };
 
 // --- Singleton Sequelize Instance ---
@@ -102,7 +96,7 @@ const applyRlsPolicy = async (tableName) => {
     console.log(`Successfully applied RLS policy to "${tableName}".`);
   } catch (rlsError) {
     if (rlsError.name === 'SequelizeDatabaseError' && rlsError.original.code === '42P01') { // 42P01 is undefined_table in Postgres
-       console.warn(`"${tableName}" table not found, skipping RLS policy. It will be applied on next startup.`);
+      console.warn(`"${tableName}" table not found, skipping RLS policy. It will be applied on next startup.`);
     } else {
       console.error(`!!! WARNING: Failed to apply RLS policy to "${tableName}" table. !!!`, rlsError.message);
     }
@@ -122,50 +116,50 @@ const runMigrations = async () => {
 };
 
 const runOneTimeMigration = async () => {
-    const oldDbUrl = process.env.DATABASE_URL;
-    const newDbUrl = process.env.NEW_DATABASE_URL;
+  const oldDbUrl = process.env.DATABASE_URL;
+  const newDbUrl = process.env.NEW_DATABASE_URL;
 
-    if (!newDbUrl || !oldDbUrl || newDbUrl.trim() === '' || newDbUrl === oldDbUrl) {
-        return; // No migration needed
+  if (!newDbUrl || !oldDbUrl || newDbUrl.trim() === '' || newDbUrl === oldDbUrl) {
+    return; // No migration needed
+  }
+
+  console.log('!!! New database URL detected. Starting automated data migration. !!!');
+  console.log(`Source:      ${oldDbUrl.substring(0, 40)}...`);
+  console.log(`Destination: ${newDbUrl.substring(0, 40)}...`);
+
+  const oldSequelize = createSequelizeInstance(oldDbUrl);
+  if (!oldSequelize) {
+    console.error('Could not create connection to the old database. Aborting migration.');
+    return;
+  }
+
+  const PlayerStateModel = require('./models/playerState');
+  const OldPlayerState = PlayerStateModel(oldSequelize, DataTypes);
+  const NewPlayerState = PlayerStateModel(sequelize, DataTypes); // Use the main new sequelize instance
+
+  console.log('Fetching all data from the source database...');
+  const allStates = await OldPlayerState.findAll({ raw: true });
+  console.log(`Found ${allStates.length} records to migrate.`);
+
+  if (allStates.length > 0) {
+    const transaction = await sequelize.transaction();
+    try {
+      console.log('Starting transaction on destination database...');
+      await NewPlayerState.destroy({ where: {}, truncate: true, transaction });
+      console.log('Destination table truncated.');
+      await NewPlayerState.bulkCreate(allStates, { transaction });
+      console.log('All records inserted into destination database.');
+      await transaction.commit();
+      console.log('Transaction committed.');
+    } catch (err) {
+      console.error('XXX DATABASE MIGRATION FAILED DURING TRANSACTION XXX');
+      await transaction.rollback();
+      console.error('Transaction has been rolled back.');
+      throw err;
     }
-
-    console.log('!!! New database URL detected. Starting automated data migration. !!!');
-    console.log(`Source:      ${oldDbUrl.substring(0, 40)}...`);
-    console.log(`Destination: ${newDbUrl.substring(0, 40)}...`);
-
-    const oldSequelize = createSequelizeInstance(oldDbUrl);
-    if (!oldSequelize) {
-        console.error('Could not create connection to the old database. Aborting migration.');
-        return;
-    }
-
-    const PlayerStateModel = require('./models/playerState');
-    const OldPlayerState = PlayerStateModel(oldSequelize, DataTypes);
-    const NewPlayerState = PlayerStateModel(sequelize, DataTypes); // Use the main new sequelize instance
-
-    console.log('Fetching all data from the source database...');
-    const allStates = await OldPlayerState.findAll({ raw: true });
-    console.log(`Found ${allStates.length} records to migrate.`);
-
-    if (allStates.length > 0) {
-        const transaction = await sequelize.transaction();
-        try {
-            console.log('Starting transaction on destination database...');
-            await NewPlayerState.destroy({ where: {}, truncate: true, transaction });
-            console.log('Destination table truncated.');
-            await NewPlayerState.bulkCreate(allStates, { transaction });
-            console.log('All records inserted into destination database.');
-            await transaction.commit();
-            console.log('Transaction committed.');
-        } catch (err) {
-            console.error('XXX DATABASE MIGRATION FAILED DURING TRANSACTION XXX');
-            await transaction.rollback();
-            console.error('Transaction has been rolled back.');
-            throw err;
-        }
-    }
-    await oldSequelize.close();
-    console.log('✔✔✔ Data migration complete. Application will now use the new database. ✔✔✔');
+  }
+  await oldSequelize.close();
+  console.log('✔✔✔ Data migration complete. Application will now use the new database. ✔✔✔');
 };
 
 const initializeDatabase = async () => {

@@ -70,7 +70,9 @@ var Commands = {
   LOCAL_SKIP_BACK: 'local-skip-back',
   LOCAL_SKIP_FORWARD: 'local-skip-forward',
   SET_ABSOLUTE_VOLUME: 'set-absolute-volume',
-  SET_VOLUME_INCREMENT: 'set-volume-increment'
+  SET_VOLUME_INCREMENT: 'set-volume-increment',
+  TOGGLE_PAUSE: 'toggle-pause',
+  PAUSE_STATE_CHANGED: 'pause-state-changed'
 };
 if ((typeof process !== 'undefined') && 
 (process.release.name.search(/node|io.js/) !== -1)) {

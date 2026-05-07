@@ -54,7 +54,9 @@ var Core = class {
           }
         }
       }
-      await window.AframeInjection.waitFor(window, 'user');
+      // By the time this runs, window.user is already set by the entry-point script
+      // (playlist.js / karaoke.js) which waited for bs-loaded + unity-loaded before
+      // loading anything. No further waiting is needed here.
       if(this.params["hand-controls"] === 'true') { 
         this.setupHandControls();
       }
@@ -533,7 +535,7 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
     const json = JSON.parse(msg);
     switch(json.path) {
       case Commands.ERROR:
-        alert("I cant let you do that...");
+        console.error("I cant let you do that...");
         break;
       case Commands.RESET_BROWSER:
         if(window.isBanter && this.browser) {
@@ -618,6 +620,18 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
         break;
       case Commands.SET_VOLUME_INCREMENT:
         this.setVolumeIncrement(json.data);
+        break;
+      case 'pause-state-changed':
+        console.log("[CORE] PAUSE_STATE_CHANGED received", json.data);
+        if (this.player) {
+          this.player.paused = json.data.paused;
+          this.player.currentTime = json.data.currentTime;
+          this.player.lastStartTime = json.data.lastStartTime;
+          console.log("[CORE] Forwarding to browser player");
+          this.sendBrowserMessage(json);
+        } else {
+          console.log("[CORE] Player state missing, cannot handle pause change.");
+        }
         break;
     }
   }

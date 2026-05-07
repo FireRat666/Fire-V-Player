@@ -1,11 +1,9 @@
-const { WebSocket } = require('ws');
+const { WebSocketServer } = require('ws');
 const express = require('express');
 const http = require('http');
 const path = require('path');
 const Youtube = require('./youtube/scraper.js');
 const youtube = new Youtube();
-const ytfps = require('ytfps');
-const fetch = require('node-fetch');
 const Commands = require('../public/commands.js');
 const playlistHandler = require('./handlers/playlistHandler.js');
 const karaokeHandler = require('./handlers/karaokeHandler.js');
@@ -17,14 +15,14 @@ const models = require('./models'); // Sequelize models
 const SkipJumpTimePlaylist = 5;
 const SkipJumpTimeKaraoke = 0.25; // 250ms for karaoke, to allow for more precise timing.
 
-class App{
+class App {
   constructor() {
     this.videoPlayers = {};
     this.mainLoop = null;
     this.cleanupLoop = null;
     this.dbConnected = false;
   };
-  
+
   async _performSave(instanceId) {
     if (!this.dbConnected) return;
     const player = this.videoPlayers[instanceId];
@@ -65,7 +63,8 @@ class App{
         canVote: player.canVote,
         hostId: player.host ? player.host.id : null,
         autoAdvance: player.autoAdvance,
-        isKaraoke: player.isKaraoke
+        isKaraoke: player.isKaraoke,
+        paused: player.paused
       };
 
       // Use Sequelize's "upsert" method to insert or update the record.
@@ -116,14 +115,14 @@ class App{
       console.error('Error during database cleanup of inactive instances:', err);
     }
   }
-  setupWebserver() { 
+  setupWebserver() {
     this.app = express();
-    this.server = http.createServer( this.app ); 
-    this.wss = new WebSocket.Server({ noServer: true }); 
+    this.server = http.createServer(this.app);
+    this.wss = new WebSocketServer({ noServer: true });
     this.server.on('upgrade', (request, socket, head) => {
       this.wss.handleUpgrade(request, socket, head, (ws) => {
         this.wss.emit('connection', ws, request);
-      }); 
+      });
     });
 
     this.app.use(express.static(path.join(__dirname, '..', 'public')));
@@ -136,10 +135,14 @@ class App{
       ws.on('pong', () => {
         ws.isAlive = true;
       });
-      ws.on('message', async msg => {
+      ws.on('message', async (message) => {
+        const msg = JSON.parse(message);
+        if (msg.path !== 'spatial' && msg.path !== 'playback-update') {
+          console.log(`[CMD] ${msg.path} from ${ws.u ? ws.u.name : 'unknown'} for instance ${ws.i || 'unset'}`);
+        }
         try {
           // Using Buffer.from to handle different message types gracefully.
-          const messageString = Buffer.from(msg).toString();
+          const messageString = Buffer.from(message).toString();
           if (messageString !== "keepalive") {
             await this.parseMessage(JSON.parse(messageString), ws);
           } else {
@@ -217,7 +220,7 @@ class App{
         this.updateVotes(instanceId); // Recalculate vote counts on each video.
         // Broadcast the updated playlist to all clients in the instance.
         videoPlayer.sockets.forEach(socket => {
-            this.send(socket, Commands.PLAYLIST_UPDATED, { playlist: videoPlayer.playlist, currentTrack: videoPlayer.currentTrack });
+          this.send(socket, Commands.PLAYLIST_UPDATED, { playlist: videoPlayer.playlist, currentTrack: videoPlayer.currentTrack });
         });
       }
     }
@@ -232,21 +235,21 @@ class App{
         delete this.videoPlayers[instanceId];
       }, 1000 * 60 * 3); // 3-minute grace period
     }
-  } 
-  send(socket, path, data) {
-     const payload = JSON.stringify({path, data});
-     if (process.env.NODE_ENV !== 'production') {
-      console.log(`[SEND] user: ${socket.u ? socket.u.name : 'N/A'}, instance: ${socket.i || 'N/A'}, type: ${socket.type || 'N/A'}, path: ${path}, payload_size: ${payload.length}`);
-     }
-     socket.send(payload);
   }
-  async parseMessage(msg, ws){
+  send(socket, path, data) {
+    const payload = JSON.stringify({ path, data });
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`[SEND] user: ${socket.u ? socket.u.name : 'N/A'}, instance: ${socket.i || 'N/A'}, type: ${socket.type || 'N/A'}, path: ${path}, payload_size: ${payload.length}`);
+    }
+    socket.send(payload);
+  }
+  async parseMessage(msg, ws) {
     if (process.env.NODE_ENV !== 'production') {
       console.log(`[RECV] user: ${ws.u ? ws.u.name : 'N/A'}, instance: ${ws.i || 'N/A'}, type: ${ws.type || 'N/A'}, path: ${msg.path}`);
     }
-    switch(msg.path) {
+    switch (msg.path) {
       case Commands.INSTANCE:
-        if(msg.u) { 
+        if (msg.u) {
           ws.u = msg.u;
           ws.i = msg.data;
           await this.createVideoPlayer(msg.data, msg.u, ws);
@@ -254,20 +257,22 @@ class App{
           this.getUserVideoPlayer(ws);
           // Takeover cancellation logic is now handled in SET_WS_TYPE,
           // as the socket type is not known at this point in the connection lifecycle.
-        }else{
+        } else {
           this.send(ws, 'error');
         }
         break;
       case Commands.SET_WS_TYPE:
         ws.type = msg.data;
+        // Also update the socket's user identity in case Banter resolved it after the initial connect.
+        if (msg.u) ws.u = msg.u;
         const player = this.videoPlayers[ws.i];
         // If the host establishes a "space" connection, they are considered fully connected.
         // This is the correct place to cancel any pending takeover.
-        if (player && player.host.id === ws.u.id && ws.type === "space") {
+        if (player && player.host.id === ws.u.id && ws.type === 'space') {
           clearTimeout(player.takeoverTimeout);
-          player.takeoverTimeout = null; // Also clear the timeout handle
+          player.takeoverTimeout = null;
           player.hostConnected = true;
-          console.log(`${ws.u.name || 'Unknown'} (host) user returned to space, takeover not enabled`);
+          console.log(`${ws.u.name || 'Unknown'} (host) returned to space, takeover not enabled.`);
         }
         break;
       case Commands.SET_TIME:
@@ -283,7 +288,10 @@ class App{
         await hostHandler.toggleCanTakeOver(this, ws, msg.data);
         break;
       case Commands.TAKE_OVER:
-        await hostHandler.takeOver(this, ws); 
+        await hostHandler.takeOver(this, ws);
+        break;
+      case Commands.TOGGLE_PAUSE:
+        await hostHandler.togglePause(this, ws);
         break;
       case Commands.ADD_TO_PLAYLIST:
         await playlistHandler.addToPlaylist(this, ws, msg.data, msg.skipUpdate, msg.isYoutubeWebsite);
@@ -321,7 +329,7 @@ class App{
         break;
       case Commands.TOGGLE_VOTE:
         await hostHandler.toggleVote(this, ws)
-        break; 
+        break;
       case Commands.DOWN_VOTE:
         await playlistHandler.setVote(this, ws, msg.data, true);
         break;
@@ -435,7 +443,7 @@ class App{
     }
     // First, check if the input is just a valid playlist ID.
     if (urlOrId.startsWith('PL') && !urlOrId.includes('/') && !urlOrId.includes('?')) {
-        return urlOrId;
+      return urlOrId;
     }
 
     // If it's a URL, try to extract the 'list' parameter.
@@ -443,7 +451,7 @@ class App{
     const match = urlOrId.match(regex);
 
     if (match && match[1] && match[1].startsWith('PL')) {
-        return match[1];
+      return match[1];
     }
 
     return null;
@@ -456,32 +464,32 @@ class App{
     }
   }
   setAutoSync(autoSync, ws) {
-    if(ws.user_video) {
+    if (ws.user_video) {
       this.send(ws.user_video, Commands.AUTO_SYNC, autoSync);
     }
-  } 
+  }
   sendBrowserClick(click, video_ws) {
-    if(this.videoPlayers[video_ws.i]) {
+    if (this.videoPlayers[video_ws.i]) {
       this.videoPlayers[video_ws.i].sockets.forEach(ws => {
-        if(video_ws.u.id === ws.u.id && !ws.is_video_player){
+        if (video_ws.u.id === ws.u.id && !ws.is_video_player) {
           this.send(ws, Commands.CLICK_BROWSER, click);
         }
       });
     }
   }
   getUserVideoPlayer(new_ws) {
-    if(this.videoPlayers[new_ws.i]) {
+    if (this.videoPlayers[new_ws.i]) {
       this.videoPlayers[new_ws.i].sockets.forEach(ws => {
-        if(ws.is_video_player) {
+        if (ws.is_video_player) {
           this.setUserVideoPlayer(new_ws.u, ws);
         }
       });
     }
   }
   setUserVideoPlayer(data, user_video) {
-    if(this.videoPlayers[user_video.i]) {
+    if (this.videoPlayers[user_video.i]) {
       this.videoPlayers[user_video.i].sockets.forEach(ws => {
-        if(ws.u && ws.u.id === user_video.u.id) {
+        if (ws.u && ws.u.id === user_video.u.id) {
           ws.user_video = user_video;
         }
       });
@@ -517,18 +525,18 @@ class App{
     } else {
       // It's a search term, perform a regular search
       const results = await youtube.search(term, {
-          language: 'en-US',
-          searchType: 'video'
+        language: 'en-US',
+        searchType: 'video'
       });
       this.send(ws, Commands.SEARCH_RESULTS, results.videos || []);
     }
   }
   onlyIfHost(ws, callback, locked) {
-    if(ws.u && ws.u.id && ws.i) {
-      if(this.videoPlayers[ws.i] 
-         && (this.videoPlayers[ws.i].host.id === ws.u.id || locked === false)) {
+    if (ws.u && ws.u.id && ws.i) {
+      if (this.videoPlayers[ws.i]
+        && (this.videoPlayers[ws.i].host.id === ws.u.id || locked === false)) {
         callback();
-      }else{
+      } else {
         this.send(ws, Commands.ERROR);
       }
     }
@@ -540,7 +548,10 @@ class App{
       // --- Logic from the old per-instance `tick` ---
       if (player.playlist.length) {
         const now = new Date().getTime() / 1000;
-        player.currentTime = now - player.lastStartTime;
+        
+        if (!player.paused) {
+          player.currentTime = now - player.lastStartTime;
+        }
 
         // --- Periodic Time Synchronization ---
         // To prevent client drift over time, the server periodically sends an authoritative
@@ -557,64 +568,64 @@ class App{
         }
 
         // Use a while loop to correctly handle advancing multiple tracks after a long sleep/downtime.
-        while (true) {
+        while (!player.paused) {
           if (!player.playlist.length) break;
 
-			const track = player.playlist[player.currentTrack];
-			const trackDuration = (track ? track.duration : 0) / 1000;
+          const track = player.playlist[player.currentTrack];
+          const trackDuration = (track ? track.duration : 0) / 1000;
 
-			if (track && trackDuration > 0 && player.currentTime > trackDuration) {
-			// A track has finished.
-			if (player.isKaraoke) {
-				// In a karaoke context, a song ending means we either stop or auto-advance.
-				if (player.autoAdvance && player.singers.length > 0) {
-				await karaokeHandler.playNextKaraokeSong(this, instanceId);
-				} else {
-				// If auto-advance is off, or the singer list is empty, stop the player.
-				await hostHandler.internalStop(this, instanceId);
-				}
-				break; // Exit the while loop for this instance.
-			} else {
-				if (player.canVote) {
-				// --- Voting Mode: Track Advancement ---
-				// First, remove the song that just finished from the playlist.
-				const finishedTrackIndex = player.currentTrack;
-				player.playlist.splice(finishedTrackIndex, 1);
-
-              // After removing the finished song, check if the playlist is empty.
-              if (player.playlist.length === 0) {
-                // No more songs, stop the player.
-                await hostHandler.internalStop(this, instanceId);
+          if (track && trackDuration > 0 && player.currentTime > trackDuration) {
+            // A track has finished.
+            if (player.isKaraoke) {
+              // In a karaoke context, a song ending means we either stop or auto-advance.
+              if (player.autoAdvance && player.singers.length > 0) {
+                await karaokeHandler.playNextKaraokeSong(this, instanceId);
               } else {
-                // The playlist is assumed to be sorted by votes already.
-                // The next song to play is now at the top of the list.
-                player.currentTrack = 0;
-                player.lastStartTime = new Date().getTime() / 1000;
-                player.currentTime = 0; // Reset for the new track.
+                // If auto-advance is off, or the singer list is empty, stop the player.
+                await hostHandler.internalStop(this, instanceId);
+              }
+              break; // Exit the while loop for this instance.
+            } else {
+              if (player.canVote) {
+                // --- Voting Mode: Track Advancement ---
+                // First, remove the song that just finished from the playlist.
+                const finishedTrackIndex = player.currentTrack;
+                player.playlist.splice(finishedTrackIndex, 1);
 
-                // Broadcast the change to all clients, including the updated playlist.
+                // After removing the finished song, check if the playlist is empty.
+                if (player.playlist.length === 0) {
+                  // No more songs, stop the player.
+                  await hostHandler.internalStop(this, instanceId);
+                } else {
+                  // The playlist is assumed to be sorted by votes already.
+                  // The next song to play is now at the top of the list.
+                  player.currentTrack = 0;
+                  player.lastStartTime = new Date().getTime() / 1000;
+                  player.currentTime = 0; // Reset for the new track.
+
+                  // Broadcast the change to all clients, including the updated playlist.
+                  player.sockets.forEach(socket => {
+                    this.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, newLastStartTime: player.lastStartTime, playlist: player.playlist });
+                  });
+                  await this.savePlayerState(instanceId);
+                }
+              } else {
+                // --- Regular Playlist: Track Advancement ---
+                player.currentTime -= trackDuration;
+                player.lastStartTime += trackDuration;
+                player.currentTrack = (player.currentTrack + 1) % player.playlist.length;
+                this.resetBrowserIfNeedBe(player, player.currentTrack);
                 player.sockets.forEach(socket => {
-                  this.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, newLastStartTime: player.lastStartTime, playlist: player.playlist });
+                  this.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, newLastStartTime: player.lastStartTime });
                 });
                 await this.savePlayerState(instanceId);
               }
-				} else {
-				// --- Regular Playlist: Track Advancement ---
-				player.currentTime -= trackDuration;
-				player.lastStartTime += trackDuration;
-				player.currentTrack = (player.currentTrack + 1) % player.playlist.length;
-				this.resetBrowserIfNeedBe(player, player.currentTrack);
-				player.sockets.forEach(socket => {
-					this.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, newLastStartTime: player.lastStartTime });
-				});
-				await this.savePlayerState(instanceId);
-				}
-			}
-			} else {
-			// Current time is within the track's duration, so we can exit the loop.
-			break;
-			}
-      	}
+            }
+          } else {
+            // Current time is within the track's duration, so we can exit the loop.
+            break;
+          }
+        }
       } else {
         player.currentTime = player.currentTrack = 0;
       }
@@ -625,17 +636,17 @@ class App{
     const users = [...new Set(player.sockets.map(ws => ws.u.id))];
     users.forEach(uid => {
       const userSockets = player.sockets.filter(ws => ws.u.id === uid);
-        userSockets.forEach(socket => {
-          if(socket.type === "space") {
-            if(player.playlist[index].is_youtube_website) {
-              this.send(socket, Commands.SET_BROWSER_URL, player.playlist[index]);
-            }else{
-              const videoPlayer = userSockets.filter(ws => ws.type === "player");
-              if(!videoPlayer.length) {
-                  this.send(socket, Commands.RESET_BROWSER, {});
-              }
+      userSockets.forEach(socket => {
+        if (socket.type === "space") {
+          if (player.playlist[index].is_youtube_website) {
+            this.send(socket, Commands.SET_BROWSER_URL, player.playlist[index]);
+          } else {
+            const videoPlayer = userSockets.filter(ws => ws.type === "player");
+            if (!videoPlayer.length) {
+              this.send(socket, Commands.RESET_BROWSER, {});
             }
           }
+        }
       });
     });
   }
@@ -705,14 +716,14 @@ class App{
       }
     });
   }
-  getYoutubeId(url){
+  getYoutubeId(url) {
     // Extracts the 11-character YouTube video ID from a URL.
     var regExp = /^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*/;
     var match = url.match(regExp);
-    return (match&&match[7].length==11)? match[7] : false;
+    return (match && match[7].length == 11) ? match[7] : false;
   }
   async createVideoPlayer(instanceId, user, ws) {
-    if(!this.videoPlayers[instanceId]) {
+    if (!this.videoPlayers[instanceId]) {
       let existingState = null;
       if (this.dbConnected) {
         try {
@@ -769,7 +780,7 @@ class App{
       // This will be overwritten by existingState if a host is already saved.
       this.videoPlayers[instanceId] = {
         singers: [],
-        playlist:[],
+        playlist: [],
         votes: [],
         currentTrack: 0,
         currentTime: 0,
@@ -784,7 +795,8 @@ class App{
         currentPlayerUrl: "",
         lastStartTime: new Date().getTime() / 1000,
         saveStateTimeout: null, // For debouncing database writes
-        lastSyncTime: 0
+        lastSyncTime: 0,
+        paused: false
       };
 
       if (existingState) {
@@ -822,17 +834,17 @@ class App{
         this.videoPlayers[instanceId].hostConnected = true;
       }
       console.log(this.videoPlayers[instanceId].host.name, 'is host');
-    }else{
+    } else {
       // If a user reconnects to an instance that was scheduled for deletion, cancel the deletion.
       if (this.videoPlayers[instanceId].deleteTimeout) {
         console.log(`User reconnected to instance ${instanceId}. Cancelling cleanup.`);
         clearTimeout(this.videoPlayers[instanceId].deleteTimeout);
         this.videoPlayers[instanceId].deleteTimeout = null;
       }
-      if(!this.videoPlayers[instanceId].sockets.includes(ws)) {
-         this.videoPlayers[instanceId].sockets.push(ws);
+      if (!this.videoPlayers[instanceId].sockets.includes(ws)) {
+        this.videoPlayers[instanceId].sockets.push(ws);
       }
-    } 
+    }
     this.syncWsTime(ws, instanceId);
     // Send a single, comprehensive update including the singer list for karaoke mode.
     // This prevents race conditions on the client and ensures all data is available on connect.
@@ -842,9 +854,9 @@ class App{
     });
   }
   getVideoObject(instanceId, { includePlaylist = true, includeSingers = false } = {}) {
-    if(this.videoPlayers[instanceId]) {
+    if (this.videoPlayers[instanceId]) {
       const player = this.videoPlayers[instanceId];
-      
+
       const videoObject = {
         currentTime: player.currentTime,
         currentTrack: player.currentTrack,
@@ -854,7 +866,8 @@ class App{
         canVote: player.canVote,
         host: player.host,
         duration: player.playlist.length && player.playlist[player.currentTrack] ? player.playlist[player.currentTrack].duration / 1000 : 0,
-        autoAdvance: player.autoAdvance // Ensure autoAdvance state is always included
+        autoAdvance: player.autoAdvance, // Ensure autoAdvance state is always included
+        paused: player.paused
       };
 
       if (includePlaylist) {
@@ -865,10 +878,10 @@ class App{
       if (includeSingers && player.singers) {
         // The client expects the list under the key 'players'
         videoObject.players = player.singers.map(s => ({
-            name: s.user.name,
-            p: s.timestamp,
-            id: s.user.id,
-            v: s.video
+          name: s.user.name,
+          p: s.timestamp,
+          id: s.user.id,
+          v: s.video
         }));
       }
 
@@ -879,13 +892,13 @@ class App{
     // This command is specifically for the video player element to correct its time.
     // The playlist/UI pages use the lastStartTime from PLAYBACK_UPDATE to calculate time.
     // Therefore, we only send this to the 'player' type socket.
-    if(this.videoPlayers[key] && this.videoPlayers[key].playlist.length && socket.type === "player") {
+    if (this.videoPlayers[key] && this.videoPlayers[key].playlist.length && socket.type === "player") {
       // --- FIX: Calculate current time on-demand for accuracy ---
       // The server's main loop updates currentTime only once per second.
       // For an accurate sync, we must calculate the exact time at the moment of sending.
       const player = this.videoPlayers[key];
       const now = new Date().getTime() / 1000;
-      const preciseCurrentTime = now - player.lastStartTime;
+      const preciseCurrentTime = player.paused ? player.currentTime : (now - player.lastStartTime);
 
       this.send(socket, Commands.SYNC_TIME, {
         currentTrack: player.currentTrack,
@@ -896,7 +909,7 @@ class App{
     }
   }
   updateClients(instanceId, type, options = {}) {
-    if(this.videoPlayers[instanceId]) {
+    if (this.videoPlayers[instanceId]) {
       const player = this.videoPlayers[instanceId];
       // For Karaoke mode, we should always include the singer list in general updates
       // to ensure the UI stays in sync, as it's the primary view.
@@ -906,7 +919,7 @@ class App{
       }
       const video = this.getVideoObject(instanceId, options);
       player.sockets.forEach(socket => {
-        this.send(socket, Commands.PLAYBACK_UPDATE, {video, type});
+        this.send(socket, Commands.PLAYBACK_UPDATE, { video, type });
       });
     }
   }

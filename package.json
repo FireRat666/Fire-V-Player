@@ -2,29 +2,27 @@
   "name": "server",
   "version": "0.0.1",
   "description": "-",
-  "main": "server.js",
+  "main": "server/app.js",
   "repository": "-",
   "scripts": {
     "start": "node server/app.js"
   },
   "engines": {
-    "node": ">=20.x"
+    "node": "22"
   },
   "dependencies": {
-    "@distube/ytdl-core": "^4.16.12",
-    "@libsql/client": "^0.7.0",
-    "express": "^4.19.2",
-    "mysql2": "^3.14.2",
-    "node-fetch": "^2.6.1",
-    "pg": "^8.16.3",
+    "@distube/ytdl-core": "https://codeload.github.com/ToddyTheNoobDud/ytdl-core-stuff/tar.gz/refs/heads/master",
+    "@distube/ytpl": "^1.2.4",
+    "debug": "^4.3.4",
+    "express": "^5.2.1",
+    "pg": "^8.19.0",
     "pg-hstore": "^2.3.4",
-    "scraper-edge": "^1.1.0",
-    "sequelize": "^6.37.7",
-    "sequelize-cli": "^6.6.3",
-    "umzug": "^3.8.0",
-    "ws": "^8.17.0",
-    "ytfps": "^1.2.0"
+    "sequelize": "^6.37.8",
+    "sequelize-cli": "^6.6.5",
+    "umzug": "^3.8.2",
+    "ws": "^8.19.0"
   },
-  "devDependencies": {
+  "overrides": {
+    "ajv": "8.18.0"
   }
 }

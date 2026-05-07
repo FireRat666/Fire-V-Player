@@ -133,6 +133,11 @@ var Karaoke = class {
           this.core.sendMessage({ path: Commands.TAKE_OVER });
         }
     });
+
+    this.togglePause = document.querySelector('#togglePause');
+    this.togglePause.addEventListener('click', () => {
+      this.core.sendMessage({ path: Commands.TOGGLE_PAUSE });
+    });
     this.hostTitle = document.querySelector('.hostTitle');
 
     // --- Dynamic Height Adjustment for Singer List ---
@@ -322,6 +327,22 @@ var Karaoke = class {
           this.updatePlaylist(this.core.player);
         }
         break;
+      case Commands.PAUSE_STATE_CHANGED:
+        if (this.core.player) {
+          this.core.player.paused = json.data.paused;
+          this.core.player.currentTime = json.data.currentTime;
+          this.core.player.lastStartTime = json.data.lastStartTime;
+          this.updatePlaylist(this.core.player);
+          if (this.core.player.paused) {
+            if (this.uiUpdateInterval) {
+              clearInterval(this.uiUpdateInterval);
+              this.uiUpdateInterval = null;
+            }
+          } else {
+            this.startUiUpdater();
+          }
+        }
+        break;
     }
   }
   search(data) {
@@ -342,6 +363,10 @@ var Karaoke = class {
     // Update the Auto Advance button state regardless of the singer queue.
     this.autoAdvance.innerText = player.autoAdvance ? 'Auto Advance: On' : 'Auto Advance: Off';
     this.autoAdvance.className = player.autoAdvance ? 'button teal red' : 'button teal';
+
+    this.togglePause.style.display = isMe ? 'inline-block' : 'none';
+    this.togglePause.innerText = player.paused ? 'Play' : 'Pause';
+    this.togglePause.className = player.paused ? 'button green' : 'button red';
 
 
     // --- Securely build the host title ---

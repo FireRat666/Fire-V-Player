@@ -21,8 +21,8 @@ module.exports = (sequelize, DataTypes) => {
     modelName: 'PlayerState',
     tableName: 'player_state',
     underscored: true,
-    // Explicitly disable the 'createdAt' timestamp to match the current production schema.
-    createdAt: false,
+    // Explicitly disable timestamps to match the production schema.
+    timestamps: false,
   });
   return PlayerState;
 };

@@ -189,6 +189,26 @@ var Playlist = class {
           this.hideReplacePrompt();
         };
         break;
+      case Commands.ERROR:
+        this.core.showToast(json.data || "Error performing action", 4000);
+        break;
+      case 'pause-state-changed':
+        if (this.core.player) {
+          this.core.player.paused = json.data.paused;
+          this.core.player.currentTime = json.data.currentTime;
+          this.core.player.lastStartTime = json.data.lastStartTime;
+          this.updatePlaylist(this.core.player);
+          this.core.showToast(`Playback ${json.data.paused ? 'Paused' : 'Resumed'}`, 3000);
+          if (this.core.player.paused) {
+            if (this.uiUpdateInterval) {
+              clearInterval(this.uiUpdateInterval);
+              this.uiUpdateInterval = null;
+            }
+          } else {
+            this.startUiUpdater();
+          }
+        }
+        break;
     }
   }
   startUiUpdater() {
@@ -269,9 +289,11 @@ var Playlist = class {
     this.voting.innerText = player.canVote ? 'Voting: On' : 'Voting: Off';
     this.autoSync.style.display = 'inline-block';
     if (!this.pendingReplacement) {
-      this.replaceConfirmButton.style.display = 'none';
       this.replaceDismissButton.style.display = 'none';
     }
+    this.togglePause.style.display = isMe ? 'inline-block' : 'none';
+    this.togglePause.innerText = player.paused ? 'Play' : 'Pause';
+    this.togglePause.className = player.paused ? 'button green' : 'button red';
 
     // --- Securely build the host title ---
     this.hostTitle.innerHTML = ''; // Clear previous content
@@ -609,6 +631,13 @@ var Playlist = class {
         }else{
           this.core.sendMessage({ path: Commands.TAKE_OVER });
         }
+    });
+
+    this.togglePause = document.querySelector('#togglePause');
+    this.togglePause.addEventListener('click', () => {
+      console.log("Toggle Pause v4 clicked!");
+      this.core.showToast("Sending toggle pause v4 request...", 2000);
+      this.core.sendMessage({ path: 'toggle-pause' });
     });
     
     this.clearPlaylistButton = document.querySelector('#clearPlaylist');

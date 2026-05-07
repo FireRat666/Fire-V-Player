@@ -71,6 +71,7 @@ async function hostSkip(app, ws, isForward) {
     // To skip forward in time, we subtract from the start timestamp.
     // To skip backward, we add to it.
     player.lastStartTime += isForward ? -skipAmount : skipAmount;
+    player.paused = false; // Resume playback on skip
 
     // Calculate the new current time to send to clients for an immediate seek.
     const newCurrentTime = (new Date().getTime() / 1000) - player.lastStartTime;
@@ -116,6 +117,7 @@ async function setVideoTrack(app, ws, index) {
       player.currentTrack = index;
       player.currentTime = 0;
       player.lastStartTime = new Date().getTime() / 1000;
+      player.paused = false; // Ensure playback resumes on track change
       app.resetBrowserIfNeedBe(player, index);
       app.updateVotes(ws.i);
       player.sockets.forEach(socket => {
@@ -175,6 +177,38 @@ async function toggleVote(app, ws) {
   }
 }
 
+async function togglePause(app, ws) {
+  console.log(`[PAUSE] Toggle request from ${ws.u ? ws.u.name : 'unknown'} (${ws.u ? ws.u.id : 'N/A'}) for instance ${ws.i}`);
+  app.onlyIfHost(ws, async () => {
+    const player = app.videoPlayers[ws.i];
+    console.log(`[PAUSE] Host ID: ${player.host.id}, Requester ID: ${ws.u.id}`);
+    if (!player || !player.playlist.length) {
+      console.log(`[PAUSE] Rejected: No player or empty playlist`);
+      return;
+    }
+
+    const now = new Date().getTime() / 1000;
+    player.paused = !player.paused;
+    console.log(`[PAUSE] Instance ${ws.i} is now ${player.paused ? 'PAUSED' : 'RESUMED'}`);
+
+    if (player.paused) {
+      player.currentTime = now - player.lastStartTime;
+    } else {
+      player.lastStartTime = now - player.currentTime;
+    }
+
+    player.sockets.forEach(socket => {
+      app.send(socket, Commands.PAUSE_STATE_CHANGED, { 
+        paused: player.paused,
+        currentTime: player.currentTime,
+        lastStartTime: player.lastStartTime
+      });
+    });
+    
+    await app.savePlayerState(ws.i);
+  });
+}
+
 module.exports = {
     toggleLock,
     toggleCanTakeOver,
@@ -184,5 +218,6 @@ module.exports = {
     setVideoTrack,
     setVideoTime,
     toggleVote,
-    internalStop
+    internalStop,
+    togglePause
 };

@@ -17,11 +17,13 @@ module.exports = {
             },
             createdAt: {
                 allowNull: false,
-                type: DataTypes.DATE
+                type: DataTypes.DATE,
+                field: 'created_at' // Explicitly map to snake_case
             },
             updatedAt: {
                 allowNull: false,
-                type: DataTypes.DATE
+                type: DataTypes.DATE,
+                field: 'updated_at' // Explicitly map to snake_case
             }
         });
     },

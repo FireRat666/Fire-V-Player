@@ -15,14 +15,21 @@
     }, 30000);
 
     const init = () => {
+      console.log("VIDYA: INIT")
       clearTimeout(fallbackTimeout);
       const banterScene = BS.BanterScene.GetInstance();
-      banterScene.On('unity-loaded', () => {
+      if (banterScene.unityLoaded) {
+        console.log("VIDYA: UNITY LOADED");
         resolve();
-      });
+      } else {
+          banterScene.On('unity-loaded', () => {
+            resolve();
+          });
+      }
     };
 
     if (window.BS) {
+      console.log("VIDYA: window.BS")
       init();
     } else {
       window.addEventListener('bs-loaded', init);
@@ -30,9 +37,10 @@
   });
 
   waitForBanter().then(() => {
+      console.log("VIDYA: then")
     // Dynamically load the base player script only once Banter is ready.
     const baseScript = document.createElement("script");
-    baseScript.setAttribute("src", `${currentScriptUrl.origin}/base-player.js`);
+    baseScript.setAttribute("src", `${currentScriptUrl}/base-player.js`);
 
     // Once the base player script is loaded, define and instantiate our specific player.
     baseScript.addEventListener("load", () => {
@@ -53,7 +61,7 @@
             this.core.sendMessage({path: Commands.SET_INSTANCE_MODE, data: 'playlist'});
           });
           // Pass the mode to the player iframe so it knows which skip time to use.
-          const url = `https://${window.APP_CONFIG.HOST_URL}/?youtube=${encodeURIComponent(this.core.params.youtube)}&start=${this.core.params.start}&playlist=${this.core.params.playlist}&mute=${this.core.params.mute}&volume=${this.core.tempVolume}&instance=${this.core.params.instance}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}&mode=playlist`;
+          const url = `${currentScriptUrl}?youtube=${encodeURIComponent(this.core.params.youtube)}&start=${this.core.params.start}&playlist=${this.core.params.playlist}&mute=${this.core.params.mute}&volume=${this.core.tempVolume}&instance=${this.core.params.instance}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}&mode=playlist`;
           this.core.setupBrowserElement(url);
         }
       }

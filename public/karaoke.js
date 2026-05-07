@@ -15,11 +15,17 @@
     }, 30000);
 
     const init = () => {
+      console.log("VIDYA: INIT")
       clearTimeout(fallbackTimeout);
       const banterScene = BS.BanterScene.GetInstance();
-      banterScene.On('unity-loaded', () => {
+      if (banterScene.unityLoaded) {
+        console.log("VIDYA: UNITY LOADED");
         resolve();
-      });
+      } else {
+          banterScene.On('unity-loaded', () => {
+            resolve();
+          });
+      }
     };
 
     if (window.BS) {

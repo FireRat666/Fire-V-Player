@@ -42,7 +42,7 @@
       console.log(`VIDYA: ${currentScriptUrl}`);
     // Dynamically load the base player script only once Banter is ready.
     const baseScript = document.createElement("script");
-    baseScript.setAttribute("src", `${currentScriptUrl}/base-player.js`);
+    baseScript.setAttribute("src", `${currentScriptUrl.origin}/base-player.js`);
 
     // Once the base player script is loaded, define and instantiate our specific player.
     baseScript.addEventListener("load", () => {
@@ -54,6 +54,7 @@
         }
 
         async init() {
+          console.log("VIDYA: then init()");
           // Run the common initialization sequence from BasePlayer.
           await super.init();
 

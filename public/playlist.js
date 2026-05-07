@@ -15,7 +15,7 @@
     }, 30000);
 
     const init = () => {
-      console.log("VIDYA: INIT")
+      console.log("VIDYA: INIT");
       clearTimeout(fallbackTimeout);
       const banterScene = BS.BanterScene.GetInstance();
       if (banterScene.unityLoaded) {
@@ -29,7 +29,7 @@
     };
 
     if (window.BS) {
-      console.log("VIDYA: window.BS")
+      console.log("VIDYA: window.BS");
       init();
     } else {
       window.addEventListener('bs-loaded', init);
@@ -37,7 +37,9 @@
   });
 
   waitForBanter().then(() => {
-      console.log("VIDYA: then")
+      console.log("VIDYA: then");
+      console.log(`VIDYA: ${playlistPlayerScript}`);
+      console.log(`VIDYA: ${currentScriptUrl}`);
     // Dynamically load the base player script only once Banter is ready.
     const baseScript = document.createElement("script");
     baseScript.setAttribute("src", `${currentScriptUrl}/base-player.js`);

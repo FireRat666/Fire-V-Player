@@ -400,14 +400,16 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
             console.log("[PLAYER] Pausing YouTube");
             this.player.pauseVideo();
             this.core.showToast("Host paused playback.");
-            this.disableAutoSync(); // Disable auto-sync while paused
+            // We no longer call this.disableAutoSync() here to preserve the user's manual toggle state
+            // and UI visibility. The SYNC_TIME handler already ignores syncs while paused.
           } else {
             console.log("[PLAYER] Resuming YouTube at", currentTime);
             // Seek to the exact time the host resumed at.
             this.player.seekTo(currentTime);
             this.player.playVideo();
             this.core.showToast("Host resumed playback.");
-            this.enableAutoSync(); // Re-enable auto-sync
+            // We no longer call this.enableAutoSync() here, which prevents the Auto Sync UI
+            // from forcefully appearing on every resume.
           }
         } else {
           console.log("[PLAYER] Player not ready or missing", { player: !!this.player, ready: this.readyToPlay });

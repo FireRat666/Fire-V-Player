@@ -77,14 +77,18 @@ class Scraper {
 
     const sp = SearchTypes[searchType.toUpperCase()] || SearchTypes['VIDEO'];
 
-    YouTubeURL.search = new URLSearchParams({
-      search_query,
-      sp
+    const url = new URL(YouTubeURL);
+    url.search = new URLSearchParams({ search_query, sp });
+
+    const response = await fetch(url, {
+      headers: this._getRequestHeaders(requestedLang),
+      agent: this._ytdlAgent,
+      redirect: 'manual'
     });
 
-    const response = await fetch(YouTubeURL, {
-      headers: this._getRequestHeaders(requestedLang)
-    });
+    if (response.status >= 300 && response.status < 400) {
+      throw new Error('YouTube redirected the request (likely bot detection). Try setting a fresh YOUTUBE_COOKIE_STRING environment variable.');
+    }
     if (!response.ok) {
       throw new Error(`Failed to fetch search results: ${response.statusText}`);
     }
@@ -137,14 +141,19 @@ class Scraper {
    * @param {string} query The string to search for on youtube
    */
   async search(query, options = {}) {
-    const webPage = await this._fetch(query, options.searchType, options.language);
+    try {
+      const webPage = await this._fetch(query, options.searchType, options.language);
 
-    const parsedJson = this._getSearchData(webPage);
+      const parsedJson = this._getSearchData(webPage);
 
-    const extracted = this._extractData(parsedJson);
-    const parsed = this._parseData(extracted);
+      const extracted = this._extractData(parsedJson);
+      const parsed = this._parseData(extracted);
 
-    return parsed;
+      return parsed;
+    } catch (error) {
+      console.error(`YouTube search failed for "${query}":`, error.message);
+      throw error;
+    }
   }
 
   async getVideoByUrl(url) {

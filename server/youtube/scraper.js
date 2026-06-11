@@ -21,7 +21,12 @@ class Scraper {
 
     const cookies = cookieString.split(';').map(c => {
       const [name, ...valueParts] = c.split('=');
-      return { name: name.trim(), value: valueParts.join('=').trim() };
+      const cookieName = name.trim();
+      return {
+        name: cookieName,
+        value: valueParts.join('=').trim(),
+        secure: cookieName.startsWith('__Secure-') || cookieName.startsWith('__Host-')
+      };
     });
     this._ytdlAgent = ytdl.createAgent(cookies);
   }
@@ -82,7 +87,7 @@ class Scraper {
 
     const response = await fetch(url, {
       headers: this._getRequestHeaders(requestedLang),
-      agent: this._ytdlAgent,
+      dispatcher: this._ytdlAgent.dispatcher,
       redirect: 'manual'
     });
 

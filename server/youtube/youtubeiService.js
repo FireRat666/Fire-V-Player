@@ -17,9 +17,15 @@ async function getInnertube() {
     innertubePromise = (async () => {
       console.log("Loading youtubei.js dynamically...");
       const library = await getLibrary();
-      const { Innertube, Parser, Helpers, YTNodes, YT, InnertubeError } = library;
+      const { Innertube, Parser, Helpers, YTNodes, YT, InnertubeError, Log, Misc } = library;
       const { YTNode } = Helpers;
       const { NavigationEndpoint } = YTNodes;
+
+      // Suppress JIT parser warnings by setting log level to ERROR
+      if (Log && Log.setLevel && Log.Level) {
+        Log.setLevel(Log.Level.ERROR);
+        console.log("Configured YouTube.js log level to ERROR.");
+      }
 
       if (!Parser.hasParser('ContinuationItemView')) {
         class ContinuationItemView extends YTNode {
@@ -34,6 +40,43 @@ async function getInnertube() {
         }
         Parser.addRuntimeParser('ContinuationItemView', ContinuationItemView);
         console.log("Registered custom parser for ContinuationItemView.");
+      }
+
+      if (!Parser.hasParser('VerticalProductCard')) {
+        const { Thumbnail } = Misc;
+        class VerticalProductCard extends YTNode {
+          static type = 'VerticalProductCard';
+          title;
+          thumbnail;
+          endpoint;
+          price;
+          accessibility_title;
+          merchant_name;
+          from_merchant_text;
+          show_open_in_new_icon;
+          use_new_style;
+          deals_data;
+          price_replacement_text;
+
+          constructor(data) {
+            super();
+            this.title = data.title;
+            this.thumbnail = Thumbnail.fromResponse(data.thumbnail);
+            this.endpoint = new NavigationEndpoint(data.navigationEndpoint);
+            this.price = data.price;
+            this.accessibility_title = data.accessibilityTitle;
+            this.merchant_name = data.merchantName;
+            this.from_merchant_text = data.fromMerchantText;
+            this.show_open_in_new_icon = data.showOpenInNewIcon;
+            this.use_new_style = data.useNewStyle;
+            this.deals_data = {
+              current_price: data.dealsData ? data.dealsData.currentPrice : undefined
+            };
+            this.price_replacement_text = Reflect.has(data, 'priceReplacementText') ? data.priceReplacementText : undefined;
+          }
+        }
+        Parser.addRuntimeParser('VerticalProductCard', VerticalProductCard);
+        console.log("Registered custom parser for VerticalProductCard.");
       }
 
       // Runtime prototype patches to support LockupView and ContinuationItemView in playlists

@@ -24,6 +24,7 @@
             <div class="button teal" id="clearPlaylist">Clear List</div>
             <div class="button teal" id="loadDefaultPlaylist" style="display: none;">Load Default</div>
             <div class="button teal" id="addPlaylist">Add Playlist</div>
+            <div class="button teal" id="addVideo">Add Video</div>
             <div class="button teal " id="autoSync">Auto Sync: Off</div>
             <div class="dropdown-button-row">
               <div class="button teal" id="localSkipBack">&lt;&lt;</div><div class="button teal" id="localSkipForward">&gt;&gt;</div>
@@ -62,6 +63,19 @@
         <div class="search-button-wrapper">
           <div class="button grey" id="close-playlist-url-btn">Close</div>
           <div class="button teal" id="load-playlist-url-btn">Load Playlist</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="add-video-overlay" style="display: none;">
+      <div class="search-overlay-box">
+        <div class="search-input-wrapper">
+          <input type="text" id="addVideoInput" class="addPlaylistInput" placeholder="Video URL or ID. Will ADD TO PLAYLIST">
+          <div class="button red slim" id="clear-video-url-btn">Clear</div>
+        </div>
+        <div class="search-button-wrapper">
+          <div class="button grey" id="close-video-url-btn">Close</div>
+          <div class="button teal" id="load-video-url-btn">Add Video</div>
         </div>
       </div>
     </div>

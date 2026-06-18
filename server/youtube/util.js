@@ -121,9 +121,13 @@ const shareLink = (id, short = true) => {
  */
 exports.getYoutubeId = (url) => {
     if (!url) return false;
-    var regExp = /^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*/;
-    var match = url.match(regExp);
-    return (match && match[7].length == 11) ? match[7] : false;
+    url = url.trim();
+    if (url.length === 11 && /^[a-zA-Z0-9_-]{11}$/.test(url)) {
+        return url;
+    }
+    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|shorts\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+    const match = url.match(regExp);
+    return (match && match[2].length === 11) ? match[2] : false;
 };
 
 exports.getChannelData = (item) => {

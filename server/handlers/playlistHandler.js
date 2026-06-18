@@ -1,5 +1,35 @@
 const Commands = require('../../public/commands.js');
 const { getInnertube, getLibrary } = require('../youtube/youtubeiService.js');
+const Scraper = require('../youtube/scraper.js');
+const scraper = new Scraper();
+
+/**
+ * Resolves a raw URL/ID or incomplete video object into a fully populated video object.
+ */
+async function resolveVideoData(app, ws, v) {
+  if (typeof v === 'string') {
+    const videoId = app.getYoutubeId(v);
+    if (!videoId) {
+      throw new Error("Invalid YouTube URL or ID");
+    }
+    const fullUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    const resolved = await scraper.getVideoByUrl(fullUrl);
+    return resolved;
+  }
+  
+  if (v && typeof v === 'object') {
+    const link = v.link || v.url;
+    if (link && (!v.title || v.title === 'Unknown Title' || !v.duration)) {
+      const videoId = app.getYoutubeId(link);
+      if (videoId) {
+        const fullUrl = `https://www.youtube.com/watch?v=${videoId}`;
+        const resolved = await scraper.getVideoByUrl(fullUrl);
+        return { ...v, ...resolved };
+      }
+    }
+  }
+  return v;
+}
 
 // The original call in app.js was (v, skipUpdate, isYoutubeWebsite, ws).
 // We'll pass `app` (this) and `ws` first for consistency.
@@ -7,7 +37,15 @@ async function addToPlaylist(app, ws, v, skipUpdate, isYoutubeWebsite) {
   const player = app.videoPlayers[ws.i];
   if (player) {
     app.onlyIfHost(ws, async () => {
-      if (app._isDuplicateVideo(player, v.link)) {
+      let resolvedV;
+      try {
+        resolvedV = await resolveVideoData(app, ws, v);
+      } catch (err) {
+        app.send(ws, Commands.ERROR, { message: `Failed to resolve video: ${err.message}` });
+        return;
+      }
+
+      if (app._isDuplicateVideo(player, resolvedV.link)) {
         app.send(ws, Commands.ERROR, { message: "This video is already in the playlist." });
         return;
       }
@@ -16,7 +54,7 @@ async function addToPlaylist(app, ws, v, skipUpdate, isYoutubeWebsite) {
         player.currentTime = 0;
         player.lastStartTime = new Date().getTime() / 1000;
       }
-      const newVideo = app._createVideoObject(v, ws.u, 'scraper', isYoutubeWebsite);
+      const newVideo = app._createVideoObject(resolvedV, ws.u, 'scraper', isYoutubeWebsite);
       player.playlist.push(newVideo);
       if (!skipUpdate) {
         player.sockets.forEach(socket => {
@@ -207,11 +245,19 @@ async function addAndPlay(app, ws, v) {
   if (app.videoPlayers[ws.i]) {
     app.onlyIfHost(ws, async () => {
       const player = app.videoPlayers[ws.i];
-      if (app._isDuplicateVideo(player, v.link)) {
+      let resolvedV;
+      try {
+        resolvedV = await resolveVideoData(app, ws, v);
+      } catch (err) {
+        app.send(ws, Commands.ERROR, { message: `Failed to resolve video: ${err.message}` });
+        return;
+      }
+
+      if (app._isDuplicateVideo(player, resolvedV.link)) {
         app.send(ws, Commands.ERROR, { message: "This video is already in the playlist." });
         return;
       }
-      const newVideo = app._createVideoObject(v, ws.u, 'scraper');
+      const newVideo = app._createVideoObject(resolvedV, ws.u, 'scraper');
       player.playlist.push(newVideo);
 
       // Set it as the current track
@@ -232,11 +278,19 @@ async function addAndPlayNext(app, ws, v) {
   if (app.videoPlayers[ws.i]) {
     app.onlyIfHost(ws, async () => {
       const player = app.videoPlayers[ws.i];
-      if (app._isDuplicateVideo(player, v.link)) {
+      let resolvedV;
+      try {
+        resolvedV = await resolveVideoData(app, ws, v);
+      } catch (err) {
+        app.send(ws, Commands.ERROR, { message: `Failed to resolve video: ${err.message}` });
+        return;
+      }
+
+      if (app._isDuplicateVideo(player, resolvedV.link)) {
         app.send(ws, Commands.ERROR, { message: "This video is already in the playlist." });
         return;
       }
-      const newVideo = app._createVideoObject(v, ws.u, 'scraper');
+      const newVideo = app._createVideoObject(resolvedV, ws.u, 'scraper');
       const nextIndex = player.currentTrack + 1;
       player.playlist.splice(nextIndex, 0, newVideo);
       // Send a granular ITEM_INSERTED command for efficiency.

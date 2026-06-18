@@ -279,6 +279,7 @@ var Playlist = class {
     this.clearPlaylistButton.style.display = !isMe ? 'none' :  'inline-block';
     this.loadDefaultPlaylistButton.style.display = (isMe && player.playlist.length === 0 && this.core.params.playlist) ? 'inline-block' : 'none';
     this.addPlaylist.style.display = !isMe ? 'none' :  'inline-block';
+    this.addVideo.style.display = !isMe ? 'none' : 'inline-block';
     this.takeOver.style.display = (player.canTakeOver || isMe) ? 'inline-block' : 'none';
     this.skipBackwards.style.display = isMe ? 'inline-block' : 'none';
     this.skipForward.style.display = isMe ? 'inline-block' : 'none';
@@ -716,6 +717,46 @@ var Playlist = class {
       if (e.key === 'Enter') {
         e.preventDefault();
         this.addItemSubmit.click();
+      }
+    });
+
+    this.addVideoOverlay = document.querySelector('.add-video-overlay');
+    this.addVideoInput = document.querySelector('#addVideoInput');
+    this.addVideoSubmit = document.querySelector('#load-video-url-btn');
+    this.clearVideoUrlButton = document.querySelector('#clear-video-url-btn');
+    this.closeVideoUrlButton = document.querySelector('#close-video-url-btn');
+    this.addVideo = document.querySelector('#addVideo');
+    
+    this.addVideo.addEventListener('click', () => {
+      this.addVideoOverlay.style.display = 'flex';
+      this.addVideoInput.value = '';
+      this.addVideoInput.focus();
+    });
+
+    this.closeVideoUrlButton.addEventListener('click', () => {
+      this.addVideoOverlay.style.display = 'none';
+    });
+
+    this.clearVideoUrlButton.addEventListener('click', () => {
+      this.addVideoInput.value = '';
+      this.addVideoInput.focus();
+    });
+
+    this.addVideoSubmit.addEventListener('click', () => {
+      const input = this.addVideoInput.value;
+      const videoId = this.core.getId(input);
+      if (videoId) {
+        this.core.sendMessage({ path: Commands.ADD_TO_PLAYLIST, data: input });
+        this.addVideoOverlay.style.display = 'none';
+      } else {
+        this.core.showToast("Invalid Video URL or ID.", 4000);
+      }
+    });
+
+    this.addVideoInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        this.addVideoSubmit.click();
       }
     });
 

@@ -278,7 +278,7 @@ body{
   width: auto; /* Reset width to allow flex-grow to work */
   margin: 0; /* Reset margin */
 }
-.add-playlist-overlay {
+.add-playlist-overlay, .add-video-overlay {
   position: fixed;
   top: 0;
   left: 0;

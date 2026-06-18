@@ -523,12 +523,28 @@ class App {
         this.send(ws, Commands.ERROR, { message: error.message });
       }
     } else {
+      // Check if it looks like a URL but didn't match getYoutubeId.
+      // If it starts with http://, https://, or www., we should return an error
+      // or empty results, rather than searching YouTube for the URL string.
+      const isUrl = /^(https?:\/\/|www\.)/i.test(term.trim());
+      if (isUrl) {
+        this.send(ws, Commands.SEARCH_RESULTS, []);
+        this.send(ws, Commands.ERROR, { message: "Invalid YouTube URL provided." });
+        return;
+      }
+
       // It's a search term, perform a regular search
-      const results = await youtube.search(term, {
-        language: 'en-US',
-        searchType: 'video'
-      });
-      this.send(ws, Commands.SEARCH_RESULTS, results.videos || []);
+      try {
+        const results = await youtube.search(term, {
+          language: 'en-US',
+          searchType: 'video'
+        });
+        this.send(ws, Commands.SEARCH_RESULTS, results.videos || []);
+      } catch (error) {
+        console.error(`Error searching YouTube for "${term}":`, error.message);
+        this.send(ws, Commands.SEARCH_RESULTS, []);
+        this.send(ws, Commands.ERROR, { message: "YouTube search failed or returned no results." });
+      }
     }
   }
   onlyIfHost(ws, callback, locked) {

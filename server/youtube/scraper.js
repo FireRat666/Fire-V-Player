@@ -127,7 +127,12 @@ class Scraper {
       return parsedResults;
     } catch (error) {
       console.error(`YouTube search failed for "${query}":`, error.message);
-      throw error;
+      return {
+        channels: [],
+        playlists: [],
+        streams: [],
+        videos: []
+      };
     }
   }
 

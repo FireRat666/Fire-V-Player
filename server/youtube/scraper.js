@@ -148,34 +148,65 @@ class Scraper {
       }
 
       const yt = await getInnertube();
-      const videoInfo = await yt.getBasicInfo(videoId);
-      const details = videoInfo.basic_info;
-
-      if (!details) {
-        throw new Error("Could not retrieve video details from YouTube.js.");
-      }
+      const videoInfo = await yt.getInfo(videoId);
+      const details = videoInfo.basic_info || {};
 
       // Extract thumbnail
       let thumbnail_url = '';
-      if (Array.isArray(details.thumbnail) && details.thumbnail.length > 0) {
-        thumbnail_url = details.thumbnail[details.thumbnail.length - 1].url;
-      } else if (details.thumbnail && typeof details.thumbnail.url === 'string') {
-        thumbnail_url = details.thumbnail.url;
-      } else if (details.thumbnail && Array.isArray(details.thumbnail.thumbnails) && details.thumbnail.thumbnails.length > 0) {
-        thumbnail_url = details.thumbnail.thumbnails[details.thumbnail.thumbnails.length - 1].url;
-      } else {
+      if (details.thumbnail) {
+        if (Array.isArray(details.thumbnail) && details.thumbnail.length > 0) {
+          thumbnail_url = details.thumbnail[details.thumbnail.length - 1].url;
+        } else if (typeof details.thumbnail.url === 'string') {
+          thumbnail_url = details.thumbnail.url;
+        } else if (Array.isArray(details.thumbnail.thumbnails) && details.thumbnail.thumbnails.length > 0) {
+          thumbnail_url = details.thumbnail.thumbnails[details.thumbnail.thumbnails.length - 1].url;
+        }
+      }
+      if (!thumbnail_url) {
         thumbnail_url = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
       }
 
+      let title = details.title || videoInfo.primary_info?.title?.toString();
+      let duration = (details.duration || 0) * 1000;
+
+      let channelName = details.channel?.name || videoInfo.secondary_info?.owner?.author?.name?.toString() || 'Unknown Channel';
+      let channelId = details.channel?.id || details.channelId || videoInfo.secondary_info?.owner?.author?.id || '';
+
+      if (!title || title === 'Unknown Title' || duration === 0) {
+        try {
+          const searchResults = await yt.search(videoId);
+          const found = searchResults?.videos?.find(v => v.id === videoId || v.videoId === videoId) || searchResults?.videos?.[0];
+          if (found && (found.id === videoId || found.videoId === videoId)) {
+            if (!title || title === 'Unknown Title') {
+              title = found.title?.toString();
+            }
+            if (duration === 0) {
+              const seconds = found.duration?.seconds || found.duration;
+              if (typeof seconds === 'number') {
+                duration = seconds * 1000;
+              }
+            }
+            if (thumbnail_url.includes('hqdefault.jpg') && found.thumbnail) {
+              thumbnail_url = found.thumbnail;
+            }
+            if (channelName === 'Unknown Channel' && found.channel?.name) {
+              channelName = found.channel.name;
+            }
+          }
+        } catch (_) {}
+      }
+
+      if (!title) title = 'Unknown Title';
+
       return {
-        title: details.title || 'Unknown Title',
+        title: title,
         link: `https://www.youtube.com/watch?v=${videoId}`,
         thumbnail: thumbnail_url,
-        duration: (details.duration || 0) * 1000,
+        duration: duration,
         id: videoId,
         channel: {
-          name: details.channel?.name || 'Unknown Channel',
-          id: details.channel?.id || details.channelId || '',
+          name: channelName,
+          id: channelId,
         }
       };
     } catch (error) {

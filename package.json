@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@distube/ytdl-core": "https://codeload.github.com/ToddyTheNoobDud/ytdl-core-stuff/tar.gz/refs/heads/master",
-    "@Victiniiiii/ytpl": "^1.2.4",
+    "@distube/ytpl": "git+https://github.com/Victiniiiii/ytpl.git",
     "debug": "^4.3.4",
     "express": "^5.2.1",
     "pg": "^8.19.0",

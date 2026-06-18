@@ -1,5 +1,5 @@
 const Commands = require('../../public/commands.js');
-const { getInnertube } = require('../youtube/youtubeiService.js');
+const { getInnertube, getLibrary } = require('../youtube/youtubeiService.js');
 
 // The original call in app.js was (v, skipUpdate, isYoutubeWebsite, ws).
 // We'll pass `app` (this) and `ws` first for consistency.
@@ -83,28 +83,14 @@ async function fromPlaylist(app, ws, data) {
       try {
         const yt = await getInnertube();
         const playlist = await yt.getPlaylist(playlistId);
-        
-        let videos = [];
-        if (playlist.videos && Array.isArray(playlist.videos)) {
-          videos = [...playlist.videos];
-        } else if (playlist.videos && Array.isArray(playlist.videos.items)) {
-          videos = [...playlist.videos.items];
-        } else if (Array.isArray(playlist.items)) {
-          videos = [...playlist.items];
-        }
 
+        let videos = [...playlist.items];
         let currentPlaylist = playlist;
+
         while (videos.length < 100 && currentPlaylist.has_continuation) {
           currentPlaylist = await currentPlaylist.getContinuation();
-          let nextItems = [];
-          if (currentPlaylist.videos && Array.isArray(currentPlaylist.videos)) {
-            nextItems = currentPlaylist.videos;
-          } else if (currentPlaylist.videos && Array.isArray(currentPlaylist.videos.items)) {
-            nextItems = currentPlaylist.videos.items;
-          } else if (Array.isArray(currentPlaylist.items)) {
-            nextItems = currentPlaylist.items;
-          }
-          if (nextItems.length === 0) break;
+          const nextItems = currentPlaylist.items;
+          if (!nextItems || nextItems.length === 0) break;
           videos = videos.concat(nextItems);
         }
 
@@ -118,35 +104,40 @@ async function fromPlaylist(app, ws, data) {
         const existingVideoIds = new Set();
         let addedCount = 0;
         videos.forEach(v => {
-          const videoId = v.id || v.videoId;
+          const videoId = v.id || v.videoId || v.content_id;
           if (videoId && !existingVideoIds.has(videoId)) {
             const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
             
             // Extract title
-            const title = (v.title && typeof v.title.text === 'string')
-              ? v.title.text
-              : (typeof v.title === 'string' ? v.title : 'Unknown Title');
+            let title = '';
+            if (v.title) {
+              title = typeof v.title.text === 'string' ? v.title.text : (typeof v.title === 'string' ? v.title : '');
+            } else if (v.metadata && v.metadata.title) {
+              title = typeof v.metadata.title.text === 'string' ? v.metadata.title.text : '';
+            }
+            if (!title) title = 'Unknown Title';
 
             // Extract duration
             let durationMs = 0;
+            let durationText = '';
             if (v.duration) {
-              if (typeof v.duration.seconds === 'number') {
-                durationMs = v.duration.seconds * 1000;
-              } else if (typeof v.duration.text === 'string') {
-                const parts = v.duration.text.split(':').map(Number);
-                if (parts.length === 2) {
-                  durationMs = (parts[0] * 60 + parts[1]) * 1000;
-                } else if (parts.length === 3) {
-                  durationMs = (parts[0] * 3600 + parts[1] * 60 + parts[2]) * 1000;
-                }
-              } else if (typeof v.duration === 'string') {
-                const parts = v.duration.split(':').map(Number);
-                if (parts.length === 2) {
-                  durationMs = (parts[0] * 60 + parts[1]) * 1000;
-                } else if (parts.length === 3) {
-                  durationMs = (parts[0] * 3600 + parts[1] * 60 + parts[2]) * 1000;
-                }
+              durationText = typeof v.duration.text === 'string' ? v.duration.text : (typeof v.duration === 'string' ? v.duration : '');
+            } else if (v.content_image && Array.isArray(v.content_image.overlays)) {
+              const bottomOverlay = v.content_image.overlays.find(o => o.type === 'ThumbnailBottomOverlayView');
+              if (bottomOverlay && Array.isArray(bottomOverlay.badges) && bottomOverlay.badges.length > 0) {
+                durationText = bottomOverlay.badges[0].text || '';
               }
+            }
+
+            if (durationText) {
+              const parts = durationText.split(':').map(Number);
+              if (parts.length === 2) {
+                durationMs = (parts[0] * 60 + parts[1]) * 1000;
+              } else if (parts.length === 3) {
+                durationMs = (parts[0] * 3600 + parts[1] * 60 + parts[2]) * 1000;
+              }
+            } else if (v.duration && typeof v.duration.seconds === 'number') {
+              durationMs = v.duration.seconds * 1000;
             }
 
             // Extract thumbnail
@@ -157,6 +148,8 @@ async function fromPlaylist(app, ws, data) {
               thumbnail_url = v.thumbnail.url;
             } else if (v.thumbnail && Array.isArray(v.thumbnail.thumbnails) && v.thumbnail.thumbnails.length > 0) {
               thumbnail_url = v.thumbnail.thumbnails[v.thumbnail.thumbnails.length - 1].url;
+            } else if (v.content_image && Array.isArray(v.content_image.image) && v.content_image.image.length > 0) {
+              thumbnail_url = v.content_image.image[v.content_image.image.length - 1].url;
             } else {
               thumbnail_url = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
             }

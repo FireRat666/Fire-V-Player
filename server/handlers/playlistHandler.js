@@ -1,5 +1,5 @@
 const Commands = require('../../public/commands.js');
-const ytpl = require('@distube/ytpl');
+const { getInnertube } = require('../youtube/youtubeiService.js');
 
 // The original call in app.js was (v, skipUpdate, isYoutubeWebsite, ws).
 // We'll pass `app` (this) and `ws` first for consistency.
@@ -81,38 +81,100 @@ async function fromPlaylist(app, ws, data) {
     if (app.videoPlayers[ws.i] && (app.videoPlayers[ws.i].playlist.length === 0 || data.shouldClear)) {
       const player = app.videoPlayers[ws.i];
       try {
-        const playlist = await ytpl(playlistId, { limit: 100 });
+        const yt = await getInnertube();
+        const playlist = await yt.getPlaylist(playlistId);
+        
+        let videos = [];
+        if (playlist.videos && Array.isArray(playlist.videos)) {
+          videos = [...playlist.videos];
+        } else if (playlist.videos && Array.isArray(playlist.videos.items)) {
+          videos = [...playlist.videos.items];
+        } else if (Array.isArray(playlist.items)) {
+          videos = [...playlist.items];
+        }
+
+        let currentPlaylist = playlist;
+        while (videos.length < 100 && currentPlaylist.has_continuation) {
+          currentPlaylist = await currentPlaylist.getContinuation();
+          let nextItems = [];
+          if (currentPlaylist.videos && Array.isArray(currentPlaylist.videos)) {
+            nextItems = currentPlaylist.videos;
+          } else if (currentPlaylist.videos && Array.isArray(currentPlaylist.videos.items)) {
+            nextItems = currentPlaylist.videos.items;
+          } else if (Array.isArray(currentPlaylist.items)) {
+            nextItems = currentPlaylist.items;
+          }
+          if (nextItems.length === 0) break;
+          videos = videos.concat(nextItems);
+        }
+
+        if (videos.length > 100) {
+          videos = videos.slice(0, 100);
+        }
+
         app.resetPlaylist(ws); // Resets playlist, currentTime, currentTrack
 
         // --- Duplicate Video Check for bulk add ---
         const existingVideoIds = new Set();
         let addedCount = 0;
-        playlist.items.forEach(v => {
-          const newVideoId = app.getYoutubeId(v.shortUrl || v.url);
-          if (newVideoId && !existingVideoIds.has(newVideoId)) {
-            // Parse the "MM:SS" or "H:MM:SS" duration string into milliseconds.
-            // The current @distube/ytpl API returns duration as a string, not durationSec.
+        videos.forEach(v => {
+          const videoId = v.id || v.videoId;
+          if (videoId && !existingVideoIds.has(videoId)) {
+            const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+            
+            // Extract title
+            const title = (v.title && typeof v.title.text === 'string')
+              ? v.title.text
+              : (typeof v.title === 'string' ? v.title : 'Unknown Title');
+
+            // Extract duration
             let durationMs = 0;
-            if (v.duration && typeof v.duration === 'string') {
-              const parts = v.duration.split(':').map(Number);
-              if (parts.length === 2) {
-                durationMs = (parts[0] * 60 + parts[1]) * 1000;
-              } else if (parts.length === 3) {
-                durationMs = (parts[0] * 3600 + parts[1] * 60 + parts[2]) * 1000;
+            if (v.duration) {
+              if (typeof v.duration.seconds === 'number') {
+                durationMs = v.duration.seconds * 1000;
+              } else if (typeof v.duration.text === 'string') {
+                const parts = v.duration.text.split(':').map(Number);
+                if (parts.length === 2) {
+                  durationMs = (parts[0] * 60 + parts[1]) * 1000;
+                } else if (parts.length === 3) {
+                  durationMs = (parts[0] * 3600 + parts[1] * 60 + parts[2]) * 1000;
+                }
+              } else if (typeof v.duration === 'string') {
+                const parts = v.duration.split(':').map(Number);
+                if (parts.length === 2) {
+                  durationMs = (parts[0] * 60 + parts[1]) * 1000;
+                } else if (parts.length === 3) {
+                  durationMs = (parts[0] * 3600 + parts[1] * 60 + parts[2]) * 1000;
+                }
               }
             }
-            v.milis_length = durationMs;
-            // `thumbnail` is now a direct string on the item (was bestThumbnail.url).
-            v.thumbnail_url = v.thumbnail || (v.bestThumbnail ? v.bestThumbnail.url : '');
-            // Use shortUrl to avoid the playlist-polluted URL with extra query params.
-            v.url = v.shortUrl || v.url;
-            player.playlist.push(app._createVideoObject(v, ws.u, 'ytfps'));
-            existingVideoIds.add(newVideoId);
+
+            // Extract thumbnail
+            let thumbnail_url = '';
+            if (Array.isArray(v.thumbnails) && v.thumbnails.length > 0) {
+              thumbnail_url = v.thumbnails[v.thumbnails.length - 1].url;
+            } else if (v.thumbnail && typeof v.thumbnail.url === 'string') {
+              thumbnail_url = v.thumbnail.url;
+            } else if (v.thumbnail && Array.isArray(v.thumbnail.thumbnails) && v.thumbnail.thumbnails.length > 0) {
+              thumbnail_url = v.thumbnail.thumbnails[v.thumbnail.thumbnails.length - 1].url;
+            } else {
+              thumbnail_url = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+            }
+
+            const itemToCreate = {
+              title,
+              thumbnail_url,
+              milis_length: durationMs,
+              url: videoUrl
+            };
+
+            player.playlist.push(app._createVideoObject(itemToCreate, ws.u, 'ytfps'));
+            existingVideoIds.add(videoId);
             addedCount++;
           }
         });
 
-        const duplicateCount = playlist.items.length - addedCount;
+        const duplicateCount = videos.length - addedCount;
         if (duplicateCount > 0) {
           app.send(ws, Commands.ERROR, { message: `Added ${addedCount} videos. ${duplicateCount} duplicate(s) were skipped.` });
         }
@@ -128,7 +190,7 @@ async function fromPlaylist(app, ws, data) {
         }
         await app.savePlayerState(ws.i);
       } catch (error) {
-        console.error(`Error fetching playlist ${playlistId}:`, error.message);
+        console.error(`Error fetching playlist ${playlistId}:`, error);
         app.send(ws, Commands.ERROR, { message: "Could not load playlist. It might be private or contain no videos." });
       }
     }

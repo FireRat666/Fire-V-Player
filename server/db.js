@@ -78,7 +78,7 @@ const createSequelizeInstance = (dbUrl) => {
 // --- Singleton Sequelize Instance ---
 // Use the NEW_DATABASE_URL for the main connection if it exists, otherwise fall back to the old one.
 // This ensures the app connects to the correct database after a potential migration.
-const sequelize = createSequelizeInstance(mainDbUrl);
+const sequelize = mainDbUrl ? createSequelizeInstance(mainDbUrl) : null;
 
 // --- Helper Functions ---
 const applyRlsPolicy = async (tableName) => {

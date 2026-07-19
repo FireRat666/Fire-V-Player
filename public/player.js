@@ -251,7 +251,8 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
     }
   }
   parseMessage(msg) {
-    const json = JSON.parse(msg);
+    let json;
+    try { json = JSON.parse(msg); } catch { return; }
     switch(json.path) {
       case Commands.SET_VOLUME:
         if(json.data >= 0 && json.data <= 100) {

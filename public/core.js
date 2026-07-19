@@ -532,7 +532,8 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
     return element;
   }
   parseMessage(msg) {
-    const json = JSON.parse(msg);
+    let json;
+    try { json = JSON.parse(msg); } catch { return; }
     switch(json.path) {
       case Commands.ERROR:
         console.error("I cant let you do that...");

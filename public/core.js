@@ -22,6 +22,21 @@ var Core = class {
       // this.setupSayNamesScript();
     }
     if(window.isBanter) {
+      // Populate window.user from the BanterScene's localUser identity.
+      // This is the reliable source after unity-loaded, whereas window.user
+      // may not be populated yet by the SDK on all platforms (e.g. Quest 3).
+      try {
+        const banterScene = BS.BanterScene.GetInstance();
+        if (banterScene && banterScene.localUser) {
+          window.user = {
+            id: banterScene.localUser.uid,
+            name: banterScene.localUser.name || "User"
+          };
+        }
+      } catch (e) {
+        console.warn('[Core] Could not get user from BanterScene:', e);
+      }
+
       let lastSendTime = Date.now();
       const positionOfBrowser = this.params.position.split(" ");
       window.userPoseCallback = async pose => {
@@ -285,6 +300,10 @@ var Core = class {
   }
 
   openPlaylist() {
+    if (!window.user || !window.user.id) {
+      console.warn('[Core] openPlaylist called but window.user is not set. Skipping.');
+      return;
+    }
     // Determine the mode ('karaoke' or 'playlist') based on the in-world script's setting.
     const mode = this.isKaraoke ? 'karaoke' : 'playlist';
     const playlistParam = this.params.playlist ? `&playlist=${this.params.playlist}` : "";
@@ -318,6 +337,10 @@ setupSkipButton(scene, isBack, playlistContainer) {
 }
 
   setupHandControls() {
+    if (!window.user || !window.user.id) {
+      console.warn('[Core] setupHandControls called but window.user is not set. Skipping.');
+      return;
+    }
     // This was a great innovation by HBR, who wanted Skizot to also get credit for the original idea. 
     const handControlsContainer = document.createElement("a-entity");
     handControlsContainer.setAttribute("scale", "0.08 0.08 0.08");

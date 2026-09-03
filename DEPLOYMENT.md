@@ -23,13 +23,16 @@ This guide covers setting up a local development environment and deploying the a
     npm install
     ```
 
-3.  **Configure Local Host URL:**
-    The client-side scripts need to know the URL of your local server.
+3.  **Configure Host URL:**
+    The client-side scripts need to know the URL of your server. `HOST_URL` in `public/config.js` supports either an array of URLs or a single URL. When multiple URLs are provided, the app automatically detects the matching domain (e.g., `localhost:3000` when running locally, or your production domain when hosted), so you don't need to change `config.js` when switching between environments.
     -   Open the file `public/config.js`.
-    -   Change the `HOST_URL` to `localhost:3000` for local testing.
+    -   Ensure `localhost:3000` is included in `HOST_URL`:
     ```javascript
     window.APP_CONFIG = {
-      HOST_URL: 'localhost:3000' // For local development
+      HOST_URL: [
+        'vidya.firer.at',
+        'localhost:3000'
+      ]
     };
     ```
 
@@ -68,12 +71,15 @@ This application is designed to be easily deployed on Render.
     -   **Note:** Render's free tier databases have a **fixed 90-day lifespan**. For a permanent free option, consider an external service like Neon or Supabase and get their connection URL.
 
 3.  **Configure the Host URL before deploying:**
-    Before you push your code to GitHub for Render to build, you must configure the application's public URL.
+    Before you push your code to GitHub for Render to build, configure your application URL(s) in `public/config.js`. You can specify multiple URLs (e.g., your Render domain, custom domains, and `localhost:3000` for local dev):
     -   Open the file `public/config.js`.
-    -   Change the `HOST_URL` to your Render service's URL (e.g., `your-app-name.onrender.com`).
+    -   Add your Render service's URL (e.g., `your-app-name.onrender.com`):
     ```javascript
     window.APP_CONFIG = {
-      HOST_URL: 'your-app-name.onrender.com' // Your public Render URL
+      HOST_URL: [
+        'your-app-name.onrender.com',
+        'localhost:3000'
+      ]
     };
     ```
 

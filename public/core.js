@@ -4,6 +4,22 @@ var Core = class {
         this.isKaraoke = false;
         this.createdElements = [];
     }
+
+    getProtocol() {
+        if (this.hostProtocol) return this.hostProtocol;
+        if (this.hostUrl && (this.hostUrl.startsWith('localhost') || this.hostUrl.startsWith('127.0.0.1'))) {
+            return 'http';
+        }
+        if (typeof location !== 'undefined' && location.protocol === 'http:') {
+            return 'http';
+        }
+        return 'https';
+    }
+
+    getWsProtocol() {
+        return this.getProtocol() === 'http' ? 'ws' : 'wss';
+    }
+
   async init() {
     await this.setupToastify();
     // Check the URL for the 'mode' parameter to determine behavior (e.g., skip times).
@@ -11,12 +27,13 @@ var Core = class {
     this.imIn = false;
     // Set defaults for parameters that depend on the host URL.
     // This runs after parseParams, so this.hostUrl is available.
-    this.setOrDefault("data-playlist-icon-url", `https://${this.hostUrl}/assets/Playlist.png`);
-    this.setOrDefault("data-vol-up-icon-url", `https://${this.hostUrl}/assets/VolUp.png`);
-    this.setOrDefault("data-vol-down-icon-url", `https://${this.hostUrl}/assets/VolDown.png`);
-    this.setOrDefault("data-mute-icon-url", `https://${this.hostUrl}/assets/Mute.png`);
-    this.setOrDefault("data-skip-forward-icon-url", `https://${this.hostUrl}/assets/Forward.png`);
-    this.setOrDefault("data-skip-backward-icon-url", `https://${this.hostUrl}/assets/Backwards.png`);
+    const proto = this.getProtocol();
+    this.setOrDefault("data-playlist-icon-url", `${proto}://${this.hostUrl}/assets/Playlist.png`);
+    this.setOrDefault("data-vol-up-icon-url", `${proto}://${this.hostUrl}/assets/VolUp.png`);
+    this.setOrDefault("data-vol-down-icon-url", `${proto}://${this.hostUrl}/assets/VolDown.png`);
+    this.setOrDefault("data-mute-icon-url", `${proto}://${this.hostUrl}/assets/Mute.png`);
+    this.setOrDefault("data-skip-forward-icon-url", `${proto}://${this.hostUrl}/assets/Forward.png`);
+    this.setOrDefault("data-skip-backward-icon-url", `${proto}://${this.hostUrl}/assets/Backwards.png`);
 
     if(this.params.announce === 'true') { 
       // this.setupSayNamesScript();
@@ -109,7 +126,8 @@ var Core = class {
       iframe.style.zIndex = "1000";
       document.body.appendChild(iframe);
 
-      const playlistUrl = `https://${this.hostUrl}/playlist/?instance=${this.params.instance}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}`;
+      const proto = this.getProtocol();
+      const playlistUrl = `${proto}://${this.hostUrl}/playlist/?instance=${this.params.instance}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}`;
       this.showToast(`Player is in 2D mode. See console for playlist URL.`, 5000);
       console.log(`Player is in 2D mode. Open the playlist controls here: ${playlistUrl}`);
       return;
@@ -209,7 +227,7 @@ var Core = class {
     playlistButton.setAttribute('sq-boxcollider', 'size: 1 0.3 0.05');
     playlistButton.setAttribute('sq-interactable', '');
     const buttonGlb = document.createElement('a-entity');
-    buttonGlb.setAttribute('gltf-model',`https://${this.hostUrl}/assets/ButtonL.glb`);
+    buttonGlb.setAttribute('gltf-model',`${this.getProtocol()}://${this.hostUrl}/assets/ButtonL.glb`);
     playlistButton.appendChild(buttonGlb);
     playlistButton.setAttribute('position', this.params["singer-button-position"]);
     playlistButton.setAttribute('rotation', this.params["singer-button-rotation"]);
@@ -282,7 +300,7 @@ var Core = class {
         },
         // stopOnFocus: true, // Prevents dismissing of toast on hover
         style: {
-          background: `url(https://${this.hostUrl}/assets/Button_bg.png) center center no-repeat`,
+          background: `url(${this.getProtocol()}://${this.hostUrl}/assets/Button_bg.png) center center no-repeat`,
           backgroundSize: "cover",
           opacity: 0.7,
           fontSize: "2em",
@@ -308,7 +326,8 @@ var Core = class {
     const mode = this.isKaraoke ? 'karaoke' : 'playlist';
     const playlistParam = this.params.playlist ? `&playlist=${this.params.playlist}` : "";
     // Pass the mode as a URL parameter so the UI page knows its context.
-    window.openPage(`https://${this.hostUrl}/${mode}/?instance=${this.params.instance}${playlistParam}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}&mode=${mode}`);
+    const proto = this.getProtocol();
+    window.openPage(`${proto}://${this.hostUrl}/${mode}/?instance=${this.params.instance}${playlistParam}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}&mode=${mode}`);
   }
   setupVolButton(scene, isUp, playlistContainer) {
   const volIconUrl = isUp ? this.params["data-vol-up-icon-url"] : this.params["data-vol-down-icon-url"];
@@ -489,7 +508,7 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
   }
   setupWebsocket(type, messageCallback, connectedCallback, closeCallback){
     return new Promise(resolve => {
-      this.ws = new WebSocket('wss://' + this.hostUrl + '/');
+      this.ws = new WebSocket(`${this.getWsProtocol()}://${this.hostUrl}/`);
       this.ws.onopen = (event) => {
         console.log("Websocket connected!");
         resolve();
@@ -719,7 +738,7 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
   setupScript(callback, name, attrs) {
     return new Promise(resolve => {
       let myScript = document.createElement("script");
-      myScript.setAttribute("src", `https://${this.hostUrl}/${name}.js`);
+      myScript.setAttribute("src", `${this.getProtocol()}://${this.hostUrl}/${name}.js`);
       if(attrs) {
         Object.keys(attrs).forEach(k => {
           myScript.setAttribute(k, attrs[k]);

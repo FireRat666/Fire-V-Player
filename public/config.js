@@ -11,6 +11,7 @@
 window.APP_CONFIG = {
   HOST_URL: [
     'vidya.firer.at',
+    'testya.firer.at',
     'localhost:3000'
   ]
 };

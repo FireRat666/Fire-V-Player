@@ -71,18 +71,22 @@ window.APP_CONFIG = {
 
     const candidates = getCandidateHosts();
 
-    // Try to find a matching configured host among candidates
+    // 1. Search for an exact match first across all candidates
     for (const candidate of candidates) {
       const cleanedCandidate = cleanHost(candidate);
-      const matched = cleanedHosts.find(h => {
-        if (h === cleanedCandidate) return true;
-        // Match hostname ignoring port (e.g. localhost matching localhost:3000)
-        const hNoPort = h.split(':')[0];
-        const candNoPort = cleanedCandidate.split(':')[0];
-        return hNoPort === candNoPort;
-      });
-      if (matched) {
-        return matched;
+      const exactMatch = cleanedHosts.find(h => h === cleanedCandidate);
+      if (exactMatch) {
+        return exactMatch;
+      }
+    }
+
+    // 2. Fall back to hostname-only matching (e.g. matching localhost to localhost:3000)
+    for (const candidate of candidates) {
+      const cleanedCandidate = cleanHost(candidate);
+      const candNoPort = cleanedCandidate.split(':')[0];
+      const hostnameMatch = cleanedHosts.find(h => h.split(':')[0] === candNoPort);
+      if (hostnameMatch) {
+        return hostnameMatch;
       }
     }
 

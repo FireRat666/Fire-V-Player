@@ -73,7 +73,15 @@ Settings are the same as the script attributes below, except:
 
 The player uses the SDK's legacy A-Frame bridge, so `snippet.js` adds an `<a-scene>` if the page has none. With the plain script tag, add `<a-scene></a-scene>` to the page yourself.
 
-In these worlds the Playlist button opens an **in-world panel** beside the screen: playback and volume controls, host controls (lock, take over, voting, clear), the playlist (play, reorder, remove, vote), and YouTube search. Search also accepts a video link, or a playlist link (host only), which replaces the playlist. The panel's **Open full page** button tries the 2D page in the menu browser.
+In these worlds the Playlist button opens an **in-world panel** beside the screen. The main view has playback and volume controls, the playlist (play, reorder, remove, vote) and YouTube search. Search also accepts a video link, or a playlist link (host only), which replaces the playlist. **More...** opens a second view with:
+
+- host controls: lock, take over, voting, clear, load the default playlist
+- seek to a time (host)
+- your player only: skip back/forward and Auto Sync
+- add by link: a video, or a playlist (host)
+- **Open full page**, which tries the 2D page in the menu browser
+
+When someone can't play a video, the panel shows the suggested replacement with Replace (host) and Dismiss.
 
 ---
 

@@ -27,6 +27,12 @@ var FirePlaylistPanel = class {
     this.renderTimer = null;
     this.tickTimer = null;
     this.statusTimer = null;
+    this.view = 'main';       // 'main' | 'more'
+    this.autoSync = false;
+    this.seekQuery = '';
+    this.linkQuery = '';
+    this.pendingReplacement = null;
+    this.searchTimer = null;
     core.addMessageListener(msg => this.onMessage(msg));
   }
 
@@ -136,6 +142,23 @@ var FirePlaylistPanel = class {
     return el;
   }
 
+  // A text input. Returns null when this SDK has no UITextField.
+  async textField(parent, placeholder, onValue, onEnter) {
+    if (!BS.UITextField) return null;
+    const field = await this.ready(new BS.UITextField(this.ui, parent));
+    try { field.placeholder = placeholder; } catch (_) {}
+    field.SetStyles({ flexGrow: 1, fontSize: '22px', height: '48px', marginRight: '6px' });
+    field.OnChange(e => {
+      if (e && e.value != null) onValue(String(e.value));
+    });
+    if (typeof field.OnKeyDown === 'function') {
+      field.OnKeyDown(e => {
+        if (e && (e.key === 'Enter' || e.key === '\n' || e.key === '\r' || e.keyCode === 13)) onEnter();
+      });
+    }
+    return field;
+  }
+
   // ---------------------------------------------------------------- build
 
   build() {
@@ -191,13 +214,15 @@ var FirePlaylistPanel = class {
       borderWidth: '3px', borderColor: '#555555',
       paddingLeft: '18px', paddingRight: '18px', paddingTop: '14px', paddingBottom: '14px'
     });
-    const row = (styles) => this.div(rootEl, Object.assign({ display: 'flex', flexDirection: 'row', alignItems: 'center', flexShrink: 0 }, styles || {}));
+    const row = (parent, styles) => this.div(parent, Object.assign({ display: 'flex', flexDirection: 'row', alignItems: 'center', flexShrink: 0 }, styles || {}));
+    const GREY = '#455a64';
 
     // Header
-    const header = await row();
+    const header = await row(rootEl);
     await this.label(header, 'Fire-V-Player', { fontSize: '30px', fontWeight: 'bold', flexGrow: 1 });
     this.hostLabel = await this.label(header, '', { fontSize: '20px', color: '#bbbbbb', marginRight: '12px' });
-    await this.button(header, 'Close', () => this.close(), { backgroundColor: '#455a64' });
+    this.moreBtn = await this.button(header, 'More...', () => this.setView(this.view === 'more' ? 'main' : 'more'), { backgroundColor: GREY });
+    await this.button(header, 'Close', () => this.close(), { backgroundColor: GREY });
 
     // Now playing
     const nowCard = await this.div(rootEl, {
@@ -213,66 +238,45 @@ var FirePlaylistPanel = class {
     this.progInner = await this.div(progOuter, { height: '100%', width: '0%', backgroundColor: '#e53935', borderRadius: '5px' });
 
     // Playback + volume controls
-    const controls = await row({ marginTop: '6px' });
+    const controls = await row(rootEl, { marginTop: '6px' });
     this.prevTrackBtn = await this.button(controls, 'Prev', () => this.changeTrack(-1));
     this.rewBtn = await this.button(controls, '<< Skip', () => this.core.back());
     this.pauseBtn = await this.button(controls, 'Pause', () => this.send(Commands.TOGGLE_PAUSE));
     this.ffBtn = await this.button(controls, 'Skip >>', () => this.core.forward());
     this.nextTrackBtn = await this.button(controls, 'Next', () => this.changeTrack(1));
     await this.div(controls, { flexGrow: 1 });
-    await this.button(controls, 'Vol -', () => { this.core.volume(false); this.renderSoon(); }, { backgroundColor: '#455a64' });
+    await this.button(controls, 'Vol -', () => { this.core.volume(false); this.renderSoon(); }, { backgroundColor: GREY });
     this.volLabel = await this.label(controls, '', { fontSize: '20px', width: '110px', textAlign: 'center' });
-    await this.button(controls, 'Vol +', () => { this.core.volume(true); this.renderSoon(); }, { backgroundColor: '#455a64' });
-    this.muteBtn = await this.button(controls, 'Mute', () => { this.core.mute(); this.renderSoon(); }, { backgroundColor: '#455a64' });
+    await this.button(controls, 'Vol +', () => { this.core.volume(true); this.renderSoon(); }, { backgroundColor: GREY });
+    this.muteBtn = await this.button(controls, 'Mute', () => { this.core.mute(); this.renderSoon(); }, { backgroundColor: GREY });
 
-    // Host controls
-    this.hostRow = await row({ marginTop: '2px' });
-    this.lockBtn = await this.button(this.hostRow, 'Lock', () => {
-      if (this.core.player) this.send(Commands.TOGGLE_LOCK, !this.core.player.locked);
-    });
-    this.takeOverBtn = await this.button(this.hostRow, 'Take Over', () => {
-      const player = this.core.player;
-      if (!player) return;
-      if (this.isHost()) this.send(Commands.TOGGLE_CAN_TAKE_OVER, !player.canTakeOver);
-      else this.send(Commands.TAKE_OVER);
-    });
-    this.votingBtn = await this.button(this.hostRow, 'Voting: Off', () => this.send(Commands.TOGGLE_VOTE));
-    this.clearBtn = await this.button(this.hostRow, 'Clear', () => this.send(Commands.CLEAR_PLAYLIST), { backgroundColor: '#c62828' });
-    this.loadDefaultBtn = await this.button(this.hostRow, 'Load Default Playlist', () => {
-      this.send(Commands.FROM_PLAYLIST, { id: this.core.params.playlist, shouldClear: true, fromPlaylist: true });
-      this.setStatus('Loading playlist...');
-    }, { backgroundColor: '#2e7d32' });
+    // Replacement suggestion (when a user can't play a video)
+    this.noticeRow = await row(rootEl, { marginTop: '6px', backgroundColor: '#4e342e', borderRadius: '10px', paddingLeft: '10px', paddingRight: '6px' });
+    this.noticeLabel = await this.label(this.noticeRow, '', { fontSize: '18px', flexGrow: 1, flexShrink: 1, whiteSpace: 'normal' });
+    this.replaceConfirmBtn = await this.button(this.noticeRow, 'Replace', () => this.confirmReplace(), { backgroundColor: '#2e7d32' });
+    await this.button(this.noticeRow, 'Dismiss', () => this.dismissReplace(), { backgroundColor: '#c62828' });
 
-    // Tabs + paging
-    const tabs = await row({ marginTop: '6px' });
+    // ---- Main view: playlist / search
+    this.mainView = await this.div(rootEl, { display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, overflow: 'hidden' });
+
+    const tabs = await row(this.mainView, { marginTop: '6px' });
     this.tabPlaylistBtn = await this.button(tabs, 'Playlist', () => this.setTab('playlist'));
     this.tabSearchBtn = await this.button(tabs, 'Search', () => this.setTab('search'));
     await this.div(tabs, { flexGrow: 1 });
-    await this.button(tabs, '<', () => this.changePage(-1), { backgroundColor: '#455a64' });
+    await this.button(tabs, '<', () => this.changePage(-1), { backgroundColor: GREY });
     this.pageLabel = await this.label(tabs, '1 / 1', { fontSize: '20px', width: '100px', textAlign: 'center' });
-    await this.button(tabs, '>', () => this.changePage(1), { backgroundColor: '#455a64' });
+    await this.button(tabs, '>', () => this.changePage(1), { backgroundColor: GREY });
 
-    // Search bar
-    this.searchRow = await row({ marginTop: '4px' });
-    if (BS.UITextField) {
-      this.searchField = await this.ready(new BS.UITextField(this.ui, this.searchRow));
-      try { this.searchField.placeholder = 'Search YouTube, or paste a video / playlist link'; } catch (_) {}
-      this.searchField.SetStyles({ flexGrow: 1, fontSize: '22px', height: '48px', marginRight: '6px' });
-      this.searchField.OnChange(e => {
-        if (e && e.value != null) this.searchQuery = String(e.value);
-      });
-      if (typeof this.searchField.OnKeyDown === 'function') {
-        this.searchField.OnKeyDown(e => {
-          if (e && (e.key === 'Enter' || e.key === '\n' || e.key === '\r' || e.keyCode === 13)) this.doSearch();
-        });
-      }
+    this.searchRow = await row(this.mainView, { marginTop: '4px' });
+    this.searchField = await this.textField(this.searchRow, 'Search YouTube, or paste a video / playlist link', v => { this.searchQuery = v; }, () => this.doSearch());
+    if (this.searchField) {
       await this.button(this.searchRow, 'Search', () => this.doSearch(), { backgroundColor: '#1565c0' });
     } else {
-      await this.label(this.searchRow, 'Search needs the full page: use "Open full page" below.', { color: '#bbbbbb', flexGrow: 1 });
+      await this.label(this.searchRow, 'Search needs the full page: use More... > Open full page.', { color: '#bbbbbb', flexGrow: 1 });
     }
 
     // List rows (a fixed pool, re-filled for each page)
-    const list = await this.div(rootEl, { display: 'flex', flexDirection: 'column', flexGrow: 1, marginTop: '6px', overflow: 'hidden' });
+    const list = await this.div(this.mainView, { display: 'flex', flexDirection: 'column', flexGrow: 1, marginTop: '6px', overflow: 'hidden' });
     this.rows = [];
     for (let k = 0; k < this.rowsPerPage; k++) {
       const r = await this.div(list, {
@@ -294,12 +298,80 @@ var FirePlaylistPanel = class {
     }
     this.emptyLabel = await this.label(list, '', { color: '#bbbbbb', fontSize: '22px', textAlign: 'center', marginTop: '20px' });
 
-    // Footer
-    const footer = await row({ marginTop: '4px' });
-    this.statusLabel = await this.label(footer, '', { fontSize: '20px', color: '#ffcc66', flexGrow: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' });
-    await this.button(footer, 'Open full page', () => {
+    // ---- More view: host controls, seek, your own player, add by link
+    this.moreView = await this.div(rootEl, { display: 'none', flexDirection: 'column', flexGrow: 1, flexShrink: 1, overflow: 'hidden', marginTop: '6px' });
+    const section = async (title) => {
+      const box = await this.div(this.moreView, {
+        display: 'flex', flexDirection: 'column', flexShrink: 0, backgroundColor: '#23232d',
+        borderRadius: '14px', paddingLeft: '12px', paddingRight: '12px', paddingTop: '8px', paddingBottom: '8px', marginBottom: '8px'
+      });
+      await this.label(box, title, { fontSize: '20px', color: '#bbbbbb', marginLeft: '4px' });
+      return box;
+    };
+
+    // Host controls
+    this.hostSection = await section('Host controls');
+    const hostRow = await row(this.hostSection, { flexWrap: 'wrap' });
+    this.lockBtn = await this.button(hostRow, 'Lock', () => {
+      if (this.core.player) this.send(Commands.TOGGLE_LOCK, !this.core.player.locked);
+    });
+    this.takeOverBtn = await this.button(hostRow, 'Take Over', () => {
+      const player = this.core.player;
+      if (!player) return;
+      if (this.isHost()) this.send(Commands.TOGGLE_CAN_TAKE_OVER, !player.canTakeOver);
+      else this.send(Commands.TAKE_OVER);
+    });
+    this.votingBtn = await this.button(hostRow, 'Voting: Off', () => this.send(Commands.TOGGLE_VOTE));
+    this.clearBtn = await this.button(hostRow, 'Clear Playlist', () => this.send(Commands.CLEAR_PLAYLIST), { backgroundColor: '#c62828' });
+    this.loadDefaultBtn = await this.button(hostRow, 'Load Default Playlist', () => {
+      this.send(Commands.FROM_PLAYLIST, { id: this.core.params.playlist, shouldClear: true, fromPlaylist: true });
+      this.setStatus('Loading playlist...');
+    }, { backgroundColor: '#2e7d32' });
+    this.notHostLabel = await this.label(this.hostSection, '', { fontSize: '18px', color: '#999999', marginLeft: '4px', marginTop: '4px' });
+
+    // Seek (host)
+    this.seekSection = await section('Seek (moves everyone)');
+    const seekRow = await row(this.seekSection);
+    this.seekField = await this.textField(seekRow, 'Time, e.g. 95 or 1:35', v => { this.seekQuery = v; }, () => this.doSeek());
+    if (this.seekField) {
+      this.seekField.SetStyles({ flexGrow: 0, width: '300px' });
+      await this.button(seekRow, 'Seek', () => this.doSeek(), { backgroundColor: '#1565c0' });
+    }
+    await this.button(seekRow, '-30s', () => this.seekBy(-30), { backgroundColor: GREY });
+    await this.button(seekRow, '+30s', () => this.seekBy(30), { backgroundColor: GREY });
+
+    // Your own player
+    const mineSection = await section('Your player only');
+    const mineRow = await row(mineSection);
+    await this.button(mineRow, '<< Skip', () => this.send(Commands.LOCAL_SKIP_BACK));
+    await this.button(mineRow, 'Skip >>', () => this.send(Commands.LOCAL_SKIP_FORWARD));
+    this.autoSyncBtn = await this.button(mineRow, 'Auto Sync: Off', () => {
+      this.autoSync = !this.autoSync;
+      this.send(Commands.AUTO_SYNC, this.autoSync);
+      this.render();
+    });
+    await this.label(mineRow, 'Nudges only your copy, e.g. if it drifts.', { fontSize: '16px', color: '#999999', marginLeft: '8px', flexShrink: 1 });
+
+    // Add by link
+    const linkSection = await section('Add by link');
+    const linkRow = await row(linkSection);
+    this.linkField = await this.textField(linkRow, 'YouTube video or playlist link', v => { this.linkQuery = v; }, () => this.addLink(false));
+    if (this.linkField) {
+      await this.button(linkRow, 'Add Video', () => this.addLink(false));
+      this.loadPlaylistBtn = await this.button(linkRow, 'Load Playlist', () => this.addLink(true), { backgroundColor: '#2e7d32' });
+    } else {
+      await this.label(linkRow, 'Paste links on the full page.', { color: '#bbbbbb', flexGrow: 1 });
+    }
+
+    const pageRow = await row(this.moreView, { marginTop: '2px' });
+    await this.div(pageRow, { flexGrow: 1 });
+    await this.button(pageRow, 'Open full page', () => {
       if (!this.core.openPlaylistPage()) this.setStatus('The full page is not available in this client.');
-    }, { backgroundColor: '#455a64', fontSize: '18px' });
+    }, { backgroundColor: GREY, fontSize: '18px' });
+
+    // Footer
+    const footer = await row(rootEl, { marginTop: '4px' });
+    this.statusLabel = await this.label(footer, '', { fontSize: '20px', color: '#ffcc66', flexGrow: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' });
 
     this.built = true;
     this.render();
@@ -360,6 +432,70 @@ var FirePlaylistPanel = class {
     this.render();
   }
 
+  setView(view) {
+    this.view = view;
+    this.render();
+  }
+
+  // "95", "1:35" or "1:02:03" -> seconds, or null.
+  parseTime(str) {
+    const t = String(str || '').trim();
+    if (!t) return null;
+    if (/^\d+(\.\d+)?$/.test(t)) return Number(t);
+    if (!/^\d+(:\d{1,2}){1,2}$/.test(t)) return null;
+    return t.split(':').map(Number).reduce((acc, n) => acc * 60 + n, 0);
+  }
+
+  currentPlaybackTime() {
+    const p = this.core.player;
+    if (!p) return 0;
+    return p.paused ? (p.currentTime || 0) : ((Date.now() / 1000 - this.clockSkew) - (p.lastStartTime || 0));
+  }
+
+  doSeek() {
+    if (!this.isHost()) { this.setStatus('Only the host can seek.'); return; }
+    const t = this.parseTime(this.seekQuery);
+    if (t === null) { this.setStatus('Enter a time in seconds (95) or mm:ss (1:35).'); return; }
+    this.send(Commands.SET_TIME, t);
+    this.setStatus(`Seeking to ${this.timeCode(t)}`);
+  }
+
+  seekBy(delta) {
+    if (!this.isHost()) { this.setStatus('Only the host can seek.'); return; }
+    const p = this.core.player;
+    if (!p || !p.duration) return;
+    const t = Math.max(0, Math.min(p.duration, this.currentPlaybackTime() + delta));
+    this.send(Commands.SET_TIME, t);
+  }
+
+  addLink(asPlaylist) {
+    const q = (this.linkQuery || '').trim();
+    if (!q) { this.setStatus('Paste a YouTube link first.'); return; }
+    if (asPlaylist) {
+      if (!this.isHost()) { this.setStatus('Only the host can load a playlist.'); return; }
+      const id = this.core.getPlaylistId(q);
+      if (!id) { this.setStatus('That is not a YouTube playlist link.'); return; }
+      this.send(Commands.FROM_PLAYLIST, { id, shouldClear: true, fromPlaylist: true });
+      this.setStatus('Loading playlist...');
+      return;
+    }
+    if (!this.core.getId(q)) { this.setStatus('That is not a YouTube video link.'); return; }
+    this.send(Commands.ADD_TO_PLAYLIST, q);
+    this.setStatus('Adding video...');
+  }
+
+  confirmReplace() {
+    const r = this.pendingReplacement;
+    if (!r) return;
+    this.send(Commands.REPLACE_VIDEO, { originalLink: r.original.link, alternativeVideo: r.alternative });
+    this.dismissReplace();
+  }
+
+  dismissReplace() {
+    this.pendingReplacement = null;
+    this.render();
+  }
+
   changePage(delta) {
     const total = this.tab === 'search' ? this.searchResults.length : ((this.core.player && this.core.player.playlist) || []).length;
     const pages = Math.max(1, Math.ceil(total / this.rowsPerPage));
@@ -386,7 +522,14 @@ var FirePlaylistPanel = class {
       }
     }
     this.send(Commands.SEARCH, q);
+    console.log(`[PlaylistPanel] Searching for "${q}"...`);
     this.setStatus('Searching...', 0);
+    clearTimeout(this.searchTimer);
+    this.searchTimer = setTimeout(() => {
+      this.searchTimer = null;
+      console.warn('[PlaylistPanel] No search results from the server after 25s.');
+      this.setStatus('No reply from the server for that search. Try again.');
+    }, 25000);
     this.tab = 'search';
     this.render();
   }
@@ -397,7 +540,11 @@ var FirePlaylistPanel = class {
     const p = this.core.player;
     switch (json.path) {
       case Commands.SEARCH_RESULTS:
+        clearTimeout(this.searchTimer);
+        this.searchTimer = null;
         this.searchResults = Array.isArray(json.data) ? json.data : [];
+        console.log(`[PlaylistPanel] Got ${this.searchResults.length} search results.`);
+        this.view = 'main';
         this.searchPage = 0;
         this.tab = 'search';
         const n = this.searchResults.length;
@@ -409,9 +556,15 @@ var FirePlaylistPanel = class {
         break;
       }
       case Commands.SHOW_REPLACE_PROMPT:
-        if (json.data && json.data.original) {
-          this.setStatus(`A user can't watch "${json.data.original.title}". Use the full page to replace it.`, 10000);
+        if (json.data && json.data.original && json.data.alternative) {
+          this.pendingReplacement = {
+            original: json.data.original,
+            alternative: JSON.parse(JSON.stringify(json.data.alternative))
+          };
         }
+        break;
+      case Commands.AUTO_SYNC_STATE_CHANGED:
+        if (json.data && typeof json.data.enabled === 'boolean') this.autoSync = json.data.enabled;
         break;
     }
     // Estimate the client/server clock difference so the progress bar matches the server.
@@ -477,6 +630,26 @@ var FirePlaylistPanel = class {
     this.setText(this.muteBtn, muted ? 'Unmute' : 'Mute');
     this.setStyle(this.muteBtn, 'backgroundColor', muted ? '#c62828' : '#455a64');
 
+    // Views
+    const more = this.view === 'more';
+    this.display(this.mainView, !more);
+    this.display(this.moreView, more);
+    this.setText(this.moreBtn, more ? 'Back' : 'More...');
+
+    // Replacement suggestion
+    const r = this.pendingReplacement;
+    this.display(this.noticeRow, !!r);
+    if (r) this.setText(this.noticeLabel, `Someone can't play "${r.original.title}". Replace it with "${r.alternative.title}"?`);
+    this.display(this.replaceConfirmBtn, host);
+
+    // More view
+    this.setText(this.autoSyncBtn, this.autoSync ? 'Auto Sync: On' : 'Auto Sync: Off');
+    this.setStyle(this.autoSyncBtn, 'backgroundColor', this.autoSync ? '#2e7d32' : '#00838f');
+    this.display(this.seekSection, host);
+    if (this.loadPlaylistBtn) this.display(this.loadPlaylistBtn, host);
+    this.setText(this.notHostLabel, host ? '' : (player.canTakeOver ? 'The host allows take over.' : 'Only the host can use these.'));
+    this.display(this.notHostLabel, !host);
+
     // Host controls
     this.display(this.lockBtn, host);
     this.setText(this.lockBtn, player.locked ? 'Unlock' : 'Lock');
@@ -488,7 +661,6 @@ var FirePlaylistPanel = class {
     this.setText(this.votingBtn, player.canVote ? 'Voting: On' : 'Voting: Off');
     this.display(this.clearBtn, host && hasPlaylist);
     this.display(this.loadDefaultBtn, host && !hasPlaylist && !!this.core.params.playlist);
-    this.display(this.hostRow, host || !!player.canTakeOver);
 
     // Tabs
     const onSearch = this.tab === 'search';

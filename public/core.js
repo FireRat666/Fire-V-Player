@@ -400,6 +400,9 @@ var Core = class {
     this.messageListeners = this.messageListeners || [];
     this.messageListeners.push(fn);
   }
+  removeMessageListener(fn) {
+    if (this.messageListeners) this.messageListeners = this.messageListeners.filter(f => f !== fn);
+  }
   setupVolButton(scene, isUp, playlistContainer) {
   const volIconUrl = isUp ? this.params["data-vol-up-icon-url"] : this.params["data-vol-down-icon-url"];
   this.setupButton(scene, playlistContainer, isUp ? 0.693 : 0.471, volIconUrl, () => this.volume(isUp));
@@ -765,6 +768,8 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
           this.player.currentTrack = json.data.newTrackIndex;
           this.player.lastStartTime = json.data.newLastStartTime;
           this.player.currentTime = json.data.newCurrentTime || 0;
+          // The server resumes playback when the track changes (skip, set track, auto-advance).
+          this.player.paused = false;
           const track = this.player.playlist && this.player.playlist[this.player.currentTrack];
           if (track) this.player.duration = track.duration / 1000;
         }
@@ -913,6 +918,11 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
   }
   destroy() { // To Use : window.cleanupVideoPlayer();
     console.log("Cleaning up Fire-V-Player instance...");
+
+    if (this.playlistPanel) {
+      this.playlistPanel.destroy();
+      this.playlistPanel = null;
+    }
 
     if (this.ws) {
       this.ws.onclose = null; // prevent reconnection logic

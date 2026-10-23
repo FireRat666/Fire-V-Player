@@ -33,7 +33,8 @@ var FirePlaylistPanel = class {
     this.linkQuery = '';
     this.pendingReplacement = null;
     this.searchTimer = null;
-    core.addMessageListener(msg => this.onMessage(msg));
+    this.onMessageFn = msg => this.onMessage(msg);
+    core.addMessageListener(this.onMessageFn);
   }
 
   // ---------------------------------------------------------------- helpers
@@ -164,6 +165,7 @@ var FirePlaylistPanel = class {
   build() {
     if (!this.buildPromise) {
       this.buildPromise = this._build().catch(e => {
+        if (this.destroyed) return;
         console.error('[PlaylistPanel] Failed to build the in-world playlist panel, the Playlist button will try the menu page instead:', e);
         this.failed = true;
       });
@@ -188,6 +190,7 @@ var FirePlaylistPanel = class {
       localPosition: this.toUnityPos(screenPos),
       localEulerAngles: this.toUnityEuler(screenRot)
     }).Async(), 15000, 'Creating the panel root object');
+    this.checkAlive();
 
     this.shownPos = this.toUnityPos(offset);
     this.hiddenPos = new BS.Vector3(this.shownPos.x, this.shownPos.y - 1000, this.shownPos.z);
@@ -199,10 +202,12 @@ var FirePlaylistPanel = class {
       localEulerAngles: this.toUnityEuler(rot),
       localScale: new BS.Vector3(s, s, s)
     }).Async(), 15000, 'Creating the panel object');
+    this.checkAlive();
 
     const UIClass = BS.UI || BS.BanterUI;
     const ui = new UIClass(new BS.Vector2(this.W, this.H), false);
     this.ui = (await this.withTimeout(this.panelObj.AddComponent(ui), 15000, 'Adding the UI panel component')) || ui;
+    this.checkAlive();
     console.log('[PlaylistPanel] UI panel added, creating elements...');
     if (typeof this.ui.SetBackgroundColor === 'function') {
       this.ui.SetBackgroundColor(new BS.Vector4(0, 0, 0, 0));
@@ -373,9 +378,38 @@ var FirePlaylistPanel = class {
     const footer = await row(rootEl, { marginTop: '4px' });
     this.statusLabel = await this.label(footer, '', { fontSize: '20px', color: '#ffcc66', flexGrow: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' });
 
+    this.checkAlive();
     this.built = true;
     this.render();
     console.log('[PlaylistPanel] Ready.');
+  }
+
+  // Stops a build that is still running when the panel is destroyed.
+  checkAlive() {
+    if (this.destroyed) throw new Error('Panel destroyed during build');
+  }
+
+  // Removes the panel from the world and stops its timers and message listener.
+  // Safe to call while the panel is still building: the Unity objects are removed once it stops.
+  destroy() {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.built = false;
+    this.visible = false;
+    [this.tickTimer, this.renderTimer, this.statusTimer, this.searchTimer].forEach(t => { clearTimeout(t); clearInterval(t); });
+    this.tickTimer = this.renderTimer = this.statusTimer = this.searchTimer = null;
+    if (typeof this.core.removeMessageListener === 'function') this.core.removeMessageListener(this.onMessageFn);
+    const removeObjects = () => {
+      try {
+        if (this.root && typeof this.root.Destroy === 'function') this.root.Destroy();
+      } catch (e) {
+        console.warn('[PlaylistPanel] Could not remove the panel objects:', e);
+      }
+      this.root = this.panelObj = this.ui = null;
+    };
+    if (this.buildPromise) this.buildPromise.then(removeObjects, removeObjects);
+    else removeObjects();
+    console.log('[PlaylistPanel] Destroyed.');
   }
 
   // ---------------------------------------------------------------- show / hide
@@ -383,6 +417,7 @@ var FirePlaylistPanel = class {
   async toggle() {
     if (!this.built && !this.failed) console.log('[PlaylistPanel] Still building, will open when ready.');
     await this.build();
+    if (this.destroyed) return;
     if (this.failed) {
       this.core.openPlaylistPage();
       return;
@@ -399,6 +434,7 @@ var FirePlaylistPanel = class {
   }
 
   async open() {
+    if (this.destroyed) return;
     this.visible = true;
     // Start on the page holding the current track.
     const player = this.core.player;

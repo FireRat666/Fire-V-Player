@@ -47,15 +47,29 @@
   });
 
   FVP.startPlaylistPlayer = async (source) => {
-    if (window.playlistPlayerInstance) {
+    if (window.playlistPlayerInstance || FVP.playlistStarting) {
       console.warn("Vidya: a playlist player is already running on this page. Only one is supported.");
       return;
     }
+    FVP.playlistStarting = true;
+    try {
+      return await startPlaylistPlayer(source);
+    } finally {
+      // A failed start can be retried; a successful one is guarded by playlistPlayerInstance.
+      FVP.playlistStarting = false;
+    }
+  };
+
+  const startPlaylistPlayer = async (source) => {
     const origin = new URL(source.src).origin;
     await FVP.waitForBanter("playlist");
 
     if (typeof BasePlayer === 'undefined') {
-      await FVP.loadScript(`${origin}/base-player.js`);
+      const loaded = await FVP.loadScript(`${origin}/base-player.js`);
+      if (!loaded || typeof BasePlayer === 'undefined') {
+        console.error(`Vidya: could not load ${origin}/base-player.js, so the playlist player can't start.`);
+        return;
+      }
     }
 
     const PlaylistPlayer = class extends BasePlayer {

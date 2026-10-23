@@ -367,7 +367,7 @@ class App {
         if (playerInstance) {
           playerInstance.sockets.forEach(socket => {
             // Send only to the same user's UI sockets (playlist/karaoke)
-            if (socket.u.id === ws.u.id && socket.type === 'playlist') {
+            if (socket.u.id === ws.u.id && (socket.type === 'playlist' || socket.type === 'space')) {
               this.send(socket, Commands.AUTO_SYNC_STATE_CHANGED, msg.data);
             }
           });
@@ -519,7 +519,7 @@ class App {
         }
       } catch (error) {
         // The error message from the scraper is user-friendly enough to send to the client.
-        console.error(`Error fetching video by URL (${term}):`, error.message);
+        console.error(`Error fetching video by URL (${JSON.stringify(String(term))}):`, error.message);
         this.send(ws, Commands.ERROR, { message: error.message });
       }
     } else {
@@ -534,14 +534,18 @@ class App {
       }
 
       // It's a search term, perform a regular search
+      const started = Date.now();
       try {
         const results = await youtube.search(term, {
           language: 'en-US',
           searchType: 'video'
         });
-        this.send(ws, Commands.SEARCH_RESULTS, results.videos || []);
+        const videos = results.videos || [];
+        // JSON-encode the user's text so newlines in it can't start a fake log line.
+        console.log(`[SEARCH] ${JSON.stringify(String(term))}: ${videos.length} results in ${Date.now() - started}ms (socket type: ${ws.type || 'N/A'}).`);
+        this.send(ws, Commands.SEARCH_RESULTS, videos);
       } catch (error) {
-        console.error(`Error searching YouTube for "${term}":`, error.message);
+        console.error(`Error searching YouTube for ${JSON.stringify(String(term))}:`, error.message);
         this.send(ws, Commands.SEARCH_RESULTS, []);
         this.send(ws, Commands.ERROR, { message: "YouTube search failed or returned no results." });
       }

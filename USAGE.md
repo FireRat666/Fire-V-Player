@@ -1,6 +1,6 @@
 # Usage & Embedding Guide
 
-Fire-V-Player is designed to be embedded in the **Banter** VR social platform. Its behavior is configured through attributes on a single `<script>` tag.
+Fire-V-Player is designed to be embedded in the **Banter** VR social platform, and in SideQuest/Altspace Creator SDK worlds (see [Snippet](#sidequest--altspace-creator-sdk-snippet)). Its behavior is configured through attributes on a single `<script>` tag, or a `<bs-snippet>` element.
 
 ## Modes
 
@@ -41,6 +41,49 @@ To use Karaoke mode, simply change the `src` to point to `karaoke.js`. The playe
 ></script>
 ```
 
+## SideQuest / Altspace Creator SDK (Snippet)
+
+In a Creator SDK world (`Assets/WebRoot/index.html`), add the player as a snippet. Playlist mode only.
+
+```html
+<!-- snippet section -->
+<bs-snippet name="fire-v-player" title="Fire-V-Player" single="true"
+  description="Synced YouTube player with a shared playlist and an in-world playlist panel."
+  script="https://vidya.firer.at/snippet.js"
+  room="my-private-room"
+  playlist="PLZWiw-xxQ4SPDmADhvme7-pU2bx3s7nKX"
+  volume="10"
+  hand-controls="true"
+  position="0 1.5 2"
+  rotation="0 0 0"
+  scale="2"
+  playlist-ui="auto">
+  <bs-gizmo type="position" attribute="position"/>
+  <bs-gizmo type="plane" attribute="position" size="2 1.125" rotation="0 180 0"/>
+</bs-snippet>
+<!-- end snippet section -->
+```
+
+Settings are the same as the script attributes below, except:
+
+- `position` and `rotation` are **Unity world values**, as for every snippet, so the Scene-view gizmo shows where the screen will be. (Script-tag values use A-Frame axes, where Z is flipped: script `position="0 1.5 -2"` is snippet `position="0 1.5 2"`.)
+- `scale` can be a single number. The screen is 1 m wide and 0.5625 m tall at scale 1, so the gizmo's `size` should be `scale × 1` by `scale × 0.5625`.
+- The room ID is `room`, not `instance`: Unity's BSSnippet component writes its own `instance` attribute. Without `room`, that per-placement ID is used.
+- The section between the two comments is read as XML by Unity: quote every attribute, close every element, and write `&` as `&amp;`.
+
+The player uses the SDK's legacy A-Frame bridge, so `snippet.js` adds an `<a-scene>` if the page has none. With the plain script tag, add `<a-scene></a-scene>` to the page yourself.
+
+In these worlds the Playlist button opens an **in-world panel** beside the screen. The main view has playback and volume controls, the playlist (play, reorder, remove, vote) and YouTube search. Search also accepts a video link, or a playlist link (host only), which replaces the playlist. **More...** opens a second view with:
+
+- host controls: lock, take over, voting, clear, load the default playlist
+- seek to a time (host)
+- your player only: skip back/forward and Auto Sync
+- add by link: a video, or a playlist (host)
+
+The Creator SDK client currently doesn't open the 2D playlist page, so the panel has no button for it.
+
+When someone can't play a video, the panel shows the suggested replacement with Replace (host) and Dismiss.
+
 ---
 
 ## Parameter Reference
@@ -79,6 +122,10 @@ All parameters are optional unless marked as **(Required)**.
 | `button-position` | The `x y z` position of the in-world UI buttons, relative to the player screen. | `0 0 0` |
 | `button-rotation` | The `x y z` rotation of the in-world UI buttons. | `0 0 0` |
 | `button-scale` | The `x y z` scale of the in-world UI buttons. | `1 1 1` |
+| `playlist-ui` | What the Playlist button opens. `panel`: an in-world panel (UI Toolkit) with controls, playlist and search. `page`: the 2D playlist page in the client's menu browser. `auto`: `panel` whenever the client has the UI system (the SideQuest/Altspace Creator SDK), otherwise `page`. Playlist mode only. | `auto` |
+| `playlist-panel-offset` | Where the in-world panel sits, relative to the screen, in metres: `x` right, `y` up, `z` toward the viewer. Empty puts it just right of the screen. | (beside the screen) |
+| `playlist-panel-rotation` | The in-world panel's rotation relative to the screen. The default turns it slightly toward the screen's centre. | `0 -20 0` |
+| `playlist-panel-scale` | Size of the in-world panel. `1` is 1.4 m wide. | `1` |
 | `data-playlist-icon-url` | URL for a custom "Playlist/Singers" button icon. | Default icon |
 | `data-vol-up-icon-url` | URL for a custom "Volume Up" button icon. | Default icon |
 | `data-vol-down-icon-url` | URL for a custom "Volume Down" button icon. | Default icon |

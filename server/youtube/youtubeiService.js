@@ -1,4 +1,5 @@
 let innertubePromise = null;
+const INIT_TIMEOUT_MS = 20000;
 let libraryPromise = null;
 
 async function getLibrary() {
@@ -174,7 +175,18 @@ async function getInnertube() {
         console.log("No YOUTUBE_COOKIE_STRING found. Initializing Innertube with default settings.");
       }
       
-      return Innertube.create(config);
+      // Innertube.create() fetches from YouTube. If that never answers, every search would wait
+      // forever, so give up after a while and let the next search try again.
+      const started = Date.now();
+      let timer;
+      const yt = await Promise.race([
+        Innertube.create(config),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`Innertube.create() timed out after ${INIT_TIMEOUT_MS / 1000}s`)), INIT_TIMEOUT_MS);
+        })
+      ]).finally(() => clearTimeout(timer));
+      console.log(`Innertube ready in ${Date.now() - started}ms.`);
+      return yt;
     })().catch(err => {
       console.error("Failed to initialize Innertube:", err);
       innertubePromise = null; // Reset promise so next caller can retry

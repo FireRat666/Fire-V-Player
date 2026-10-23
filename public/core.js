@@ -318,16 +318,84 @@ var Core = class {
   }
 
   openPlaylist() {
-    if (!window.user || !window.user.id) {
-      console.warn('[Core] openPlaylist called but window.user is not set. Skipping.');
+    // Clicks can arrive twice in quick succession (pointer + trigger), so debounce.
+    const now = Date.now();
+    if (this._lastPlaylistToggle && now - this._lastPlaylistToggle < 600) return;
+    this._lastPlaylistToggle = now;
+
+    // In-world UI Toolkit panel (new SDK), when one was set up for this player.
+    if (this.playlistPanel) {
+      this.playlistPanel.toggle();
       return;
     }
+    this.openPlaylistPage();
+  }
+
+  getPlaylistPageUrl() {
     // Determine the mode ('karaoke' or 'playlist') based on the in-world script's setting.
     const mode = this.isKaraoke ? 'karaoke' : 'playlist';
     const playlistParam = this.params.playlist ? `&playlist=${this.params.playlist}` : "";
     // Pass the mode as a URL parameter so the UI page knows its context.
     const proto = this.getProtocol();
-    window.openPage(`${proto}://${this.hostUrl}/${mode}/?instance=${this.params.instance}${playlistParam}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}&mode=${mode}`);
+    return `${proto}://${this.hostUrl}/${mode}/?instance=${encodeURIComponent(this.params.instance)}${playlistParam}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}&mode=${mode}`;
+  }
+
+  // Opens the 2D playlist page in the client's menu browser.
+  openPlaylistPage() {
+    if (!window.user || !window.user.id) {
+      console.warn('[Core] openPlaylist called but window.user is not set. Skipping.');
+      return false;
+    }
+    return this.openPage(this.getPlaylistPageUrl());
+  }
+
+  // Old Banter exposed a global window.openPage. The new SideQuest/Altspace SDK only has
+  // window.banter.openPage (legacy A-Frame bridge) and BanterScene.OpenPage().
+  openPage(url) {
+    try {
+      if (typeof window.openPage === 'function') { window.openPage(url); return true; }
+      if (window.banter && typeof window.banter.openPage === 'function') { window.banter.openPage(url); return true; }
+      if (window.BS && BS.BanterScene) {
+        const scene = BS.BanterScene.GetInstance();
+        if (scene && typeof scene.OpenPage === 'function') { scene.OpenPage(url); return true; }
+      }
+    } catch (e) {
+      console.error('[Core] Failed to open page:', e);
+      return false;
+    }
+    console.warn(`[Core] No openPage API available. Playlist URL: ${url}`);
+    return false;
+  }
+
+  // "panel" = in-world UI Toolkit panel, "page" = 2D menu browser page,
+  // "auto" = panel when the client has no global window.openPage (the new SideQuest/Altspace SDK).
+  shouldUsePlaylistPanel() {
+    if (!window.isBanter || this.isKaraoke) return false;
+    const hasUi = !!(window.BS && (BS.UI || BS.BanterUI));
+    const mode = String(this.params["playlist-ui"] || 'auto').toLowerCase();
+    if (mode === 'page') return false;
+    if (mode === 'panel') return hasUi;
+    return hasUi && typeof window.openPage !== 'function';
+  }
+
+  async setupPlaylistPanel() {
+    try {
+      if (typeof FirePlaylistPanel === 'undefined') {
+        await this.setupScript(null, "playlist-panel");
+      }
+      this.playlistPanel = new FirePlaylistPanel(this);
+      // Build in the background so the first click is quick. toggle() waits for it if needed.
+      this.playlistPanel.build();
+    } catch (e) {
+      console.error('[Core] Could not create the in-world playlist panel, falling back to the page.', e);
+      this.playlistPanel = null;
+    }
+  }
+
+  // Lets other modules (e.g. the in-world playlist panel) observe server messages.
+  addMessageListener(fn) {
+    this.messageListeners = this.messageListeners || [];
+    this.messageListeners.push(fn);
   }
   setupVolButton(scene, isUp, playlistContainer) {
   const volIconUrl = isUp ? this.params["data-vol-up-icon-url"] : this.params["data-vol-down-icon-url"];
@@ -410,7 +478,12 @@ setupSkipButton(scene, isBack, playlistContainer) {
     })
     this.handControlsContainer = handControlsContainer;
     this.createdElements.push(handControlsContainer);
-    document.querySelector("a-scene").appendChild(handControlsContainer);
+    const scene = document.querySelector("a-scene");
+    if (!scene) {
+      console.warn('[Core] No <a-scene> found, skipping hand controls. Add <a-scene></a-scene> to the world page.');
+      return;
+    }
+    scene.appendChild(handControlsContainer);
   }
 
 setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
@@ -485,7 +558,13 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
     this.setOrDefault("spatial-max-distance", '40');
     this.setOrDefault("youtube", "https://www.youtube.com/watch?v=GiwStUzx8fg");
     this.setOrDefault("start", '0');
-    
+    // In-world playlist panel (new SDK). Offset/rotation are relative to the screen, in the same
+    // A-Frame units as "position"/"rotation". Empty offset = to the right of the screen.
+    this.setOrDefault("playlist-ui", 'auto');
+    this.setOrDefault("playlist-panel-offset", '');
+    this.setOrDefault("playlist-panel-rotation", '0 -20 0');
+    this.setOrDefault("playlist-panel-scale", '1');
+
     if (this.params.playlist) {
       const extractedId = this.getPlaylistId(this.params.playlist);
       if (!extractedId) {
@@ -676,6 +755,46 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
           console.log("[CORE] Player state missing, cannot handle pause change.");
         }
         break;
+      // The following keep this.player complete so in-world UI (and host checks) stay accurate.
+      case Commands.TRACK_CHANGED:
+        if (this.player) {
+          if (json.data.playlist) this.player.playlist = json.data.playlist;
+          this.player.currentTrack = json.data.newTrackIndex;
+          this.player.lastStartTime = json.data.newLastStartTime;
+          this.player.currentTime = json.data.newCurrentTime || 0;
+          const track = this.player.playlist && this.player.playlist[this.player.currentTrack];
+          if (track) this.player.duration = track.duration / 1000;
+        }
+        break;
+      case Commands.PLAYLIST_UPDATED:
+        if (this.player) {
+          this.player.playlist = json.data.playlist;
+          this.player.currentTrack = json.data.currentTrack;
+        }
+        break;
+      case Commands.LOCK_STATE_CHANGED:
+        if (this.player) this.player.locked = json.data.locked;
+        break;
+      case Commands.CAN_TAKE_OVER_STATE_CHANGED:
+        if (this.player) this.player.canTakeOver = json.data.canTakeOver;
+        break;
+      case Commands.HOST_CHANGED:
+        if (this.player) this.player.host = json.data.host;
+        break;
+      case Commands.VOTING_STATE_CHANGED:
+        if (this.player) this.player.canVote = json.data.canVote;
+        break;
+      case Commands.HOST_SEEK:
+        if (this.player) {
+          this.player.lastStartTime = json.data.newLastStartTime;
+          this.player.currentTime = json.data.newCurrentTime;
+        }
+        break;
+    }
+    if (this.messageListeners) {
+      this.messageListeners.forEach(fn => {
+        try { fn(json); } catch (e) { console.error('[Core] Message listener error:', e); }
+      });
     }
   }
   getId(url){
@@ -721,10 +840,21 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
     }
   }
   _loadExternalScript(url) {
+    // Optional third-party scripts (e.g. Toastify) must never block start-up,
+    // so resolve on error or after a timeout as well as on load.
     return new Promise(resolve => {
       let myScript = document.createElement("script");
       myScript.setAttribute("src", url);
-      myScript.addEventListener ("load", resolve, false);
+      const timeout = setTimeout(() => {
+        console.warn(`[Core] Timed out loading ${url}, continuing without it.`);
+        resolve();
+      }, 10000);
+      myScript.addEventListener("load", () => { clearTimeout(timeout); resolve(); }, false);
+      myScript.addEventListener("error", () => {
+        clearTimeout(timeout);
+        console.warn(`[Core] Failed to load ${url}, continuing without it.`);
+        resolve();
+      }, false);
       document.body.appendChild(myScript);
       this.createdElements.push(myScript);
     });
@@ -745,8 +875,12 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
         })
       }
       myScript.addEventListener ("load", resolve, false);
+      myScript.addEventListener ("error", () => {
+        console.error(`[Core] Failed to load ${name}.js`);
+        resolve();
+      }, false);
       this.createdElements.push(myScript);
-      document.body.appendChild(myScript);  
+      document.body.appendChild(myScript);
     });
   }
   back() {

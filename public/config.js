@@ -38,7 +38,7 @@ window.APP_CONFIG = {
       const scripts = document.getElementsByTagName('script');
       for (let i = scripts.length - 1; i >= 0; i--) {
         const src = scripts[i].src;
-        if (src && /config\.js|base-player\.js|playlist\.js|karaoke\.js|player\.js|core\.js/.test(src)) {
+        if (src && /config\.js|base-player\.js|playlist\.js|playlist-player\.js|snippet\.js|karaoke\.js|player\.js|core\.js/.test(src)) {
           try {
             candidates.push(new URL(src).host);
           } catch (_) {}

@@ -53,11 +53,19 @@ var FirePlaylistPanel = class {
     return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
   }
 
+  // Elements don't need to wait for Unity: the SDK sends anything set before the panel is ready
+  // once it is. (Waiting per element could stall the whole build if Unity never answered.)
   async ready(el) {
-    if (el && typeof el.Async === 'function') {
-      try { await el.Async(); } catch (_) {}
-    }
     return el;
+  }
+
+  // Waits for a Unity call, but gives up after `ms` so a missing reply can't hang the build.
+  withTimeout(promise, ms, what) {
+    let timer;
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms / 1000}s`)), ms); })
+    ]).finally(() => clearTimeout(timer));
   }
 
   // Only send a change to Unity when the value actually changed.
@@ -133,7 +141,7 @@ var FirePlaylistPanel = class {
   build() {
     if (!this.buildPromise) {
       this.buildPromise = this._build().catch(e => {
-        console.error('[PlaylistPanel] Failed to build the in-world playlist panel:', e);
+        console.error('[PlaylistPanel] Failed to build the in-world playlist panel, the Playlist button will try the menu page instead:', e);
         this.failed = true;
       });
     }
@@ -151,26 +159,28 @@ var FirePlaylistPanel = class {
     const offset = this.vec3(p['playlist-panel-offset'], [screenScale[0] * 0.5 + 0.1 + panelWidthM * 0.5, 0, 0.15]);
     const rot = this.vec3(p['playlist-panel-rotation'], [0, -20, 0]);
 
-    this.root = await new BS.GameObject({
+    console.log('[PlaylistPanel] Building...');
+    this.root = await this.withTimeout(new BS.GameObject({
       name: 'FireVPlayer_PlaylistRoot',
       localPosition: this.toUnityPos(screenPos),
       localEulerAngles: this.toUnityEuler(screenRot)
-    }).Async();
+    }).Async(), 15000, 'Creating the panel root object');
 
     this.shownPos = this.toUnityPos(offset);
     this.hiddenPos = new BS.Vector3(this.shownPos.x, this.shownPos.y - 1000, this.shownPos.z);
     const s = panelWidthM / (this.W / 100); // a panel is 100 pixels per metre
-    this.panelObj = await new BS.GameObject({
+    this.panelObj = await this.withTimeout(new BS.GameObject({
       name: 'FireVPlayer_PlaylistPanel',
       parent: this.root,
       localPosition: this.hiddenPos,
       localEulerAngles: this.toUnityEuler(rot),
       localScale: new BS.Vector3(s, s, s)
-    }).Async();
+    }).Async(), 15000, 'Creating the panel object');
 
     const UIClass = BS.UI || BS.BanterUI;
     const ui = new UIClass(new BS.Vector2(this.W, this.H), false);
-    this.ui = (await this.panelObj.AddComponent(ui)) || ui;
+    this.ui = (await this.withTimeout(this.panelObj.AddComponent(ui), 15000, 'Adding the UI panel component')) || ui;
+    console.log('[PlaylistPanel] UI panel added, creating elements...');
     if (typeof this.ui.SetBackgroundColor === 'function') {
       this.ui.SetBackgroundColor(new BS.Vector4(0, 0, 0, 0));
     }
@@ -299,6 +309,7 @@ var FirePlaylistPanel = class {
   // ---------------------------------------------------------------- show / hide
 
   async toggle() {
+    if (!this.built && !this.failed) console.log('[PlaylistPanel] Still building, will open when ready.');
     await this.build();
     if (this.failed) {
       this.core.openPlaylistPage();

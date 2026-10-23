@@ -113,7 +113,7 @@ All parameters are optional unless marked as **(Required)**.
 | `button-position` | The `x y z` position of the in-world UI buttons, relative to the player screen. | `0 0 0` |
 | `button-rotation` | The `x y z` rotation of the in-world UI buttons. | `0 0 0` |
 | `button-scale` | The `x y z` scale of the in-world UI buttons. | `1 1 1` |
-| `playlist-ui` | What the Playlist button opens. `panel`: an in-world panel (UI Toolkit) with controls, playlist and search. `page`: the 2D playlist page in the client's menu browser. `auto`: `panel` on clients without the old `window.openPage` (the SideQuest/Altspace Creator SDK), otherwise `page`. Playlist mode only. | `auto` |
+| `playlist-ui` | What the Playlist button opens. `panel`: an in-world panel (UI Toolkit) with controls, playlist and search. `page`: the 2D playlist page in the client's menu browser. `auto`: `panel` whenever the client has the UI system (the SideQuest/Altspace Creator SDK), otherwise `page`. Playlist mode only. | `auto` |
 | `playlist-panel-offset` | Where the in-world panel sits, relative to the screen, in metres: `x` right, `y` up, `z` toward the viewer. Empty puts it just right of the screen. | (beside the screen) |
 | `playlist-panel-rotation` | The in-world panel's rotation relative to the screen. The default turns it slightly toward the screen's centre. | `0 -20 0` |
 | `playlist-panel-scale` | Size of the in-world panel. `1` is 1.4 m wide. | `1` |

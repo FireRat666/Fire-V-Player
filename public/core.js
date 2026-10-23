@@ -322,6 +322,7 @@ var Core = class {
     const now = Date.now();
     if (this._lastPlaylistToggle && now - this._lastPlaylistToggle < 600) return;
     this._lastPlaylistToggle = now;
+    console.log(`[Core] Playlist button pressed (${this.playlistPanel ? 'toggling the in-world panel' : 'opening the menu page'}).`);
 
     // In-world UI Toolkit panel (new SDK), when one was set up for this player.
     if (this.playlistPanel) {
@@ -353,11 +354,11 @@ var Core = class {
   // window.banter.openPage (legacy A-Frame bridge) and BanterScene.OpenPage().
   openPage(url) {
     try {
-      if (typeof window.openPage === 'function') { window.openPage(url); return true; }
-      if (window.banter && typeof window.banter.openPage === 'function') { window.banter.openPage(url); return true; }
+      if (typeof window.openPage === 'function') { console.log('[Core] Opening page with window.openPage:', url); window.openPage(url); return true; }
+      if (window.banter && typeof window.banter.openPage === 'function') { console.log('[Core] Opening page with banter.openPage:', url); window.banter.openPage(url); return true; }
       if (window.BS && BS.BanterScene) {
         const scene = BS.BanterScene.GetInstance();
-        if (scene && typeof scene.OpenPage === 'function') { scene.OpenPage(url); return true; }
+        if (scene && typeof scene.OpenPage === 'function') { console.log('[Core] Opening page with BanterScene.OpenPage:', url); scene.OpenPage(url); return true; }
       }
     } catch (e) {
       console.error('[Core] Failed to open page:', e);
@@ -368,14 +369,15 @@ var Core = class {
   }
 
   // "panel" = in-world UI Toolkit panel, "page" = 2D menu browser page,
-  // "auto" = panel when the client has no global window.openPage (the new SideQuest/Altspace SDK).
+  // "auto" = panel whenever the SDK has the UI system. (The SideQuest/Altspace client can define a
+  // window.openPage that doesn't open anything, so its presence doesn't mean the page works.)
   shouldUsePlaylistPanel() {
     if (!window.isBanter || this.isKaraoke) return false;
     const hasUi = !!(window.BS && (BS.UI || BS.BanterUI));
     const mode = String(this.params["playlist-ui"] || 'auto').toLowerCase();
-    if (mode === 'page') return false;
-    if (mode === 'panel') return hasUi;
-    return hasUi && typeof window.openPage !== 'function';
+    const use = mode === 'page' ? false : hasUi;
+    console.log(`[Core] playlist-ui=${mode}, UI system ${hasUi ? 'found' : 'missing'}, window.openPage ${typeof window.openPage}: using the ${use ? 'in-world panel' : 'menu page'}.`);
+    return use;
   }
 
   async setupPlaylistPanel() {
@@ -383,6 +385,7 @@ var Core = class {
       if (typeof FirePlaylistPanel === 'undefined') {
         await this.setupScript(null, "playlist-panel");
       }
+      console.log('[Core] Creating the in-world playlist panel.');
       this.playlistPanel = new FirePlaylistPanel(this);
       // Build in the background so the first click is quick. toggle() waits for it if needed.
       this.playlistPanel.build();

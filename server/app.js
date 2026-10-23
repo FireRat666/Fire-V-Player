@@ -519,7 +519,7 @@ class App {
         }
       } catch (error) {
         // The error message from the scraper is user-friendly enough to send to the client.
-        console.error(`Error fetching video by URL (${term}):`, error.message);
+        console.error(`Error fetching video by URL (${JSON.stringify(String(term))}):`, error.message);
         this.send(ws, Commands.ERROR, { message: error.message });
       }
     } else {
@@ -541,10 +541,11 @@ class App {
           searchType: 'video'
         });
         const videos = results.videos || [];
-        console.log(`[SEARCH] "${term}": ${videos.length} results in ${Date.now() - started}ms (socket type: ${ws.type || 'N/A'}).`);
+        // JSON-encode the user's text so newlines in it can't start a fake log line.
+        console.log(`[SEARCH] ${JSON.stringify(String(term))}: ${videos.length} results in ${Date.now() - started}ms (socket type: ${ws.type || 'N/A'}).`);
         this.send(ws, Commands.SEARCH_RESULTS, videos);
       } catch (error) {
-        console.error(`Error searching YouTube for "${term}":`, error.message);
+        console.error(`Error searching YouTube for ${JSON.stringify(String(term))}:`, error.message);
         this.send(ws, Commands.SEARCH_RESULTS, []);
         this.send(ws, Commands.ERROR, { message: "YouTube search failed or returned no results." });
       }

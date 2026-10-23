@@ -597,6 +597,10 @@ var FirePlaylistPanel = class {
         break;
       case Commands.ERROR: {
         const m = json.data && json.data.message ? json.data.message : (typeof json.data === 'string' ? json.data : "I can't let you do that...");
+        // A failed link search sends only an error, so stop the "Searching..." counter so it
+        // doesn't overwrite the error. Results that still arrive later are shown as usual.
+        clearInterval(this.searchTimer);
+        this.searchTimer = null;
         this.setStatus(m, 5000);
         break;
       }

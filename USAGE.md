@@ -79,7 +79,8 @@ In these worlds the Playlist button opens an **in-world panel** beside the scree
 - seek to a time (host)
 - your player only: skip back/forward and Auto Sync
 - add by link: a video, or a playlist (host)
-- **Open full page**, which tries the 2D page in the menu browser
+
+The Creator SDK client currently doesn't open the 2D playlist page, so the panel has no button for it.
 
 When someone can't play a video, the panel shows the suggested replacement with Replace (host) and Dismiss.
 

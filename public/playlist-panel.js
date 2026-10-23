@@ -148,7 +148,14 @@ var FirePlaylistPanel = class {
     if (!BS.UITextField) return null;
     const field = await this.ready(new BS.UITextField(this.ui, parent));
     try { field.placeholder = placeholder; } catch (_) {}
-    field.SetStyles({ flexGrow: 1, fontSize: '22px', height: '48px', marginRight: '6px' });
+    // The SDK theme makes the inner input transparent and the text colour can't be reached from JS,
+    // so give the field itself a light box: the dark text stays readable on it.
+    field.SetStyles({
+      flexGrow: 1, fontSize: '22px', height: '48px', marginRight: '6px',
+      backgroundColor: '#e8e8ef', color: '#111111',
+      borderWidth: '2px', borderColor: '#9a9aa8', borderRadius: '8px',
+      paddingLeft: '10px', paddingRight: '10px'
+    });
     field.OnChange(e => {
       if (e && e.value != null) onValue(String(e.value));
     });
@@ -277,7 +284,7 @@ var FirePlaylistPanel = class {
     if (this.searchField) {
       await this.button(this.searchRow, 'Search', () => this.doSearch(), { backgroundColor: '#1565c0' });
     } else {
-      await this.label(this.searchRow, 'Search needs the full page: use More... > Open full page.', { color: '#bbbbbb', flexGrow: 1 });
+      await this.label(this.searchRow, 'Search needs text input, which this client does not have.', { color: '#bbbbbb', flexGrow: 1 });
     }
 
     // List rows (a fixed pool, re-filled for each page)
@@ -365,14 +372,8 @@ var FirePlaylistPanel = class {
       await this.button(linkRow, 'Add Video', () => this.addLink(false));
       this.loadPlaylistBtn = await this.button(linkRow, 'Load Playlist', () => this.addLink(true), { backgroundColor: '#2e7d32' });
     } else {
-      await this.label(linkRow, 'Paste links on the full page.', { color: '#bbbbbb', flexGrow: 1 });
+      await this.label(linkRow, 'Adding links needs text input, which this client does not have.', { color: '#bbbbbb', flexGrow: 1 });
     }
-
-    const pageRow = await row(this.moreView, { marginTop: '2px' });
-    await this.div(pageRow, { flexGrow: 1 });
-    await this.button(pageRow, 'Open full page', () => {
-      if (!this.core.openPlaylistPage()) this.setStatus('The full page is not available in this client.');
-    }, { backgroundColor: GREY, fontSize: '18px' });
 
     // Footer
     const footer = await row(rootEl, { marginTop: '4px' });
@@ -560,12 +561,20 @@ var FirePlaylistPanel = class {
     this.send(Commands.SEARCH, q);
     console.log(`[PlaylistPanel] Searching for "${q}"...`);
     this.setStatus('Searching...', 0);
-    clearTimeout(this.searchTimer);
-    this.searchTimer = setTimeout(() => {
-      this.searchTimer = null;
-      console.warn('[PlaylistPanel] No search results from the server after 25s.');
-      this.setStatus('No reply from the server for that search. Try again.');
-    }, 25000);
+    // The first search after the server starts can take a while, so count up instead of giving up early.
+    clearInterval(this.searchTimer);
+    const started = Date.now();
+    this.searchTimer = setInterval(() => {
+      const secs = Math.round((Date.now() - started) / 1000);
+      if (secs >= 120) {
+        clearInterval(this.searchTimer);
+        this.searchTimer = null;
+        console.warn('[PlaylistPanel] No search results from the server after 120s.');
+        this.setStatus('No reply from the server for that search. Try again.');
+      } else {
+        this.setStatus(`Searching... ${secs}s`, 0);
+      }
+    }, 1000);
     this.tab = 'search';
     this.render();
   }
@@ -576,7 +585,7 @@ var FirePlaylistPanel = class {
     const p = this.core.player;
     switch (json.path) {
       case Commands.SEARCH_RESULTS:
-        clearTimeout(this.searchTimer);
+        clearInterval(this.searchTimer);
         this.searchTimer = null;
         this.searchResults = Array.isArray(json.data) ? json.data : [];
         console.log(`[PlaylistPanel] Got ${this.searchResults.length} search results.`);

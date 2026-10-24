@@ -1000,6 +1000,9 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
         if (this.player) {
           this.player.playlist = json.data.playlist;
           this.player.currentTrack = json.data.currentTrack;
+          // A Twitch video, file or stream gets its length once a player has loaded it.
+          const current = this.player.playlist && this.player.playlist[this.player.currentTrack];
+          if (current) this.player.duration = (current.duration || 0) / 1000;
         }
         break;
       case Commands.LOCK_STATE_CHANGED:

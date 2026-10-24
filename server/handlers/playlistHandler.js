@@ -2,6 +2,7 @@ const Commands = require('../../public/commands.js');
 const { getInnertube, getLibrary } = require('../youtube/youtubeiService.js');
 const Scraper = require('../youtube/scraper.js');
 const scraper = new Scraper();
+const media = require('../media.js');
 
 /**
  * Resolves a raw URL/ID or incomplete video object into a fully populated video object.
@@ -10,6 +11,8 @@ async function resolveVideoData(app, ws, v) {
   if (typeof v === 'string') {
     const videoId = app.getYoutubeId(v);
     if (!videoId) {
+      const other = await media.resolveMediaLink(v); // Twitch, Vimeo, a file or stream
+      if (other) return other;
       throw new Error("Invalid YouTube URL or ID");
     }
     const fullUrl = `https://www.youtube.com/watch?v=${videoId}`;
@@ -19,6 +22,13 @@ async function resolveVideoData(app, ws, v) {
   
   if (v && typeof v === 'object') {
     const link = v.link || v.url;
+    // A Twitch, Vimeo or direct link, as its search result described it. Only links the player
+    // can play are accepted, and titles are kept to a sensible length.
+    if (link && !app.getYoutubeId(link)) {
+      if (!media.detect(link)) throw new Error("That link can't be played here.");
+      if (!v.title) return { ...v, ...(await media.resolveMediaLink(link)) };
+      return { ...v, link, title: String(v.title).slice(0, 200), duration: Number(v.duration) > 0 ? Number(v.duration) : 0 };
+    }
     if (link && (!v.title || v.title === 'Unknown Title' || !v.duration)) {
       const videoId = app.getYoutubeId(link);
       if (videoId) {

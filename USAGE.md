@@ -106,7 +106,7 @@ In these worlds the Playlist button opens an **in-world panel** beside the scree
 - host controls: lock, take over, voting, clear, load the default playlist
 - seek to a time (host)
 - your player only: skip back/forward, Auto Sync and Captions (closed captions on or off for you, remembered on your device)
-- add by link: a video, or a playlist (host)
+- add by link: a video (YouTube, Twitch, Vimeo or a direct link, see [Links from other sites](#links-from-other-sites)), or a YouTube playlist (host)
 - mode: switch between playlist and karaoke, for space admins (see [Switching mode in world](#switching-mode-in-world))
 
 The Creator SDK client currently doesn't open the 2D playlist page, so the panel has no button for it.
@@ -121,6 +121,20 @@ In karaoke mode the Singers button (and the Join/Leave Queue button) opens the s
 - **More...** has the host controls (lock, take over, Auto Advance, which starts the next singer when a song ends), seek, and your own player's skip, Auto Sync and Captions.
 
 Whoever runs the karaoke should take over the player first, as only the host can start other people's songs.
+
+### Links from other sites
+
+Search (and add by link) takes more than YouTube links. Paste one and it shows as a single result to add or play:
+
+| Link | Example | Notes |
+|---|---|---|
+| Twitch channel | `https://www.twitch.tv/<channel>` | Live, so it plays until someone skips. Seek and skip do nothing. |
+| Twitch video (VOD) | `https://www.twitch.tv/videos/<id>` | Stays in sync like YouTube. |
+| Vimeo | `https://vimeo.com/<id>` | Only videos whose owner allows embedding on other sites. |
+| Video or audio file | `https://.../movie.mp4` (also .webm, .mov, .m4v, .mp3, .m4a, .ogg) | Stays in sync. |
+| HLS stream | `https://.../index.m3u8` | Live streams play until someone skips; recorded ones stay in sync. The server must allow other sites to load it (CORS). |
+
+Files, streams and Twitch videos show no length until the first player loads them; after that the playlist moves on when they end. Captions and the "unavailable in your region" check only apply to YouTube. Pages that need a login can't be played. Dailymotion isn't supported, because its player now needs a player ID from a Dailymotion account.
 
 ### Switching mode in world
 

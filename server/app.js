@@ -4,6 +4,7 @@ const http = require('http');
 const path = require('path');
 const Youtube = require('./youtube/scraper.js');
 const youtube = new Youtube();
+const media = require('./media.js');
 const Commands = require('../public/commands.js');
 const playlistHandler = require('./handlers/playlistHandler.js');
 const karaokeHandler = require('./handlers/karaokeHandler.js');
@@ -403,6 +404,9 @@ class App {
       case Commands.REPLACE_VIDEO:
         await this.handleReplaceVideo(msg.data, ws);
         break;
+      case Commands.MEDIA_DURATION:
+        await this.setMediaDuration(ws, msg.data);
+        break;
     }
   }
   _createVideoObject(videoData, userObject, source, isYoutubeWebsite = false) {
@@ -437,7 +441,8 @@ class App {
 
   _isDuplicateVideo(player, videoLink) {
     const newVideoId = this.getYoutubeId(videoLink);
-    if (!newVideoId) return false; // Can't check if we can't get an ID
+    // Other links (Twitch, Vimeo, files) are the same video when the link is the same.
+    if (!newVideoId) return !!videoLink && player.playlist.some(v => v.link === videoLink);
     return player.playlist.some(existingVideo => this.getYoutubeId(existingVideo.link) === newVideoId);
   }
 
@@ -508,7 +513,35 @@ class App {
     this.videoPlayers[ws.i].currentTrack = 0;
     this.videoPlayers[ws.i].currentTime = 0;
   }
+  // Fills in the length of a non-YouTube video (a file, stream or Twitch video) once a player has
+  // loaded it, so the playlist moves on when it ends. Live streams never report one.
+  async setMediaDuration(ws, data) {
+    const player = this.videoPlayers[ws.i];
+    const seconds = data && Number(data.duration);
+    if (!player || !data || typeof data.link !== 'string' || !(seconds > 0 && seconds < 24 * 3600)) return;
+    if (this.getYoutubeId(data.link)) return; // YouTube lengths come from YouTube itself
+    let changed = false;
+    player.playlist.forEach(v => {
+      if (v.link === data.link && !v.duration) { v.duration = Math.round(seconds * 1000); changed = true; }
+    });
+    if (!changed) return;
+    player.sockets.forEach(socket => {
+      this.send(socket, Commands.PLAYLIST_UPDATED, { playlist: player.playlist, currentTrack: player.currentTrack });
+    });
+    await this.savePlayerState(ws.i);
+  }
   async search(term, ws) {
+    // Twitch, Vimeo and direct video/stream links become a single result, as a YouTube link does.
+    if (media.detect(term) && media.detect(term).type !== 'youtube') {
+      try {
+        const video = await media.resolveMediaLink(term);
+        if (video) this.send(ws, Commands.SEARCH_RESULTS, [video]);
+      } catch (error) {
+        this.send(ws, Commands.SEARCH_RESULTS, []);
+        this.send(ws, Commands.ERROR, { message: error.message });
+      }
+      return;
+    }
     const videoId = this.getYoutubeId(term);
 
     if (videoId) {
@@ -533,7 +566,7 @@ class App {
       const isUrl = /^(https?:\/\/|www\.)/i.test(term.trim());
       if (isUrl) {
         this.send(ws, Commands.SEARCH_RESULTS, []);
-        this.send(ws, Commands.ERROR, { message: "Invalid YouTube URL provided." });
+        this.send(ws, Commands.ERROR, { message: "I can't play that link. Try YouTube, Twitch, Vimeo, or a direct video link (.mp4, .m3u8)." });
         return;
       }
 

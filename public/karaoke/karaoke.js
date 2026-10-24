@@ -640,7 +640,8 @@ var Karaoke = class {
           this.singIt.style.display = 'inline-block';
           this.alreadyInQueueMessage.style.display = 'none';
         }
-        this.YtPlayer.loadVideoById(this.core.getId(v.link), 0);
+        // Only YouTube songs can be previewed here.
+        if (this.core.getId(v.link)) this.YtPlayer.loadVideoById(this.core.getId(v.link), 0);
       });
       
       this.core.makeAndAddElement('div',{clear: 'both'}, videoItemContainer);

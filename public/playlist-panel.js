@@ -310,7 +310,7 @@ var FirePlaylistPanel = class {
     await this.button(tabs, '>', () => this.changePage(1), { backgroundColor: GREY });
 
     this.searchRow = await row(this.mainView, { marginTop: '4px' });
-    const searchHint = this.karaoke ? 'Search for a song to sing, or paste a video link' : 'Search YouTube, or paste a video / playlist link';
+    const searchHint = this.karaoke ? 'Search for a song to sing, or paste a video link' : 'Search YouTube, or paste a YouTube / Twitch / Vimeo / video link';
     this.searchField = await this.textField(this.searchRow, searchHint, v => { this.searchQuery = v; }, () => this.doSearch());
     if (this.searchField) {
       await this.button(this.searchRow, 'Search', () => this.doSearch(), { backgroundColor: '#1565c0' });
@@ -408,7 +408,7 @@ var FirePlaylistPanel = class {
     const linkSection = this.karaoke ? null : await section('Add by link');
     if (linkSection) {
       const linkRow = await row(linkSection);
-      this.linkField = await this.textField(linkRow, 'YouTube video or playlist link', v => { this.linkQuery = v; }, () => this.addLink(false));
+      this.linkField = await this.textField(linkRow, 'Video link (YouTube, Twitch, Vimeo, .mp4, .m3u8) or YouTube playlist', v => { this.linkQuery = v; }, () => this.addLink(false));
       if (this.linkField) {
         await this.button(linkRow, 'Add Video', () => this.addLink(false));
         this.loadPlaylistBtn = await this.button(linkRow, 'Load Playlist', () => this.addLink(true), { backgroundColor: '#2e7d32' });
@@ -569,7 +569,7 @@ var FirePlaylistPanel = class {
 
   addLink(asPlaylist) {
     const q = (this.linkQuery || '').trim();
-    if (!q) { this.setStatus('Paste a YouTube link first.'); return; }
+    if (!q) { this.setStatus('Paste a link first.'); return; }
     if (asPlaylist) {
       if (!this.isHost()) { this.setStatus('Only the host can load a playlist.'); return; }
       const id = this.core.getPlaylistId(q);
@@ -578,7 +578,8 @@ var FirePlaylistPanel = class {
       this.setStatus('Loading playlist...');
       return;
     }
-    if (!this.core.getId(q)) { this.setStatus('That is not a YouTube video link.'); return; }
+    // YouTube, Twitch, Vimeo or a direct video link: the server checks it can be played.
+    if (!this.core.getId(q) && !/^https?:\/\//i.test(q)) { this.setStatus('That is not a video link.'); return; }
     this.send(Commands.ADD_TO_PLAYLIST, q);
     this.setStatus('Adding video...');
   }
@@ -858,7 +859,7 @@ var FirePlaylistPanel = class {
 
     let empty = '';
     if (!items.length) {
-      if (onSearch) empty = this.karaoke ? 'Search for a song above, or paste a link.' : 'Search YouTube above, or paste a link.';
+      if (onSearch) empty = this.karaoke ? 'Search for a song above, or paste a link.' : 'Search YouTube above, or paste a YouTube, Twitch, Vimeo or video link.';
       else if (this.karaoke) empty = host ? 'No singers yet. Use Search to pick a song and join the queue.' : 'No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first (More...).';
       else empty = 'The playlist is empty. Use Search to add videos.';
     }

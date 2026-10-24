@@ -817,7 +817,8 @@ var Playlist = class {
     this.addVideoSubmit.addEventListener('click', () => {
       const input = this.addVideoInput.value;
       const videoId = this.core.getId(input);
-      if (videoId) {
+      // YouTube, or a Twitch, Vimeo or direct video link, which the server checks.
+      if (videoId || /^https?:\/\//i.test(input.trim())) {
         this.core.sendMessage({ path: Commands.ADD_TO_PLAYLIST, data: input });
         this.addVideoOverlay.style.display = 'none';
       } else {

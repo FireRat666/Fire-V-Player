@@ -53,6 +53,7 @@ var Commands = {
   VIDEO_UNAVAILABLE: 'video-unavailable',
   SHOW_REPLACE_PROMPT: 'show-replace-prompt',
   REPLACE_VIDEO: 'replace-video',
+  MEDIA_DURATION: 'media-duration', // a player reports the length of a non-YouTube video
   ITEM_REPLACED: 'item-replaced',
   ADD_AND_PLAY: 'add-and-play',
   ADD_AND_PLAY_NEXT: 'add-and-play-next',

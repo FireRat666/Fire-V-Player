@@ -30,6 +30,9 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
       await super.init(); // Run common setup from BasePlayer
 
       // Now run the player-specific setup
+      // Players for links that aren't on YouTube (Twitch, Vimeo, video files and streams).
+      await this.core.setupScript(null, "media-sources");
+      await this.core.setupScript(null, "media-players");
       await this.setupBrowserMessaging();
       this.setupVisibilityHandler();
       this.setupStatusDisplay();
@@ -159,7 +162,7 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
     this.core.sendMessage({path: Commands.FROM_PLAYLIST, data: {id: this.core.params.playlist, shouldClear, fromPlayer: true}});
   }
   onYouTubeIframeAPIReady(start) {
-    this.player = new YT.Player('player', {
+    this.yt = new YT.Player('player', {
       height: window.innerHeight,
       width: window.innerWidth,
       videoId: this.core.getId(decodeURIComponent(this.core.params.youtube)),
@@ -206,7 +209,7 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
         onError: event => {
           // Error 150: The video owner has not made this video available in your country.
           // Error 101 is a variation of this.
-          if (event.data === 150 || event.data === 101) {
+          if ((event.data === 150 || event.data === 101) && (!this.player.isYouTube || this.player.isYouTube())) {
             const currentVideo = this.currentVideo || (this.playerData && this.playerData.playlist && this.playerData.playlist[this.playerData.currentTrack]);
             if (currentVideo) {
               this.core.showToast(`Video unavailable in your region: ${currentVideo.title}`);
@@ -225,6 +228,19 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
         }
       }
     });
+    // this.player takes the same calls as the YouTube player, and plays non-YouTube links itself.
+    this.player = window.MediaSwitch ? new MediaSwitch(this.yt, {
+      getId: link => this.core.getId(link),
+      onDuration: (link, seconds) => this.reportMediaDuration(link, seconds),
+      onError: message => this.core.showToast(message, 6000)
+    }) : this.yt;
+  }
+  // A file, stream or Twitch video's length isn't known until it loads, so the first player to
+  // load it tells the server, which then moves the playlist on when it ends.
+  reportMediaDuration(link, seconds) {
+    const video = this.currentVideo;
+    if (!video || video.link !== link || video.duration) return;
+    this.core.sendMessage({ path: Commands.MEDIA_DURATION, data: { link, duration: seconds } });
   }
   startPlayerOrNot() {
     if(this.player && !this.isPlayerStarted && this.core.connected() && !this.readyToPlay) {
@@ -407,6 +423,8 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
         break;
       case Commands.SYNC_TIME:
         this.currentTime = json.data.currentTime;
+        // A live stream (Twitch channel, live .m3u8) has no shared position to keep in sync.
+        if (this.player && this.player.isLive && this.player.isLive()) break;
         if(this.player && this.readyToPlay) {
           // Calculate latency on-the-fly from the echoed timestamp
           const roundTripTime = Date.now() - json.data.clientTimestamp;
@@ -607,7 +625,8 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
         return;
       }
       if(this.lastUrl !== video.link || force) {
-        this.player.loadVideoById(this.core.getId(video.link), currentTime);
+        if (this.player.loadMedia) this.player.loadMedia(video.link, currentTime);
+        else this.player.loadVideoById(this.core.getId(video.link), currentTime);
         if (this.playerData.paused) {
           this.player.pauseVideo();
         } else {

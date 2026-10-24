@@ -63,6 +63,7 @@ In a Creator SDK world (`Assets/WebRoot/index.html`), add the player as a snippe
   spatial="true"
   spatial-min-distance="5"
   spatial-max-distance="40"
+  controls-follow-screen="false"
   button-position="0 0.83 2"
   button-rotation=""
   button-scale="1"
@@ -86,6 +87,7 @@ Settings are the same as the script attributes below, except:
 - The room ID is `room`, not `instance`: Unity's BSSnippet component writes its own `instance` attribute. Without `room`, the space URL is used, so each space has its own room.
 - `playlist-panel-position` and `playlist-panel-rotation` place the in-world panel in the world (Unity values), and it has its own drag handle in the Scene view. Clear `playlist-panel-position` to put the panel beside the screen instead; `playlist-panel-rotation` is then relative to the screen.
 - `button-position` is where the in-world buttons go (Unity world position), with its own drag handle. Empty puts them just under the screen; an empty `button-rotation` uses the screen's.
+- `controls-follow-screen="true"` makes `button-position`, `playlist-panel-position` and their rotations offsets from the screen (in the screen's own axes) instead of world values, so the buttons and panel move and turn with the screen. Their drag handles then don't show where they'll be, as a gizmo can only show a setting's own value. For example `button-position="0 -0.67 0"` puts the buttons 0.67 m below the screen's centre.
 - An empty `youtube` uses the default silent video.
 - The section between the two comments is read as XML by Unity: quote every attribute, close every element, and write `&` as `&amp;`.
 

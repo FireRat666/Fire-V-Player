@@ -4,10 +4,10 @@ Fire-V-Player is designed to be embedded in the **Banter** VR social platform, a
 
 ## Modes
 
-The player has two primary modes, determined by which script you include (or, for a snippet, its `mode` setting):
+The player has two primary modes, determined by which script you include (or, for a snippet, its `karaoke` checkbox):
 
-- **Playlist Mode:** The default collaborative player. Use `playlist.js`, or `mode="playlist"`.
-- **Karaoke Mode:** A turn-based system where users join a queue to sing. Use `karaoke.js`, or `mode="karaoke"`.
+- **Playlist Mode:** The default collaborative player. Use `playlist.js`, or leave the snippet's `karaoke` unticked.
+- **Karaoke Mode:** A turn-based system where users join a queue to sing. Use `karaoke.js`, or tick the snippet's `karaoke`.
 
 ## Basic Example (Playlist Mode)
 
@@ -43,15 +43,15 @@ To use Karaoke mode, simply change the `src` to point to `karaoke.js`. The playe
 
 ## SideQuest / Altspace Creator SDK (Snippet)
 
-In a Creator SDK world (`Assets/WebRoot/index.html`), add the player as a snippet. `mode="playlist"` (the default) runs a shared playlist; `mode="karaoke"` runs a singer queue instead.
+In a Creator SDK world (`Assets/WebRoot/index.html`), add the player as a snippet. `karaoke="false"` (the default) runs a shared playlist; `karaoke="true"` runs a singer queue instead. Unity's Inspector shows it as a checkbox.
 
 ```html
 <!-- snippet section -->
 <bs-snippet name="fire-v-player" title="Fire-V-Player" single="true"
-  description="Synced YouTube player with an in-world panel. mode: playlist (shared playlist) or karaoke (singer queue)."
+  description="Synced YouTube player with an in-world panel. Tick karaoke for a singer queue instead of a shared playlist."
   script="https://vidya.firer.at/snippet.js"
   room=""
-  mode="playlist"
+  karaoke="false"
   playlist="PLZWiw-xxQ4SPDmADhvme7-pU2bx3s7nKX"
   youtube=""
   volume="10"
@@ -87,7 +87,7 @@ Settings are the same as the script attributes below, except:
 
 - `position` and `rotation` are **Unity world values**, as for every snippet, so the Scene-view gizmo shows where the screen will be. (Script-tag values use A-Frame axes, where Z is flipped: script `position="0 1.5 -2"` is snippet `position="0 1.5 2"`.)
 - `scale` can be a single number. The screen is 1 m wide and 0.5625 m tall at scale 1, so the gizmo's `size` should be `scale × 1` by `scale × 0.5625`.
-- `mode` is `playlist` or `karaoke`. Empty means playlist. Both modes use the same settings; `playlist` (the default YouTube playlist) only matters in playlist mode.
+- `karaoke` is a checkbox: ticked (`true`) is karaoke mode, unticked or empty is playlist mode. A hand-written `mode="karaoke"` works too. Both modes use the same settings; `playlist` (the default YouTube playlist) only matters in playlist mode.
 - `singer-button-position` and `singer-button-rotation` (karaoke) place the Join/Leave Queue button, as an offset from the in-world buttons. Empty uses the default, below and in front of them. The `box-trigger-*` settings from the parameter reference work too.
 - The room ID is `room`, not `instance`: Unity's BSSnippet component writes its own `instance` attribute. Without `room`, the space URL is used, so each space has its own room.
 - `playlist-panel-position` and `playlist-panel-rotation` place the in-world panel in the world (Unity values), and it has its own drag handle in the Scene view. Clear `playlist-panel-position` to put the panel beside the screen instead; `playlist-panel-rotation` is then relative to the screen.
@@ -156,7 +156,7 @@ All parameters are optional unless marked as **(Required)**.
 | `button-position` | The `x y z` position of the in-world UI buttons, relative to the player screen. | `0 0 0` |
 | `button-rotation` | The `x y z` rotation of the in-world UI buttons. | `0 0 0` |
 | `button-scale` | The `x y z` scale of the in-world UI buttons. | `1 1 1` |
-| `playlist-ui` | What the Playlist button opens. `panel`: an in-world panel (UI Toolkit) with controls, playlist and search. `page`: the 2D playlist page in the client's menu browser. `auto`: `panel` whenever the client has the UI system (the SideQuest/Altspace Creator SDK), otherwise `page`. Playlist mode only. | `auto` |
+| `playlist-ui` | What the Playlist (or, in karaoke mode, Singers) button opens. `panel`: an in-world panel (UI Toolkit) with controls, the playlist or singer queue, and search. `page`: the 2D playlist page in the client's menu browser. `auto`: `panel` whenever the client has the UI system (the SideQuest/Altspace Creator SDK), otherwise `page`. | `auto` |
 | `playlist-panel-position` | Where the in-world panel sits in the world, in the same units as `position`. When set, `playlist-panel-rotation` is a world rotation too (empty = the screen's rotation), and `playlist-panel-offset` is ignored. | (beside the screen) |
 | `playlist-panel-offset` | Where the in-world panel sits, relative to the screen, in metres: `x` right, `y` up, `z` toward the viewer. Empty puts it just right of the screen. | (beside the screen) |
 | `playlist-panel-rotation` | The in-world panel's rotation: relative to the screen, or a world rotation when `playlist-panel-position` is set. Empty: relative `0 -20 0` (turned slightly toward the screen's centre), or the screen's rotation. | (see description) |

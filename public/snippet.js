@@ -4,8 +4,9 @@
 //     script="https://vidya.firer.at/snippet.js"
 //     room="my-room" position="0 1.5 2" rotation="0 0 0" scale="2" ...></bs-snippet>
 //
-// mode="playlist" (the default) runs a shared playlist, mode="karaoke" a singer queue, as with
-// playlist.js / karaoke.js. Both open an in-world panel from the Playlist / Singers button.
+// karaoke="false" (the default) runs a shared playlist, karaoke="true" a singer queue, as with
+// playlist.js / karaoke.js. It's true/false so Unity's Inspector shows it as a checkbox.
+// mode="karaoke" works too. Both open an in-world panel from the Playlist / Singers button.
 //
 // Settings are the same as playlist.js's and karaoke.js's script attributes (see USAGE.md), except:
 // - position / rotation are Unity world values, like every snippet, so the Scene-view gizmo
@@ -103,7 +104,7 @@
       return undefined;
     };
 
-    const karaoke = attr('mode').toLowerCase() === 'karaoke';
+    const karaoke = attr('karaoke').toLowerCase() === 'true' || attr('mode').toLowerCase() === 'karaoke';
     return {
       mode: karaoke ? 'karaoke' : 'playlist',
       src: `${scriptUrl.origin}/${karaoke ? 'karaoke' : 'playlist'}.js`,

@@ -24,6 +24,9 @@ var FirePlaylistPanel = class {
     this.searchPage = 0;
     this.searchResults = [];
     this.searchQuery = '';
+    // Recent searches, kept on this device (like the full playlist page did).
+    this.recentKey = `recent${this.karaoke ? 'Karaoke' : 'Playlist'}Searches`;
+    this.recentSearches = this.loadRecent();
     this.visible = false;
     this.built = false;
     this.failed = false;
@@ -128,6 +131,49 @@ var FirePlaylistPanel = class {
     this.setText(this.statusLabel, text);
     clearTimeout(this.statusTimer);
     if (ms) this.statusTimer = setTimeout(() => this.setText(this.statusLabel, ''), ms);
+  }
+
+  // The search tab has one row fewer, for the row of search helpers above it.
+  pageSize() {
+    return this.tab === 'search' ? this.rowsPerPage - 1 : this.rowsPerPage;
+  }
+
+  loadRecent() {
+    try {
+      const list = JSON.parse(localStorage.getItem(this.recentKey) || '[]');
+      return Array.isArray(list) ? list.filter(q => typeof q === 'string' && q.trim()).slice(0, 5) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  saveRecent(query) {
+    this.recentSearches = [query, ...this.recentSearches.filter(q => q.toLowerCase() !== query.toLowerCase())].slice(0, 5);
+    try { localStorage.setItem(this.recentKey, JSON.stringify(this.recentSearches)); } catch (e) {}
+  }
+
+  clearRecent() {
+    this.recentSearches = [];
+    try { localStorage.removeItem(this.recentKey); } catch (e) {}
+    this.render();
+  }
+
+  // Puts text in the search box (and searchQuery, which normally follows the box's OnChange).
+  setSearchText(text) {
+    this.searchQuery = text;
+    if (this.searchField) {
+      try { this.searchField.value = text; } catch (e) {}
+    }
+  }
+
+  // Karaoke's helper words: adds one to the end of the search, once.
+  addSearchWord(word) {
+    const q = (this.searchQuery || '').trim();
+    if (new RegExp(`(^|\\s)${word}(\\s|$)`, 'i').test(q)) return;
+    this.setSearchText(q ? `${q} ${word}` : word);
+    if (this.searchField && typeof this.searchField.Focus === 'function') {
+      try { this.searchField.Focus(); } catch (e) {}
+    }
   }
 
   // ---------------------------------------------------------------- element factories
@@ -320,6 +366,31 @@ var FirePlaylistPanel = class {
     } else {
       await this.label(this.searchRow, 'Search needs text input, which this client does not have.', { color: '#bbbbbb', flexGrow: 1 });
     }
+
+    // Search helpers: karaoke's words to add to the search, then recent searches.
+    this.searchToolsRow = await row(this.mainView, { overflow: 'hidden' });
+    const small = { fontSize: '18px', paddingLeft: '12px', paddingRight: '12px', paddingTop: '6px', paddingBottom: '6px' };
+    if (this.karaoke && this.searchField) {
+      for (const word of ['karaoke', 'lyrics', 'zoom karaoke']) {
+        await this.button(this.searchToolsRow, `+ ${word}`, () => this.addSearchWord(word), Object.assign({ backgroundColor: '#6a1b9a' }, small));
+      }
+    }
+    this.recentLabel = await this.label(this.searchToolsRow, 'Recent:', { fontSize: '18px', color: '#bbbbbb', marginLeft: '8px', marginRight: '2px', flexShrink: 0 });
+    this.recentBtns = [];
+    for (let k = 0; k < 5; k++) {
+      const idx = k;
+      const btn = await this.button(this.searchToolsRow, '', () => {
+        const q = this.recentSearches[idx];
+        if (!q) return;
+        this.setSearchText(q);
+        this.doSearch();
+      }, Object.assign({
+        backgroundColor: GREY, flexShrink: 1, minWidth: '60px', maxWidth: '240px',
+        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
+      }, small));
+      this.recentBtns.push(btn);
+    }
+    this.clearRecentBtn = await this.button(this.searchToolsRow, 'Clear', () => this.clearRecent(), Object.assign({ backgroundColor: '#c62828' }, small));
 
     // List rows (a fixed pool, re-filled for each page)
     const list = await this.div(this.mainView, { display: 'flex', flexDirection: 'column', flexGrow: 1, marginTop: '6px', overflow: 'hidden' });
@@ -601,7 +672,7 @@ var FirePlaylistPanel = class {
 
   changePage(delta) {
     const total = this.tab === 'search' ? this.searchResults.length : this.listItems().length;
-    const pages = Math.max(1, Math.ceil(total / this.rowsPerPage));
+    const pages = Math.max(1, Math.ceil(total / this.pageSize()));
     if (this.tab === 'search') this.searchPage = Math.min(pages - 1, Math.max(0, this.searchPage + delta));
     else this.page = Math.min(pages - 1, Math.max(0, this.page + delta));
     this.render();
@@ -625,6 +696,7 @@ var FirePlaylistPanel = class {
       }
     }
     this.send(Commands.SEARCH, q);
+    this.saveRecent(q);
     console.log(`[PlaylistPanel] Searching for "${q}"...`);
     this.setStatus('Searching...', 0);
     // The first search after the server starts can take a while, so count up instead of giving up early.
@@ -840,9 +912,18 @@ var FirePlaylistPanel = class {
     this.setStyle(this.tabPlaylistBtn, 'backgroundColor', onSearch ? '#455a64' : '#1565c0');
     this.setStyle(this.tabSearchBtn, 'backgroundColor', onSearch ? '#1565c0' : '#455a64');
     this.display(this.searchRow, onSearch);
+    this.display(this.searchToolsRow, onSearch && !!this.searchField);
+    const recent = this.recentSearches;
+    (this.recentBtns || []).forEach((btn, k) => {
+      this.display(btn, k < recent.length);
+      if (k < recent.length) this.setText(btn, recent[k]);
+    });
+    this.display(this.recentLabel, recent.length > 0);
+    this.display(this.clearRecentBtn, recent.length > 0);
 
     const items = onSearch ? this.searchResults : list;
-    const pages = Math.max(1, Math.ceil(items.length / this.rowsPerPage));
+    const size = this.pageSize();
+    const pages = Math.max(1, Math.ceil(items.length / size));
     if (onSearch) this.searchPage = Math.min(this.searchPage, pages - 1);
     else this.page = Math.min(this.page, pages - 1);
     const page = onSearch ? this.searchPage : this.page;
@@ -851,8 +932,8 @@ var FirePlaylistPanel = class {
     // Rows
     for (let k = 0; k < this.rows.length; k++) {
       const slot = this.rows[k];
-      const i = page * this.rowsPerPage + k;
-      const v = items[i];
+      const i = page * size + k;
+      const v = k < size ? items[i] : null;
       this.display(slot.row, !!v);
       if (!v) continue;
       if (onSearch) this.fillSearchRow(slot, v, host);

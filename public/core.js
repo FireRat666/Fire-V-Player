@@ -243,7 +243,8 @@ var Core = class {
     playlistButton.setAttribute('rotation', this.params["singer-button-rotation"]);
     playlistButton.setAttribute('opacity', '0.3');
     playlistButton.setAttribute('transparent', 'true');
-    this.playlistContainer.appendChild(playlistButton);
+    if (this.params["singer-button-space"] === 'world') scene.appendChild(playlistButton);
+    else this.playlistContainer.appendChild(playlistButton);
     this.singerButtonElements.push(playlistButton);
     const playlistButtonText = document.createElement('a-text');
     playlistButtonText.setAttribute('value', "singers");
@@ -707,6 +708,9 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
     const yScale = Number(this.params.scale.split(" ")[1]);
     this.setOrDefault("singer-button-position", `0 ${-yScale*0.335} 3`);
     this.setOrDefault("singer-button-rotation", "-30 180 0");
+    // "world": the singer button's position and rotation are world values (set by snippet.js),
+    // not offsets from the buttons.
+    this.setOrDefault("singer-button-space", "");
     this.setOrDefault("button-position", `0 0 0`);
     this.setOrDefault("button-rotation", `0 0 0`);
     this.setOrDefault("button-scale", `1 1 1`);
@@ -1176,6 +1180,7 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
   }
   destroy() { // To Use : window.cleanupVideoPlayer();
     console.log("Cleaning up Fire-V-Player instance...");
+    this.removeJoinLeaveButton();
 
     if (this.playlistPanel) {
       this.playlistPanel.destroy();

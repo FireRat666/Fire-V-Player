@@ -12,9 +12,10 @@
 // - position / rotation are Unity world values, like every snippet, so the Scene-view gizmo
 //   shows where the screen will be. They are converted to the player's A-Frame units here.
 // - scale may be a single number.
-// - playlist-panel-position / -rotation and button-position / -rotation are world values too, so
-//   they get their own gizmos. With controls-follow-screen="true" they are offsets from the
-//   screen instead, and move with it.
+// - playlist-panel-position / -rotation, button-position / -rotation and (karaoke)
+//   singer-button-position / -rotation are world values too, so they get their own gizmos. With
+//   controls-follow-screen="true" they are offsets from the screen instead, and move with it.
+//   An empty singer-button-position keeps the script tag's default: placed from the buttons.
 // - the room id is "room", because Unity's BSSnippet component writes its own "instance"
 //   attribute. Without "room" the player uses the space URL, so each space has its own room.
 //
@@ -104,6 +105,24 @@
       return undefined;
     };
 
+    // The singer button (karaoke). With a position it's placed in the world (or from the screen,
+    // with controls-follow-screen) instead of from the buttons. Its rotation then defaults to
+    // the script tag's tilt (-30 180 0 in A-Frame, 30 -180 0 in Unity) turned with the screen.
+    const SINGER_TILT = [30, -180, 0];
+    const singer = (name) => {
+      const pos = vec(attr('singer-button-position'), null);
+      if (!pos) return undefined; // the default, from the buttons
+      if (name === 'singer-button-space') return 'world';
+      if (name === 'singer-button-position') {
+        if (!follow) return convert(fmt(pos), 'pos');
+        const r = qRotate(screenQ, pos);
+        return convert(fmt(round([screenPos[0] + r[0], screenPos[1] + r[1], screenPos[2] + r[2]])), 'pos');
+      }
+      const rot = vec(attr('singer-button-rotation'), null);
+      if (rot && !follow) return convert(fmt(rot), 'rot');
+      return convert(fmt(qToEuler(qMul(screenQ, qEuler(rot || SINGER_TILT)))), 'rot');
+    };
+
     const karaoke = attr('karaoke').toLowerCase() === 'true' || attr('mode').toLowerCase() === 'karaoke';
     return {
       mode: karaoke ? 'karaoke' : 'playlist',
@@ -113,6 +132,11 @@
         // Not the element's own "instance" (BSSnippet's per-placement id): without a room the
         // player falls back to the space URL.
         if (name === 'instance') return el.getAttribute('room') || null;
+        if (name === 'singer-button-space' || name === 'singer-button-position' || name === 'singer-button-rotation') {
+          const v = singer(name);
+          if (v !== undefined) return v;
+          if (name === 'singer-button-space') return null;
+        }
         if (follow) {
           const v = relative(name);
           if (v !== undefined) return v;

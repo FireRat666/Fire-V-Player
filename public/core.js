@@ -867,7 +867,8 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
     try { json = JSON.parse(msg); } catch { return; }
     switch(json.path) {
       case Commands.ERROR:
-        console.error("I cant let you do that...");
+        // Show the server's reason (e.g. a link this world doesn't allow), not just that it refused.
+        console.error((json.data && json.data.message) || (typeof json.data === 'string' && json.data) || "I can't let you do that...");
         break;
       case Commands.RESET_BROWSER:
         if(window.isBanter && this.browser) {

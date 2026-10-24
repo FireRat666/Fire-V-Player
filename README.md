@@ -12,7 +12,7 @@ It features a persistent state using a PostgreSQL database, making it suitable f
 -   **Robust Host Controls:** A host can lock the playlist, reorder songs, skip, and manage permissions.
 -   **Flexible Permissions:** Features a "Take Over" mode for hostless rooms and a democratic voting system for song selection.
 -   **Rich Content:** Easily search YouTube or import entire playlists.
--   **VR-Ready:** Designed for 3D environments with features like spatial audio, in-world UI, and hand controls.
+-   **VR-Ready:** Designed for 3D environments with features like volume that fades with distance, in-world UI, and hand controls.
 -   **Automated Maintenance:** Stale, inactive instances are automatically purged from the database to keep it lean.
 
 ## Documentation

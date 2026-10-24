@@ -133,7 +133,7 @@ These always work, as the sites moderate what's on them:
 |---|---|---|
 | Twitch channel | `https://www.twitch.tv/<channel>` | Live, so it plays until someone skips. Seek and skip do nothing. If Twitch waits for a click to start, or starts muted, the player clicks the screen for you until it plays with sound (a few tries at most). |
 | Twitch video (VOD) | `https://www.twitch.tv/videos/<id>` | Stays in sync like YouTube. |
-| Twitch clip | `https://www.twitch.tv/<channel>/clip/<id>` or `https://clips.twitch.tv/<id>` | Twitch's clip player can't be controlled, so clips aren't kept in sync, volume, mute and spatial volume don't change them, and each gets 60 seconds (the longest a clip can be) before the playlist moves on. |
+| Twitch clip | `https://www.twitch.tv/<channel>/clip/<id>` or `https://clips.twitch.tv/<id>` | Twitch's clip player can't be controlled, so clips aren't kept in sync, volume, mute and the `spatial` fade don't change them, and each gets 60 seconds (the longest a clip can be) before the playlist moves on. |
 | Vimeo | `https://vimeo.com/<id>` | Only videos whose owner allows embedding on other sites. |
 
 These only work with `untrusted-links="true"` in the snippet, as they can come from any site:
@@ -188,9 +188,9 @@ All parameters are optional unless marked as **(Required)**.
 | `position` | The `x y z` position of the player screen in the 3D scene. | `0 0 0` |
 | `rotation` | The `x y z` rotation of the player screen. | `0 0 0` |
 | `scale` | The `x y z` scale of the player screen. | `1 1 1` |
-| `spatial` | Set to `true` to enable spatialized audio that gets quieter with distance. | `true` |
-| `spatial-min-distance` | The distance at which the audio begins to fade out. | `5` |
-| `spatial-max-distance` | The distance at which the audio becomes completely silent. | `40` |
+| `spatial` | Set to `true` to make the volume fade as you move away from the screen. It only changes the volume: Banter always plays the screen's sound in 3D, coming from the screen, and has no setting for 2D sound. | `true` |
+| `spatial-min-distance` | With `spatial` on, the distance at which the volume starts to fade. | `5` |
+| `spatial-max-distance` | With `spatial` on, how far past `spatial-min-distance` the volume reaches zero. | `40` |
 | `mip-maps` | The number of mip-map levels for the browser texture. Affects visual quality at sharp angles. | `1` |
 
 ### UI & Control Parameters

@@ -76,8 +76,8 @@ In a Creator SDK world (`Assets/WebRoot/index.html`), add the player as a snippe
   playlist-panel-position="1.8 1.5 1.85"
   playlist-panel-rotation="0 20 0"
   playlist-panel-scale="1"
-  singer-button-position="0 1 -1"
-  singer-button-rotation="30 180 0">
+  singer-button-position="0 0 0"
+  singer-button-rotation="0 0 0">
   <bs-gizmo type="position" attribute="position"/>
   <bs-gizmo type="plane" attribute="position" size="2 1.125" rotation="0 180 0"/>
   <bs-gizmo type="position" attribute="playlist-panel-position"/>
@@ -93,7 +93,7 @@ Settings are the same as the script attributes below, except:
 - `position` and `rotation` are **Unity world values**, as for every snippet, so the Scene-view gizmo shows where the screen will be. (Script-tag values use A-Frame axes, where Z is flipped: script `position="0 1.5 -2"` is snippet `position="0 1.5 2"`.)
 - `scale` can be a single number. The screen is 1 m wide and 0.5625 m tall at scale 1, so the gizmo's `size` should be `scale × 1` by `scale × 0.5625`.
 - `karaoke` is a checkbox: ticked (`true`) is karaoke mode, unticked or empty is playlist mode. A hand-written `mode="karaoke"` works too. Both modes use the same settings; `playlist` (the default YouTube playlist) only matters in playlist mode.
-- `singer-button-position` and `singer-button-rotation` (karaoke) place the Singers button, a Unity world position and rotation like `button-position`, with its own drag handle. An empty rotation tilts the button back 30° and turns it with the screen. With `controls-follow-screen="true"` they're offsets from the screen instead. Empty `singer-button-position` keeps the old default: below and in front of the in-world buttons, placed from them. Unity picks each setting's field from its value, so an empty setting shows as a single text box instead of X, Y and Z: the example gives both a value (`30 180 0` is the usual tilt for a screen with no rotation). To fix an empty one in Unity, type all three numbers into the box at once (for example `0 1 -1`), then select another object and back, and it shows as X, Y and Z with a drag handle. The `box-trigger-*` settings from the parameter reference work too.
+- `singer-button-position` and `singer-button-rotation` (karaoke) place the Singers button, a Unity world position and rotation like `button-position`, with its own drag handle. `0 0 0` (or empty) means the default: for the position, below and in front of the in-world buttons, placed from them; for the rotation, tilted back 30° and turned with the screen. With `controls-follow-screen="true"` they're offsets from the screen instead. They default to `0 0 0` rather than empty because Unity picks each setting's field from its value: an empty one shows as a single text box instead of X, Y and Z. The `box-trigger-*` settings from the parameter reference work too.
 - The room ID is `room`, not `instance`: Unity's BSSnippet component writes its own `instance` attribute. Without `room`, the space URL is used, so each space has its own room.
 - `playlist-panel-position` and `playlist-panel-rotation` place the in-world panel in the world (Unity values), and it has its own drag handle in the Scene view. Clear `playlist-panel-position` to put the panel beside the screen instead; `playlist-panel-rotation` is then relative to the screen.
 - `button-position` is where the in-world buttons go (Unity world position), with its own drag handle. Empty puts them just under the screen; an empty `button-rotation` uses the screen's.

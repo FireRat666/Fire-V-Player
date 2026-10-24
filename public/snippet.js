@@ -108,17 +108,20 @@
     // The singer button (karaoke). With a position it's placed in the world (or from the screen,
     // with controls-follow-screen) instead of from the buttons. Its rotation then defaults to
     // the script tag's tilt (-30 180 0 in A-Frame, 30 -180 0 in Unity) turned with the screen.
+    // "0 0 0" counts as empty, like button-position: snippets default these to 0 0 0 so Unity
+    // shows X, Y and Z fields (an empty value shows as a single text box).
     const SINGER_TILT = [30, -180, 0];
+    const setVec = (name) => { const v = vec(attr(name), null); return v && v.some(n => n !== 0) ? v : null; };
     const singer = (name) => {
-      const pos = vec(attr('singer-button-position'), null);
-      if (!pos) return undefined; // the default, from the buttons
+      const pos = setVec('singer-button-position');
+      if (!pos) return name === 'singer-button-space' ? null : setVec(name) ? undefined : null; // the default, from the buttons
       if (name === 'singer-button-space') return 'world';
       if (name === 'singer-button-position') {
         if (!follow) return convert(fmt(pos), 'pos');
         const r = qRotate(screenQ, pos);
         return convert(fmt(round([screenPos[0] + r[0], screenPos[1] + r[1], screenPos[2] + r[2]])), 'pos');
       }
-      const rot = vec(attr('singer-button-rotation'), null);
+      const rot = setVec('singer-button-rotation');
       if (rot && !follow) return convert(fmt(rot), 'rot');
       return convert(fmt(qToEuler(qMul(screenQ, qEuler(rot || SINGER_TILT)))), 'rot');
     };
@@ -135,7 +138,6 @@
         if (name === 'singer-button-space' || name === 'singer-button-position' || name === 'singer-button-rotation') {
           const v = singer(name);
           if (v !== undefined) return v;
-          if (name === 'singer-button-space') return null;
         }
         if (follow) {
           const v = relative(name);

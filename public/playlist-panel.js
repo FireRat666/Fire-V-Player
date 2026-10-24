@@ -826,7 +826,17 @@ var FirePlaylistPanel = class {
     this.display(this.emptyLabel, !!empty);
   }
 
-  setThumb(slot, url) {
+  // YouTube's search thumbnails (e.g. .../hq720.jpg?sqp=...&rs=...) are often WebP despite the
+  // .jpg name, and Unity can't decode WebP, so they fail to load. /vi/<id>/mqdefault.jpg is
+  // always a JPEG (320x180, the same shape as the thumbnail box).
+  thumbUrl(url, link) {
+    const fromThumb = /^https?:\/\/i\d*\.ytimg\.com\/vi(?:_webp)?\/([a-zA-Z0-9_-]{11})\//.exec(String(url || ''));
+    const id = (fromThumb && fromThumb[1]) || (link && this.core.getId ? this.core.getId(link) : null);
+    return id ? `https://i.ytimg.com/vi/${id}/mqdefault.jpg` : url;
+  }
+
+  setThumb(slot, url, link) {
+    url = this.thumbUrl(url, link);
     const safe = url ? String(url).replace(/["\\\n\r]/g, '') : '';
     this.setStyle(slot.thumb, 'backgroundImage', safe ? `url("${safe}")` : 'none');
   }
@@ -852,7 +862,7 @@ var FirePlaylistPanel = class {
     this.setText(slot.title, `${i + 1}. ${votes}${v.title || 'Untitled'}`);
     const dur = v.duration ? this.timeCode(v.duration / 1000) : '';
     this.setText(slot.sub, `${isCurrent ? 'Now playing - ' : ''}Added by ${by}${dur ? '  -  ' + dur : ''}`);
-    this.setThumb(slot, v.thumbnail);
+    this.setThumb(slot, v.thumbnail, v.link);
 
     const defs = [];
     if (!isCurrent) {
@@ -878,7 +888,7 @@ var FirePlaylistPanel = class {
     this.setText(slot.title, `${i + 1}. ${s.name || 'Someone'}${me ? ' (you)' : ''}`);
     const dur = v.duration ? this.timeCode(v.duration / 1000) : '';
     this.setText(slot.sub, `will sing ${v.title || 'a song'}${dur ? '  -  ' + dur : ''}`);
-    this.setThumb(slot, v.thumbnail);
+    this.setThumb(slot, v.thumbnail, v.link);
 
     const defs = [];
     // The host can start any singer; a singer can start themselves when they're up next.
@@ -901,7 +911,7 @@ var FirePlaylistPanel = class {
     const channel = v.channel && v.channel.name ? v.channel.name : '';
     const dur = typeof v.duration === 'number' && v.duration > 0 ? this.timeCode(v.duration / 1000) : '';
     this.setText(slot.sub, [channel, dur].filter(Boolean).join('  -  '));
-    this.setThumb(slot, v.thumbnail);
+    this.setThumb(slot, v.thumbnail, v.link);
 
     if (this.karaoke) {
       this.setButtons(slot, this.isInQueue() ? [] : [{ text: 'Sing It', color: '#2e7d32', fn: () => this.singIt(v) }]);

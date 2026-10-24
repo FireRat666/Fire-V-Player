@@ -277,8 +277,10 @@ class VdoNinjaSource extends BaseMediaSource {
     this.volume = opts.volume;
     this.startedAt = performance.now();
     const f = this.frame = document.createElement('iframe');
-    f.src = opts.link;
-    f.allow = 'autoplay; fullscreen';
+    f.src = VdoNinjaSource.embedLink(opts.link);
+    // No fullscreen: on an in-world screen it leaves the player blank until the space is rejoined.
+    f.allow = 'autoplay';
+    f.allowFullscreen = false;
     Object.assign(f.style, { width: '100%', height: '100%', border: '0' });
     f.addEventListener('load', () => {
       this.ready = true;
@@ -287,6 +289,16 @@ class VdoNinjaSource extends BaseMediaSource {
       this.kick = setTimeout(() => { if (!this.destroyed) opts.requestClick(); }, 4000);
     });
     opts.container.appendChild(f);
+  }
+  // Hides VDO.Ninja's video control bar (picture-in-picture, fullscreen), which nobody can use
+  // on the in-world screen.
+  // The rest of the link is kept exactly as given.
+  static embedLink(link) {
+    link = String(link);
+    const hash = link.indexOf('#');
+    const base = hash < 0 ? link : link.slice(0, hash), tail = hash < 0 ? '' : link.slice(hash);
+    if (/[?&]nocontrols(=|&|$)/.test(base)) return link;
+    return base + (base.includes('?') ? '&' : '?') + 'nocontrols' + tail;
   }
   post(msg) {
     try { this.frame.contentWindow.postMessage(msg, '*'); } catch (e) {}
@@ -478,3 +490,12 @@ class MediaSwitch {
   getOption(a, b) { return this.source ? undefined : this.yt.getOption(a, b); }
 }
 window.MediaSwitch = MediaSwitch;
+
+// Fullscreen breaks the in-world screen until the space is rejoined, so leave it at once if any
+// embedded player (or its controls) asks for it.
+['fullscreenchange', 'webkitfullscreenchange'].forEach(name => document.addEventListener(name, () => {
+  const el = document.fullscreenElement || document.webkitFullscreenElement;
+  if (!el) return;
+  console.log('Fire-V-Player: leaving fullscreen');
+  try { (document.exitFullscreen || document.webkitExitFullscreen).call(document); } catch (e) {}
+}));

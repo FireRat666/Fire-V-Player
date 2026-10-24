@@ -142,7 +142,7 @@ These only work with `untrusted-links="true"` in the snippet, as they can come f
 |---|---|---|
 | Video or audio file | `https://.../movie.mp4` (also .webm, .mov, .m4v, .mp3, .m4a, .ogg) | Stays in sync. |
 | HLS stream | `https://.../index.m3u8` | Live streams play until someone skips; recorded ones stay in sync. The server must allow other sites to load it (CORS). |
-| VDO.Ninja | `https://vdo.ninja/?view=<stream id>`, or `?room=<room>&scene` for a whole room | Shown as VDO.Ninja's own page and plays until someone skips. Volume and mute work; there's no pause or seek. Links that would join a room or send video (`?push=`, `?room=` without `scene`) aren't accepted. |
+| VDO.Ninja | `https://vdo.ninja/?view=<stream id>`, or `?room=<room>&scene` for a whole room | Shown as VDO.Ninja's own page and plays until someone skips. Volume and mute work; there's no pause or seek. Its video controls (picture-in-picture, fullscreen) are hidden, as fullscreen would blank the screen. Links that would join a room or send video (`?push=`, `?room=` without `scene`) aren't accepted. |
 
 Without it, the server won't add them, and a player whose world doesn't allow them shows a notice instead of playing one. If a browser won't start a file with sound, it starts muted and the sound comes on at the first click on the screen.
 

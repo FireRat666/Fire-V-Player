@@ -89,9 +89,22 @@ class VideoElementSource extends BaseMediaSource {
   }
   tryPlay() {
     const p = this.el.play();
-    // If the browser won't start it with sound, start it muted rather than not at all.
+    // If the browser won't start it with sound, start it muted rather than not at all, and turn
+    // the sound on at the first click on the screen (which the browser counts as permission).
     if (p && p.catch) p.catch(err => {
-      if (err && err.name === 'NotAllowedError' && !this.el.muted) { this.el.muted = true; this.el.play().catch(() => {}); }
+      if (err && err.name === 'NotAllowedError' && !this.el.muted) {
+        this.el.muted = true;
+        this.el.play().catch(() => {});
+        this.autoMuted = true;
+        if (!this.unmuteOnClick) {
+          this.unmuteOnClick = () => {
+            if (this.autoMuted && !this.destroyed) { this.autoMuted = false; this.el.muted = !!this.wantMuted; }
+          };
+          document.addEventListener('pointerdown', this.unmuteOnClick, true);
+          document.addEventListener('click', this.unmuteOnClick, true);
+        }
+        this.opts.requestClick();
+      }
     });
   }
   play() { this.wantPaused = false; if (this.ready) this.tryPlay(); }
@@ -112,9 +125,13 @@ class VideoElementSource extends BaseMediaSource {
   setRate(r) { if (!this.live) this.el.playbackRate = r; }
   rate() { return this.el.playbackRate; }
   setVolume(v) { this.el.volume = Math.max(0, Math.min(1, Number(v) / 100)); }
-  setMuted(m) { this.el.muted = !!m; }
+  setMuted(m) { this.wantMuted = !!m; if (!this.autoMuted) this.el.muted = !!m; }
   destroy() {
     this.destroyed = true;
+    if (this.unmuteOnClick) {
+      document.removeEventListener('pointerdown', this.unmuteOnClick, true);
+      document.removeEventListener('click', this.unmuteOnClick, true);
+    }
     if (this.hls) this.hls.destroy();
     this.el.pause();
     this.el.removeAttribute('src');
@@ -128,6 +145,7 @@ class TwitchSource extends BaseMediaSource {
   constructor(opts, media) {
     super(opts);
     this.live = !!media.channel;
+    this.muted = !!opts.muted;
     this.div = document.createElement('div');
     this.div.id = 'twitch-' + Date.now();
     Object.assign(this.div.style, { width: '100%', height: '100%' });
@@ -147,6 +165,7 @@ class TwitchSource extends BaseMediaSource {
         this.setVolume(opts.volume);
         if (!this.live && this.pendingSeek > 0) p.seek(this.pendingSeek);
         this.wantPaused ? p.pause() : p.play();
+        this.kick = setTimeout(() => this.ensurePlaying(0), 3000);
       });
       p.addEventListener(Twitch.Player.PLAYING, () => {
         if (!this.live) this.reportDuration(p.getDuration());
@@ -154,8 +173,27 @@ class TwitchSource extends BaseMediaSource {
       if (Twitch.Player.OFFLINE) p.addEventListener(Twitch.Player.OFFLINE, () => opts.onError(`${media.channel} isn't live on Twitch right now.`));
     }).catch(err => opts.onError(err.message));
   }
-  play() { this.wantPaused = false; if (this.ready) this.p.play(); }
-  pause() { this.wantPaused = true; if (this.ready) this.p.pause(); }
+  // Twitch's player sometimes waits for a click before it starts (it did in Altspace). If it's still
+  // paused when it shouldn't be, ask it again, then have the world click the middle of the screen,
+  // which is Twitch's play button. It stops after two clicks, and never clicks a playing stream,
+  // as a click there would pause it.
+  ensurePlaying(tries) {
+    clearTimeout(this.kick);
+    if (this.destroyed || this.wantPaused || !this.p) return;
+    if (!this.p.isPaused()) {
+      if (!this.muted && this.p.getMuted()) this.p.setMuted(false); // it may have started muted
+      return;
+    }
+    if (tries === 0) this.p.play();
+    else if (tries <= 2) this.opts.requestClick();
+    else return;
+    this.kick = setTimeout(() => this.ensurePlaying(tries + 1), 2500);
+  }
+  play() {
+    this.wantPaused = false;
+    if (this.ready) { this.p.play(); this.kick = setTimeout(() => this.ensurePlaying(1), 2500); }
+  }
+  pause() { this.wantPaused = true; clearTimeout(this.kick); if (this.ready) this.p.pause(); }
   seek(t) {
     if (this.live) return;
     if (!this.ready) { this.pendingSeek = t; return; }
@@ -171,8 +209,47 @@ class TwitchSource extends BaseMediaSource {
   setMuted(m) { this.muted = !!m; if (this.ready) this.p.setMuted(!!m); }
   destroy() {
     this.destroyed = true;
+    clearTimeout(this.kick);
     try { if (this.p) this.p.pause(); } catch (e) {}
     this.div.remove();
+  }
+}
+
+// A Twitch clip, in Twitch's clip player. That player can't be controlled from the page: no
+// pause, seek or volume, and it doesn't say how long the clip is. So a clip isn't kept in sync
+// (it's under a minute), and mute reloads it muted or unmuted.
+class TwitchClipSource extends BaseMediaSource {
+  constructor(opts, media) {
+    super(opts);
+    this.live = true; // nothing to sync
+    this.clip = media.clip;
+    this.muted = !!opts.muted;
+    this.startedAt = performance.now();
+    this.load();
+  }
+  load() {
+    if (this.frame) this.frame.remove();
+    const f = this.frame = document.createElement('iframe');
+    f.src = `https://clips.twitch.tv/embed?clip=${encodeURIComponent(this.clip)}&parent=${encodeURIComponent(location.hostname)}&autoplay=true&muted=${this.muted}`;
+    f.allow = 'autoplay; fullscreen';
+    Object.assign(f.style, { width: '100%', height: '100%', border: '0' });
+    this.opts.container.appendChild(f);
+    this.ready = true;
+  }
+  play() { this.wantPaused = false; }
+  pause() { this.wantPaused = true; }
+  seek() {}
+  time() { return (performance.now() - this.startedAt) / 1000; }
+  state() { return MEDIA_STATE.PLAYING; }
+  setVolume() {}
+  setMuted(m) {
+    if (!!m === this.muted) return;
+    this.muted = !!m;
+    this.load();
+  }
+  destroy() {
+    this.destroyed = true;
+    if (this.frame) this.frame.remove();
   }
 }
 
@@ -237,8 +314,32 @@ class VimeoSource extends BaseMediaSource {
   }
 }
 
+// Shown instead of a link this world doesn't allow.
+class NoticeSource extends BaseMediaSource {
+  constructor(opts, text) {
+    super(opts);
+    this.live = true;
+    this.ready = true;
+    const d = this.el = document.createElement('div');
+    d.textContent = text;
+    Object.assign(d.style, { display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center',
+      width: '100%', height: '100%', padding: '0 10%', boxSizing: 'border-box', color: '#ddd', background: '#000',
+      font: '4vw sans-serif' });
+    opts.container.appendChild(d);
+  }
+  play() {}
+  pause() {}
+  seek() {}
+  time() { return 0; }
+  state() { return MEDIA_STATE.PAUSED; }
+  setVolume() {}
+  setMuted() {}
+  destroy() { this.el.remove(); }
+}
+
 class MediaSwitch {
-  // yt: the YouTube player. opts: { getId(link), onDuration(link, seconds), onError(message) }
+  // yt: the YouTube player. opts: { getId(link), onDuration(link, seconds), onError(message),
+  //   allowUntrusted() (may this viewer play files/streams?), requestClick() (click the screen's middle) }
   constructor(yt, opts) {
     this.yt = yt;
     this.opts = opts;
@@ -264,12 +365,20 @@ class MediaSwitch {
     this.stopSource();
     try { this.yt.stopVideo(); } catch (e) {}
     this.showYouTube(false);
+    // Files and streams from any site only play where this viewer's world allows them.
+    if (!MediaSources.isTrusted(media) && !(this.opts.allowUntrusted && this.opts.allowUntrusted())) {
+      this.source = new NoticeSource({ container: this.container }, MediaSources.UNTRUSTED_MESSAGE);
+      this.opts.onError(MediaSources.UNTRUSTED_MESSAGE);
+      return;
+    }
     const opts = {
       container: this.container, link, start: Number(start) || 0, volume: this.volume, muted: this.muted,
       onDuration: seconds => this.opts.onDuration(link, seconds),
-      onError: message => this.opts.onError(message)
+      onError: message => this.opts.onError(message),
+      requestClick: () => { if (this.opts.requestClick) this.opts.requestClick(); }
     };
     if (media.type === 'twitch') this.source = new TwitchSource(opts, media);
+    else if (media.type === 'twitchclip') this.source = new TwitchClipSource(opts, media);
     else if (media.type === 'vimeo') this.source = new VimeoSource(opts, media);
     else this.source = new VideoElementSource(opts, media.type === 'hls');
   }

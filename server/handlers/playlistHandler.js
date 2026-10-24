@@ -11,6 +11,7 @@ async function resolveVideoData(app, ws, v) {
   if (typeof v === 'string') {
     const videoId = app.getYoutubeId(v);
     if (!videoId) {
+      if (media.detect(v) && !media.allowedFor(ws, v)) throw new Error(media.UNTRUSTED_MESSAGE);
       const other = await media.resolveMediaLink(v); // Twitch, Vimeo, a file or stream
       if (other) return other;
       throw new Error("Invalid YouTube URL or ID");
@@ -26,6 +27,7 @@ async function resolveVideoData(app, ws, v) {
     // can play are accepted, and titles are kept to a sensible length.
     if (link && !app.getYoutubeId(link)) {
       if (!media.detect(link)) throw new Error("That link can't be played here.");
+      if (!media.allowedFor(ws, link)) throw new Error(media.UNTRUSTED_MESSAGE);
       if (!v.title) return { ...v, ...(await media.resolveMediaLink(link)) };
       return { ...v, link, title: String(v.title).slice(0, 200), duration: Number(v.duration) > 0 ? Number(v.duration) : 0 };
     }

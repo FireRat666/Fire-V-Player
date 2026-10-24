@@ -1,9 +1,17 @@
 const Commands = require('../../public/commands.js');
 const hostHandler = require('./hostHandler.js');
+const media = require('../media.js');
 
 async function addToPlayers(app, ws, video) {
   const player = app.videoPlayers[ws.i];
   if (!player) return;
+
+  // Songs from other sites follow the same rules as the playlist (see media.allowedFor).
+  const link = video && video.link;
+  if (!link || (!app.getYoutubeId(link) && (!media.detect(link) || !media.allowedFor(ws, link)))) {
+    app.send(ws, Commands.ERROR, { message: media.detect(link) ? media.UNTRUSTED_MESSAGE : "That song's link can't be played here." });
+    return;
+  }
 
   // Prevent a user from adding themselves to the queue more than once.
   if (player.singers.some(singer => singer.user.id === ws.u.id)) {

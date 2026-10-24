@@ -259,6 +259,8 @@ class App {
         if (msg.u) {
           ws.u = msg.u;
           ws.i = msg.data;
+          // The world's snippet may allow links from any site (untrusted-links="true").
+          ws.allowUntrusted = msg.untrusted === true;
           await this.createVideoPlayer(msg.data, msg.u, ws);
           console.log(msg.u.name, 'connected', msg.data, "host: ", this.videoPlayers[msg.data].host.name);
           this.getUserVideoPlayer(ws);
@@ -533,6 +535,11 @@ class App {
   async search(term, ws) {
     // Twitch, Vimeo and direct video/stream links become a single result, as a YouTube link does.
     if (media.detect(term) && media.detect(term).type !== 'youtube') {
+      if (!media.allowedFor(ws, term)) {
+        this.send(ws, Commands.SEARCH_RESULTS, []);
+        this.send(ws, Commands.ERROR, { message: media.UNTRUSTED_MESSAGE });
+        return;
+      }
       try {
         const video = await media.resolveMediaLink(term);
         if (video) this.send(ws, Commands.SEARCH_RESULTS, [video]);

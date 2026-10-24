@@ -232,7 +232,12 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
     this.player = window.MediaSwitch ? new MediaSwitch(this.yt, {
       getId: link => this.core.getId(link),
       onDuration: (link, seconds) => this.reportMediaDuration(link, seconds),
-      onError: message => this.core.showToast(message, 6000)
+      onError: message => this.core.showToast(message, 6000),
+      // Untrusted links only play if this viewer's own world allows them.
+      allowUntrusted: () => this.core.allowUntrusted === true,
+      // Asks this viewer's world to click the middle of their screen, for players (Twitch) that
+      // won't start on their own until someone does.
+      requestClick: () => this.core.sendMessage({ path: Commands.CLICK_BROWSER, data: { x: Math.round(window.innerWidth / 2), y: Math.round(window.innerHeight / 2) } })
     }) : this.yt;
   }
   // A file, stream or Twitch video's length isn't known until it loads, so the first player to

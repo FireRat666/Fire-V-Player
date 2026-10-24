@@ -31,6 +31,17 @@ async function resolveMediaLink(link) {
   if (!media || media.type === 'youtube') return null;
   link = String(link).trim();
 
+  if (media.type === 'twitchclip') {
+    // Twitch shares nothing about a clip without an API key, and its clip player can't report its
+    // length, so a clip gets 60 seconds, the longest a Twitch clip can be.
+    return {
+      title: media.channel ? `Clip from ${media.channel} (Twitch)` : 'Twitch clip',
+      thumbnail: '',
+      duration: 60000,
+      link: media.channel ? `https://www.twitch.tv/${media.channel}/clip/${media.clip}` : `https://clips.twitch.tv/${media.clip}`
+    };
+  }
+
   if (media.type === 'twitch') {
     if (media.channel) {
       const page = `https://www.twitch.tv/${media.channel}`;
@@ -71,4 +82,11 @@ async function resolveMediaLink(link) {
   return { title: MediaSources.nameFromLink(link), thumbnail: '', duration: 0, link };
 }
 
-module.exports = { resolveMediaLink, detect: MediaSources.detect };
+// Whether this connection may add the link: YouTube, Twitch and Vimeo always; other links only when
+// the world's snippet sets untrusted-links="true" (sent when the world joins the room).
+function allowedFor(ws, link) {
+  const m = MediaSources.detect(link);
+  return MediaSources.isTrusted(m) || !!(ws && ws.allowUntrusted);
+}
+
+module.exports = { resolveMediaLink, detect: MediaSources.detect, allowedFor, UNTRUSTED_MESSAGE: MediaSources.UNTRUSTED_MESSAGE };

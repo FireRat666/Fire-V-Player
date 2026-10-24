@@ -59,6 +59,7 @@ In a Creator SDK world (`Assets/WebRoot/index.html`), add the player as a snippe
   volume="10"
   mute="false"
   captions="true"
+  untrusted-links="false"
   hand-controls="true"
   position="0 1.5 2"
   rotation="0 0 0"
@@ -124,15 +125,25 @@ Whoever runs the karaoke should take over the player first, as only the host can
 
 ### Links from other sites
 
-Search (and add by link) takes more than YouTube links. Paste one and it shows as a single result to add or play:
+Search (and add by link) takes more than YouTube links. Paste one and it shows as a single result to add or play.
+
+These always work, as the sites moderate what's on them:
 
 | Link | Example | Notes |
 |---|---|---|
-| Twitch channel | `https://www.twitch.tv/<channel>` | Live, so it plays until someone skips. Seek and skip do nothing. |
+| Twitch channel | `https://www.twitch.tv/<channel>` | Live, so it plays until someone skips. Seek and skip do nothing. If Twitch waits for a click to start, the player clicks the screen for you (twice at most). |
 | Twitch video (VOD) | `https://www.twitch.tv/videos/<id>` | Stays in sync like YouTube. |
+| Twitch clip | `https://www.twitch.tv/<channel>/clip/<id>` or `https://clips.twitch.tv/<id>` | Twitch's clip player can't be controlled, so clips aren't kept in sync, the volume buttons and spatial volume don't change them (mute does), and each gets 60 seconds (the longest a clip can be) before the playlist moves on. |
 | Vimeo | `https://vimeo.com/<id>` | Only videos whose owner allows embedding on other sites. |
+
+These only work with `untrusted-links="true"` in the snippet, as they can come from any site:
+
+| Link | Example | Notes |
+|---|---|---|
 | Video or audio file | `https://.../movie.mp4` (also .webm, .mov, .m4v, .mp3, .m4a, .ogg) | Stays in sync. |
 | HLS stream | `https://.../index.m3u8` | Live streams play until someone skips; recorded ones stay in sync. The server must allow other sites to load it (CORS). |
+
+Without it, the server won't add them, and a player whose world doesn't allow them shows a notice instead of playing one. If a browser won't start a file with sound, it starts muted and the sound comes on at the first click on the screen.
 
 Files, streams and Twitch videos show no length until the first player loads them; after that the playlist moves on when they end. Captions and the "unavailable in your region" check only apply to YouTube. Pages that need a login can't be played. Dailymotion isn't supported, because its player now needs a player ID from a Dailymotion account.
 
@@ -165,6 +176,7 @@ All parameters are optional unless marked as **(Required)**.
 | `youtube` | The URL of a single YouTube video to use as the default "silent" video when nothing is playing. | A silent visual video |
 | `volume` | The initial volume, from `0` to `100`. | `40` |
 | `mute` | Whether the player should start muted. | `false` |
+| `untrusted-links` | Whether links from any site (video files, `.m3u8` streams) can be played, as well as YouTube, Twitch and Vimeo. Off by default, as those links aren't moderated. Each viewer's own world must allow them for them to play on their screen. See [Links from other sites](#links-from-other-sites). | `false` |
 | `captions` | Whether closed captions start on. Each viewer can turn them on or off in the panel's More view, and their choice is remembered on their device. | `true` |
 | `resolution` | The resolution (width in pixels) of the browser surface. Higher values are crisper but use more resources. | `1600` |
 

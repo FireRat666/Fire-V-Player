@@ -722,6 +722,7 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
     this.setOrDefault("volume", '40');
     this.setOrDefault("mute", 'false');
     this.setOrDefault("captions", 'true');
+    this.setOrDefault("untrusted-links", 'false');
     this.setOrDefault("is3d", 'false');
     this.setOrDefault("announce", 'true');
     this.setOrDefault("announce-four-twenty", 'false');
@@ -758,6 +759,9 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
     // Closed captions, for this viewer only. The setting is the default; loadCaptionsPref() and
     // setCaptions() change it.
     this.captions = String(this.params.captions).toLowerCase() !== 'false';
+    // Links from any site (video files, streams) besides YouTube, Twitch and Vimeo. Off unless the
+    // world's owner turns it on, as those links aren't moderated.
+    this.allowUntrusted = String(this.params["untrusted-links"]).toLowerCase() === 'true';
     if(this.params["one-for-each-instance"] === "true" && window.user && window.user.instance) {
         this.params.instance += window.user.instance;
     }

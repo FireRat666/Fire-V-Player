@@ -21,6 +21,7 @@ var MediaSources = (() => {
   //   file                       - a video/audio file (.mp4, .webm, .mp3, ...)
   //   hls                        - an HLS stream (.m3u8), live or recorded
   //   twitch  { channel | video } - a live Twitch channel, or a recorded Twitch video (VOD)
+  //   twitchclip { clip, channel } - a Twitch clip (channel is '' for clips.twitch.tv links)
   //   vimeo   { id, hash }        - a Vimeo video (hash is the key for unlisted videos)
   function detect(link) {
     const u = parseUrl(link);
@@ -30,6 +31,19 @@ var MediaSources = (() => {
 
     if (host === 'youtu.be' || host === 'youtube.com' || host.endsWith('.youtube.com') || host === 'youtube-nocookie.com') {
       return { type: 'youtube' };
+    }
+
+    // Clips: twitch.tv/<channel>/clip/<slug>, clips.twitch.tv/<slug>, clips.twitch.tv/embed?clip=<slug>
+    const CLIP = /^[A-Za-z0-9_-]{3,100}$/;
+    if (host === 'clips.twitch.tv') {
+      const slug = parts[0] === 'embed' ? (u.searchParams.get('clip') || '') : (parts[0] || '');
+      return CLIP.test(slug) ? { type: 'twitchclip', clip: slug, channel: '' } : null;
+    }
+    if (host === 'twitch.tv' && parts[1] === 'clip' && CLIP.test(parts[2] || '') && /^[a-zA-Z0-9_]{2,25}$/.test(parts[0])) {
+      return { type: 'twitchclip', clip: parts[2], channel: parts[0].toLowerCase() };
+    }
+    if (host === 'twitch.tv' && parts[0] === 'clip' && CLIP.test(parts[1] || '')) {
+      return { type: 'twitchclip', clip: parts[1], channel: '' };
     }
 
     if (host === 'twitch.tv' || host === 'player.twitch.tv') {
@@ -74,7 +88,15 @@ var MediaSources = (() => {
     return name.slice(0, 120);
   }
 
-  return { detect, nameFromLink, parseUrl };
+  // YouTube, Twitch and Vimeo moderate what's on them. Files and streams can come from any site,
+  // so they only play where the snippet sets untrusted-links="true".
+  const TRUSTED = new Set(['youtube', 'twitch', 'twitchclip', 'vimeo']);
+  function isTrusted(media) {
+    return !!media && TRUSTED.has(media.type);
+  }
+  const UNTRUSTED_MESSAGE = 'This world only plays YouTube, Twitch and Vimeo links. Its owner can allow other links with the untrusted-links snippet setting.';
+
+  return { detect, nameFromLink, parseUrl, isTrusted, UNTRUSTED_MESSAGE };
 })();
 
 if ((typeof process !== 'undefined') && process.release && process.release.name.search(/node|io.js/) !== -1) {

@@ -148,7 +148,7 @@ var FirePlaylistPanel = class {
   async button(parent, text, onClick, styles) {
     const el = await this.ready(this.ui.CreateButton(parent));
     el.SetStyles(Object.assign({
-      backgroundColor: '#00838f', color: '#ffffff', fontSize: '20px',
+      backgroundColor: '#00838f', color: '#ffffff', fontSize: '20px', flexShrink: 0,
       paddingLeft: '16px', paddingRight: '16px', paddingTop: '8px', paddingBottom: '8px',
       marginLeft: '4px', marginRight: '4px', marginTop: '4px', marginBottom: '4px',
       borderRadius: '10px', borderWidth: '0px', backgroundImage: 'none'
@@ -172,8 +172,11 @@ var FirePlaylistPanel = class {
     try { field.placeholder = placeholder; } catch (_) {}
     // The SDK theme makes the inner input transparent and the text colour can't be reached from JS,
     // so give the field itself a light box: the dark text stays readable on it.
+    // flexBasis 0 and minWidth 0 let the field shrink to the space left beside its buttons, so a long
+    // link scrolls inside it instead of widening it and pushing the buttons off the panel.
     field.SetStyles({
-      flexGrow: 1, fontSize: '22px', height: '48px', marginRight: '6px',
+      flexGrow: 1, flexShrink: 1, flexBasis: '0px', minWidth: '0px', overflow: 'hidden',
+      fontSize: '22px', height: '48px', marginRight: '6px',
       backgroundColor: '#e8e8ef', color: '#111111',
       borderWidth: '2px', borderColor: '#9a9aa8', borderRadius: '8px',
       paddingLeft: '10px', paddingRight: '10px'
@@ -382,7 +385,7 @@ var FirePlaylistPanel = class {
     const seekRow = await row(this.seekSection);
     this.seekField = await this.textField(seekRow, 'Time, e.g. 95 or 1:35', v => { this.seekQuery = v; }, () => this.doSeek());
     if (this.seekField) {
-      this.seekField.SetStyles({ flexGrow: 0, width: '300px' });
+      this.seekField.SetStyles({ flexGrow: 0, flexBasis: '300px', width: '300px' });
       await this.button(seekRow, 'Seek', () => this.doSeek(), { backgroundColor: '#1565c0' });
     }
     await this.button(seekRow, '-30s', () => this.seekBy(-30), { backgroundColor: GREY });

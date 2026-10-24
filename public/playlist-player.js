@@ -100,13 +100,13 @@
         }
 
         await core.setupWebsocket("space", d => core.parseMessage(d), () => {
-          core.sendMessage({path: "instance", data: core.params.instance, u: window.user});
+          core.sendMessage({path: "instance", data: core.params.instance, u: window.user, untrusted: core.allowUntrusted === true});
           // The current mode, which may have changed since the player started.
           core.sendMessage({path: Commands.SET_INSTANCE_MODE, data: core.getMode()});
         });
         // Pass the mode to the player iframe so it knows which skip time to use.
         const proto = this.core.hostProtocol || (this.core.hostUrl.startsWith('localhost') || this.core.hostUrl.startsWith('127.0.0.1') ? 'http' : 'https');
-        const url = `${proto}://${this.core.hostUrl}/?youtube=${encodeURIComponent(this.core.params.youtube)}&start=${this.core.params.start}&playlist=${this.core.params.playlist}&mute=${this.core.params.mute}&volume=${this.core.tempVolume}&instance=${encodeURIComponent(this.core.params.instance)}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}&mode=${mode}&captions=${core.loadCaptionsPref()}`;
+        const url = `${proto}://${this.core.hostUrl}/?youtube=${encodeURIComponent(this.core.params.youtube)}&start=${this.core.params.start}&playlist=${this.core.params.playlist}&mute=${this.core.params.mute}&volume=${this.core.tempVolume}&instance=${encodeURIComponent(this.core.params.instance)}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}&mode=${mode}&captions=${core.loadCaptionsPref()}&untrusted-links=${core.allowUntrusted === true}`;
         this.core.setupBrowserElement(url);
         if (karaoke) this.core.setupJoinLeaveButton();
 

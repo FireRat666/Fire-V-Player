@@ -4,10 +4,10 @@ Fire-V-Player is designed to be embedded in the **Banter** VR social platform, a
 
 ## Modes
 
-The player has two primary modes, determined by which script you include:
+The player has two primary modes, determined by which script you include (or, for a snippet, its `mode` setting):
 
-- **Playlist Mode:** The default collaborative player. Use `playlist.js`.
-- **Karaoke Mode:** A turn-based system where users join a queue to sing. Use `karaoke.js`.
+- **Playlist Mode:** The default collaborative player. Use `playlist.js`, or `mode="playlist"`.
+- **Karaoke Mode:** A turn-based system where users join a queue to sing. Use `karaoke.js`, or `mode="karaoke"`.
 
 ## Basic Example (Playlist Mode)
 
@@ -43,14 +43,15 @@ To use Karaoke mode, simply change the `src` to point to `karaoke.js`. The playe
 
 ## SideQuest / Altspace Creator SDK (Snippet)
 
-In a Creator SDK world (`Assets/WebRoot/index.html`), add the player as a snippet. Playlist mode only.
+In a Creator SDK world (`Assets/WebRoot/index.html`), add the player as a snippet. `mode="playlist"` (the default) runs a shared playlist; `mode="karaoke"` runs a singer queue instead.
 
 ```html
 <!-- snippet section -->
 <bs-snippet name="fire-v-player" title="Fire-V-Player" single="true"
-  description="Synced YouTube player with a shared playlist and an in-world playlist panel."
+  description="Synced YouTube player with an in-world panel. mode: playlist (shared playlist) or karaoke (singer queue)."
   script="https://vidya.firer.at/snippet.js"
   room=""
+  mode="playlist"
   playlist="PLZWiw-xxQ4SPDmADhvme7-pU2bx3s7nKX"
   youtube=""
   volume="10"
@@ -70,7 +71,9 @@ In a Creator SDK world (`Assets/WebRoot/index.html`), add the player as a snippe
   playlist-ui="auto"
   playlist-panel-position="1.8 1.5 1.85"
   playlist-panel-rotation="0 20 0"
-  playlist-panel-scale="1">
+  playlist-panel-scale="1"
+  singer-button-position=""
+  singer-button-rotation="">
   <bs-gizmo type="position" attribute="position"/>
   <bs-gizmo type="plane" attribute="position" size="2 1.125" rotation="0 180 0"/>
   <bs-gizmo type="position" attribute="playlist-panel-position"/>
@@ -84,6 +87,8 @@ Settings are the same as the script attributes below, except:
 
 - `position` and `rotation` are **Unity world values**, as for every snippet, so the Scene-view gizmo shows where the screen will be. (Script-tag values use A-Frame axes, where Z is flipped: script `position="0 1.5 -2"` is snippet `position="0 1.5 2"`.)
 - `scale` can be a single number. The screen is 1 m wide and 0.5625 m tall at scale 1, so the gizmo's `size` should be `scale × 1` by `scale × 0.5625`.
+- `mode` is `playlist` or `karaoke`. Empty means playlist. Both modes use the same settings; `playlist` (the default YouTube playlist) only matters in playlist mode.
+- `singer-button-position` and `singer-button-rotation` (karaoke) place the Join/Leave Queue button, as an offset from the in-world buttons. Empty uses the default, below and in front of them. The `box-trigger-*` settings from the parameter reference work too.
 - The room ID is `room`, not `instance`: Unity's BSSnippet component writes its own `instance` attribute. Without `room`, the space URL is used, so each space has its own room.
 - `playlist-panel-position` and `playlist-panel-rotation` place the in-world panel in the world (Unity values), and it has its own drag handle in the Scene view. Clear `playlist-panel-position` to put the panel beside the screen instead; `playlist-panel-rotation` is then relative to the screen.
 - `button-position` is where the in-world buttons go (Unity world position), with its own drag handle. Empty puts them just under the screen; an empty `button-rotation` uses the screen's.
@@ -103,6 +108,15 @@ In these worlds the Playlist button opens an **in-world panel** beside the scree
 The Creator SDK client currently doesn't open the 2D playlist page, so the panel has no button for it.
 
 When someone can't play a video, the panel shows the suggested replacement with Replace (host) and Dismiss.
+
+In karaoke mode the Singers button (and the Join/Leave Queue button) opens the same panel as a **Singers panel**:
+
+- **Now singing** shows who is singing which song. The host and the person singing get **Restart Song** and **Stop Song**.
+- **Singers** is the queue. The host can **Play & Sing** anyone, move singers **Up** / **Down** and **Remove** them. The singer at the top can start their own song, and anyone can **Remove Me**.
+- **Search** finds a song (or takes a pasted video link). **Sing It** adds you to the queue with that song. You can be in the queue once.
+- **More...** has the host controls (lock, take over, Auto Advance, which starts the next singer when a song ends), seek, and your own player's skip and Auto Sync.
+
+Whoever runs the karaoke should take over the player first, as only the host can start other people's songs.
 
 ---
 

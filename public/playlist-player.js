@@ -1,7 +1,7 @@
-// Shared start-up for playlist mode.
-// Used by playlist.js (a <script> tag in the world page) and snippet.js (a <bs-snippet> element).
-// `source` is anything with `src` and `getAttribute(name)`: the original <script> element,
-// or a small adapter around a <bs-snippet> element.
+// Shared start-up for both modes (playlist and karaoke).
+// Used by playlist.js / karaoke.js (a <script> tag in the world page) and snippet.js (a <bs-snippet>
+// element). `source` is anything with `src` and `getAttribute(name)`: the original <script>
+// element, or a small adapter around a <bs-snippet> element.
 (() => {
   const FVP = window.FireVPlayer = window.FireVPlayer || {};
   if (FVP.startPlaylistPlayer) return;
@@ -46,59 +46,70 @@
     document.body.appendChild(s);
   });
 
-  FVP.startPlaylistPlayer = async (source) => {
-    if (window.playlistPlayerInstance || FVP.playlistStarting) {
-      console.warn("Vidya: a playlist player is already running on this page. Only one is supported.");
+  // Only one player (of either mode) runs on a page.
+  const running = () => window.playlistPlayerInstance || window.karaokePlayerInstance;
+
+  FVP.startPlayer = async (source, mode) => {
+    mode = mode === 'karaoke' ? 'karaoke' : 'playlist';
+    if (running() || FVP.playerStarting) {
+      console.warn("Vidya: a player is already running on this page. Only one is supported.");
       return;
     }
-    FVP.playlistStarting = true;
+    FVP.playerStarting = true;
     try {
-      return await startPlaylistPlayer(source);
+      return await startPlayer(source, mode);
     } finally {
-      // A failed start can be retried; a successful one is guarded by playlistPlayerInstance.
-      FVP.playlistStarting = false;
+      // A failed start can be retried; a successful one is guarded by running().
+      FVP.playerStarting = false;
     }
   };
+  FVP.startPlaylistPlayer = (source) => FVP.startPlayer(source, 'playlist');
+  FVP.startKaraokePlayer = (source) => FVP.startPlayer(source, 'karaoke');
 
-  const startPlaylistPlayer = async (source) => {
+  const startPlayer = async (source, mode) => {
     const origin = new URL(source.src).origin;
-    await FVP.waitForBanter("playlist");
+    const karaoke = mode === 'karaoke';
+    await FVP.waitForBanter(mode);
 
     if (typeof BasePlayer === 'undefined') {
       const loaded = await FVP.loadScript(`${origin}/base-player.js`);
       if (!loaded || typeof BasePlayer === 'undefined') {
-        console.error(`Vidya: could not load ${origin}/base-player.js, so the playlist player can't start.`);
+        console.error(`Vidya: could not load ${origin}/base-player.js, so the ${mode} player can't start.`);
         return;
       }
     }
 
-    const PlaylistPlayer = class extends BasePlayer {
+    const Player = class extends BasePlayer {
       constructor() {
         super(source);
-        this.ready = this.init().catch(e => console.error("Vidya: playlist player failed to start.", e));
+        this.ready = this.init().catch(e => console.error(`Vidya: ${mode} player failed to start.`, e));
       }
 
       async init() {
         // Run the common initialization sequence from BasePlayer.
         await super.init();
+        this.core.isKaraoke = karaoke;
 
         await this.core.setupWebsocket("space", d => this.core.parseMessage(d), () => {
           this.core.sendMessage({path: "instance", data: this.core.params.instance, u: window.user});
-          this.core.sendMessage({path: Commands.SET_INSTANCE_MODE, data: 'playlist'});
+          this.core.sendMessage({path: Commands.SET_INSTANCE_MODE, data: mode});
         });
         // Pass the mode to the player iframe so it knows which skip time to use.
         const proto = this.core.hostProtocol || (this.core.hostUrl.startsWith('localhost') || this.core.hostUrl.startsWith('127.0.0.1') ? 'http' : 'https');
-        const url = `${proto}://${this.core.hostUrl}/?youtube=${encodeURIComponent(this.core.params.youtube)}&start=${this.core.params.start}&playlist=${this.core.params.playlist}&mute=${this.core.params.mute}&volume=${this.core.tempVolume}&instance=${encodeURIComponent(this.core.params.instance)}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}&mode=playlist`;
+        const url = `${proto}://${this.core.hostUrl}/?youtube=${encodeURIComponent(this.core.params.youtube)}&start=${this.core.params.start}&playlist=${this.core.params.playlist}&mute=${this.core.params.mute}&volume=${this.core.tempVolume}&instance=${encodeURIComponent(this.core.params.instance)}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}&mode=${mode}`;
         this.core.setupBrowserElement(url);
+        if (karaoke) this.core.setupJoinLeaveButton();
 
-        // In the new SDK the 2D menu page may not be available, so the playlist button
+        // In the new SDK the 2D menu page may not be available, so the Playlist / Singers button
         // opens an in-world UI Toolkit panel instead.
         if (this.core.shouldUsePlaylistPanel()) {
           await this.core.setupPlaylistPanel();
         }
       }
     };
-    window.playlistPlayerInstance = new PlaylistPlayer();
-    return window.playlistPlayerInstance;
+    const instance = new Player();
+    if (karaoke) window.karaokePlayerInstance = instance;
+    else window.playlistPlayerInstance = instance;
+    return instance;
   };
 })();

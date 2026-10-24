@@ -372,7 +372,7 @@ var Core = class {
   // "auto" = panel whenever the SDK has the UI system. (The SideQuest/Altspace client can define a
   // window.openPage that doesn't open anything, so its presence doesn't mean the page works.)
   shouldUsePlaylistPanel() {
-    if (!window.isBanter || this.isKaraoke) return false;
+    if (!window.isBanter) return false;
     const hasUi = !!(window.BS && (BS.UI || BS.BanterUI));
     const mode = String(this.params["playlist-ui"] || 'auto').toLowerCase();
     const use = mode === 'page' ? false : hasUi;
@@ -726,6 +726,33 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
           this.player.players = json.data.players;
           // The server now sends the list pre-sorted. The client should not re-sort it.
         }
+        break;
+      // Karaoke: keep the singer queue in step, for the Singers panel and the box trigger.
+      case Commands.SINGER_ADDED:
+        if (this.player && json.data && json.data.player) {
+          if (!Array.isArray(this.player.players)) this.player.players = [];
+          if (!this.player.players.some(p => p.id === json.data.player.id)) this.player.players.push(json.data.player);
+        }
+        break;
+      case Commands.SINGER_REMOVED:
+        if (this.player && Array.isArray(this.player.players) && json.data) {
+          this.player.players = this.player.players.filter(p => p.id !== json.data.userId);
+        }
+        break;
+      case Commands.SINGER_MOVED:
+        if (this.player && Array.isArray(this.player.players) && json.data) {
+          const { oldIndex, newIndex } = json.data;
+          const list = this.player.players;
+          if (oldIndex >= 0 && oldIndex < list.length && newIndex >= 0 && newIndex < list.length) {
+            const [moved] = list.splice(oldIndex, 1);
+            list.splice(newIndex, 0, moved);
+          } else {
+            this.requestState();
+          }
+        }
+        break;
+      case Commands.AUTO_ADVANCE_STATE_CHANGED:
+        if (this.player && json.data) this.player.autoAdvance = json.data.autoAdvance;
         break;
       case Commands.SYNC_TIME:
         json.volume = this.tempVolume;

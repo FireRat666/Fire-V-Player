@@ -1,7 +1,8 @@
 <bs-snippet name="fire-v-player" title="Fire-V-Player" single="true"
-  description="Synced YouTube player with a shared playlist and an in-world playlist panel."
+  description="Synced YouTube player with an in-world panel. mode: playlist (shared playlist) or karaoke (singer queue)."
   script="https://vidya.firer.at/snippet.js"
   room=""
+  mode="playlist"
   playlist="PLZWiw-xxQ4SPDmADhvme7-pU2bx3s7nKX"
   youtube=""
   volume="10"
@@ -21,7 +22,9 @@
   playlist-ui="auto"
   playlist-panel-position="1.8 1.5 1.85"
   playlist-panel-rotation="0 20 0"
-  playlist-panel-scale="1">
+  playlist-panel-scale="1"
+  singer-button-position=""
+  singer-button-rotation="">
   <bs-gizmo type="position" attribute="position"/>
   <bs-gizmo type="plane" attribute="position" size="2 1.125" rotation="0 180 0"/>
   <bs-gizmo type="position" attribute="playlist-panel-position"/>

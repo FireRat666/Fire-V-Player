@@ -4,7 +4,10 @@
 //     script="https://vidya.firer.at/snippet.js"
 //     room="my-room" position="0 1.5 2" rotation="0 0 0" scale="2" ...></bs-snippet>
 //
-// Settings are the same as playlist.js's script attributes (see USAGE.md), except:
+// mode="playlist" (the default) runs a shared playlist, mode="karaoke" a singer queue, as with
+// playlist.js / karaoke.js. Both open an in-world panel from the Playlist / Singers button.
+//
+// Settings are the same as playlist.js's and karaoke.js's script attributes (see USAGE.md), except:
 // - position / rotation are Unity world values, like every snippet, so the Scene-view gizmo
 //   shows where the screen will be. They are converted to the player's A-Frame units here.
 // - scale may be a single number.
@@ -100,8 +103,10 @@
       return undefined;
     };
 
+    const karaoke = attr('mode').toLowerCase() === 'karaoke';
     return {
-      src: `${scriptUrl.origin}/playlist.js`,
+      mode: karaoke ? 'karaoke' : 'playlist',
+      src: `${scriptUrl.origin}/${karaoke ? 'karaoke' : 'playlist'}.js`,
       snippet: el,
       getAttribute(name) {
         // Not the element's own "instance" (BSSnippet's per-placement id): without a room the
@@ -144,11 +149,12 @@
     }
     ensureScene();
     const source = adapter(els[0]);
-    if (!(window.FireVPlayer && window.FireVPlayer.startPlaylistPlayer)) {
+    if (!(window.FireVPlayer && window.FireVPlayer.startPlayer)) {
       const ok = await loadScript(`${new URL(source.src).origin}/playlist-player.js`);
       if (!ok) return;
     }
-    window.FireVPlayer.startPlaylistPlayer(source);
+    console.log(`Vidya (snippet): starting in ${source.mode} mode.`);
+    window.FireVPlayer.startPlayer(source, source.mode);
   };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run);

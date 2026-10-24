@@ -5,16 +5,21 @@
 // in-world script's websocket (core.ws); the server already sends that socket every playlist
 // update, and replies to searches on the socket that asked.
 //
+// In karaoke mode (core.isKaraoke) the same panel is the Singers panel: the list is the singer
+// queue, search results have "Sing It" to join the queue, and the host controls include Auto
+// Advance instead of the playlist ones.
+//
 // Each user gets their own local panel. It sits beside the screen and is shown/hidden by the
 // playlist button. It hides by moving out of view, because deactivating a UI Toolkit document
 // can drop the elements created at runtime.
 var FirePlaylistPanel = class {
   constructor(core) {
     this.core = core;
+    this.karaoke = !!core.isKaraoke;
     this.W = 1100;            // panel resolution in pixels
     this.H = 940;
     this.rowsPerPage = 6;
-    this.tab = 'playlist';    // 'playlist' | 'search'
+    this.tab = 'playlist';    // 'playlist' (the singer queue in karaoke mode) | 'search'
     this.page = 0;
     this.searchPage = 0;
     this.searchResults = [];
@@ -51,6 +56,23 @@ var FirePlaylistPanel = class {
   isHost() {
     const p = this.core.player;
     return !!(p && p.host && window.user && p.host.id === window.user.id);
+  }
+
+  // The list on the first tab: the playlist, or in karaoke mode the singer queue.
+  listItems() {
+    const p = this.core.player || {};
+    return (this.karaoke ? p.players : p.playlist) || [];
+  }
+
+  isInQueue() {
+    return !!(window.user && this.listItems().some(s => s.id === window.user.id));
+  }
+
+  // The person singing now (karaoke mode).
+  currentSinger() {
+    const p = this.core.player;
+    const track = p && p.playlist && p.playlist[p.currentTrack];
+    return track && track.user ? track.user : null;
   }
 
   timeCode(seconds) {
@@ -233,7 +255,7 @@ var FirePlaylistPanel = class {
 
     // Header
     const header = await row(rootEl);
-    await this.label(header, 'Fire-V-Player', { fontSize: '30px', fontWeight: 'bold', flexGrow: 1 });
+    await this.label(header, this.karaoke ? 'Karaoke' : 'Fire-V-Player', { fontSize: '30px', fontWeight: 'bold', flexGrow: 1 });
     this.hostLabel = await this.label(header, '', { fontSize: '20px', color: '#bbbbbb', marginRight: '12px' });
     await this.button(header, 'Refresh', () => this.refresh(true), { backgroundColor: GREY });
     this.moreBtn = await this.button(header, 'More...', () => this.setView(this.view === 'more' ? 'main' : 'more'), { backgroundColor: GREY });
@@ -259,6 +281,11 @@ var FirePlaylistPanel = class {
     this.pauseBtn = await this.button(controls, 'Pause', () => this.send(Commands.TOGGLE_PAUSE));
     this.ffBtn = await this.button(controls, 'Skip >>', () => this.core.forward());
     this.nextTrackBtn = await this.button(controls, 'Next', () => this.changeTrack(1));
+    if (this.karaoke) {
+      // The host or the person singing can restart or stop the song.
+      this.restartBtn = await this.button(controls, 'Restart Song', () => this.send(Commands.RESTART_SONG));
+      this.stopBtn = await this.button(controls, 'Stop Song', () => this.send(Commands.STOP), { backgroundColor: '#c62828' });
+    }
     await this.div(controls, { flexGrow: 1 });
     await this.button(controls, 'Vol -', () => { this.core.volume(false); this.renderSoon(); }, { backgroundColor: GREY });
     this.volLabel = await this.label(controls, '', { fontSize: '20px', width: '110px', textAlign: 'center' });
@@ -275,7 +302,7 @@ var FirePlaylistPanel = class {
     this.mainView = await this.div(rootEl, { display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, overflow: 'hidden' });
 
     const tabs = await row(this.mainView, { marginTop: '6px' });
-    this.tabPlaylistBtn = await this.button(tabs, 'Playlist', () => this.setTab('playlist'));
+    this.tabPlaylistBtn = await this.button(tabs, this.karaoke ? 'Singers' : 'Playlist', () => this.setTab('playlist'));
     this.tabSearchBtn = await this.button(tabs, 'Search', () => this.setTab('search'));
     await this.div(tabs, { flexGrow: 1 });
     await this.button(tabs, '<', () => this.changePage(-1), { backgroundColor: GREY });
@@ -283,7 +310,8 @@ var FirePlaylistPanel = class {
     await this.button(tabs, '>', () => this.changePage(1), { backgroundColor: GREY });
 
     this.searchRow = await row(this.mainView, { marginTop: '4px' });
-    this.searchField = await this.textField(this.searchRow, 'Search YouTube, or paste a video / playlist link', v => { this.searchQuery = v; }, () => this.doSearch());
+    const searchHint = this.karaoke ? 'Search for a song to sing, or paste a video link' : 'Search YouTube, or paste a video / playlist link';
+    this.searchField = await this.textField(this.searchRow, searchHint, v => { this.searchQuery = v; }, () => this.doSearch());
     if (this.searchField) {
       await this.button(this.searchRow, 'Search', () => this.doSearch(), { backgroundColor: '#1565c0' });
     } else {
@@ -336,12 +364,17 @@ var FirePlaylistPanel = class {
       if (this.isHost()) this.send(Commands.TOGGLE_CAN_TAKE_OVER, !player.canTakeOver);
       else this.send(Commands.TAKE_OVER);
     });
-    this.votingBtn = await this.button(hostRow, 'Voting: Off', () => this.send(Commands.TOGGLE_VOTE));
-    this.clearBtn = await this.button(hostRow, 'Clear Playlist', () => this.send(Commands.CLEAR_PLAYLIST), { backgroundColor: '#c62828' });
-    this.loadDefaultBtn = await this.button(hostRow, 'Load Default Playlist', () => {
-      this.send(Commands.FROM_PLAYLIST, { id: this.core.params.playlist, shouldClear: true, fromPlaylist: true });
-      this.setStatus('Loading playlist...');
-    }, { backgroundColor: '#2e7d32' });
+    if (this.karaoke) {
+      // Auto Advance: when a song ends, the next singer starts by themselves.
+      this.autoAdvanceBtn = await this.button(hostRow, 'Auto Advance: Off', () => this.send(Commands.TOGGLE_AUTO_ADVANCE));
+    } else {
+      this.votingBtn = await this.button(hostRow, 'Voting: Off', () => this.send(Commands.TOGGLE_VOTE));
+      this.clearBtn = await this.button(hostRow, 'Clear Playlist', () => this.send(Commands.CLEAR_PLAYLIST), { backgroundColor: '#c62828' });
+      this.loadDefaultBtn = await this.button(hostRow, 'Load Default Playlist', () => {
+        this.send(Commands.FROM_PLAYLIST, { id: this.core.params.playlist, shouldClear: true, fromPlaylist: true });
+        this.setStatus('Loading playlist...');
+      }, { backgroundColor: '#2e7d32' });
+    }
     this.notHostLabel = await this.label(this.hostSection, '', { fontSize: '18px', color: '#999999', marginLeft: '4px', marginTop: '4px' });
 
     // Seek (host)
@@ -367,15 +400,17 @@ var FirePlaylistPanel = class {
     });
     await this.label(mineRow, 'Nudges only your copy, e.g. if it drifts.', { fontSize: '16px', color: '#999999', marginLeft: '8px', flexShrink: 1 });
 
-    // Add by link
-    const linkSection = await section('Add by link');
-    const linkRow = await row(linkSection);
-    this.linkField = await this.textField(linkRow, 'YouTube video or playlist link', v => { this.linkQuery = v; }, () => this.addLink(false));
-    if (this.linkField) {
-      await this.button(linkRow, 'Add Video', () => this.addLink(false));
-      this.loadPlaylistBtn = await this.button(linkRow, 'Load Playlist', () => this.addLink(true), { backgroundColor: '#2e7d32' });
-    } else {
-      await this.label(linkRow, 'Adding links needs text input, which this client does not have.', { color: '#bbbbbb', flexGrow: 1 });
+    // Add by link (in karaoke mode, pasting a link into Search does this)
+    const linkSection = this.karaoke ? null : await section('Add by link');
+    if (linkSection) {
+      const linkRow = await row(linkSection);
+      this.linkField = await this.textField(linkRow, 'YouTube video or playlist link', v => { this.linkQuery = v; }, () => this.addLink(false));
+      if (this.linkField) {
+        await this.button(linkRow, 'Add Video', () => this.addLink(false));
+        this.loadPlaylistBtn = await this.button(linkRow, 'Load Playlist', () => this.addLink(true), { backgroundColor: '#2e7d32' });
+      } else {
+        await this.label(linkRow, 'Adding links needs text input, which this client does not have.', { color: '#bbbbbb', flexGrow: 1 });
+      }
     }
 
     // Footer
@@ -453,7 +488,7 @@ var FirePlaylistPanel = class {
     this.refresh(false);
     // Start on the page holding the current track.
     const player = this.core.player;
-    if (this.tab === 'playlist' && player && typeof player.currentTrack === 'number') {
+    if (this.tab === 'playlist' && !this.karaoke && player && typeof player.currentTrack === 'number') {
       this.page = Math.floor(player.currentTrack / this.rowsPerPage);
     }
     this.render();
@@ -548,7 +583,7 @@ var FirePlaylistPanel = class {
   }
 
   changePage(delta) {
-    const total = this.tab === 'search' ? this.searchResults.length : ((this.core.player && this.core.player.playlist) || []).length;
+    const total = this.tab === 'search' ? this.searchResults.length : this.listItems().length;
     const pages = Math.max(1, Math.ceil(total / this.rowsPerPage));
     if (this.tab === 'search') this.searchPage = Math.min(pages - 1, Math.max(0, this.searchPage + delta));
     else this.page = Math.min(pages - 1, Math.max(0, this.page + delta));
@@ -562,7 +597,7 @@ var FirePlaylistPanel = class {
       return;
     }
     // A YouTube playlist link or ID replaces the playlist (host only), like the full page.
-    if (/[?&]list=/.test(q) || /^PL[A-Za-z0-9_-]{10,}$/.test(q)) {
+    if (!this.karaoke && (/[?&]list=/.test(q) || /^PL[A-Za-z0-9_-]{10,}$/.test(q))) {
       const id = this.core.getPlaylistId(q);
       if (id) {
         if (!this.isHost()) { this.setStatus('Only the host can load a playlist.'); return; }
@@ -591,6 +626,14 @@ var FirePlaylistPanel = class {
     }, 1000);
     this.tab = 'search';
     this.render();
+  }
+
+  // Karaoke: join the singer queue with this song.
+  singIt(v) {
+    if (this.isInQueue()) { this.setStatus('You are already in the singer queue.'); return; }
+    this.send(Commands.ADD_TO_PLAYERS, v);
+    this.setStatus(`You're in the queue to sing "${v.title}"`);
+    this.setTab('playlist');
   }
 
   // ---------------------------------------------------------------- messages
@@ -632,7 +675,7 @@ var FirePlaylistPanel = class {
       case Commands.PLAYBACK_UPDATE:
         if (json.data && json.data.type === 'initial-sync' && this.refreshing) {
           this.refreshing = false;
-          this.setStatus('Playlist is up to date.');
+          this.setStatus(this.karaoke ? 'Singer list is up to date.' : 'Playlist is up to date.');
         }
         break;
     }
@@ -683,12 +726,21 @@ var FirePlaylistPanel = class {
 
     // Now playing
     const current = playlist[player.currentTrack];
-    this.setText(this.nowTitle, current ? current.title : (player.host ? 'Nothing playing' : 'Connecting...'));
+    const idle = player.host ? (this.karaoke ? 'Nobody is singing' : 'Nothing playing') : 'Connecting...';
+    let nowText = current ? current.title : idle;
+    if (current && this.karaoke) nowText = `Now singing: ${current.user && current.user.name ? current.user.name + ' - ' : ''}${current.title}`;
+    this.setText(this.nowTitle, nowText);
     this.updateTime();
 
     // Controls
-    this.display(this.prevTrackBtn, host && playlist.length > 1);
-    this.display(this.nextTrackBtn, host && playlist.length > 1);
+    this.display(this.prevTrackBtn, !this.karaoke && host && playlist.length > 1);
+    this.display(this.nextTrackBtn, !this.karaoke && host && playlist.length > 1);
+    if (this.karaoke) {
+      const singer = this.currentSinger();
+      const canControlSong = hasPlaylist && (host || !!(singer && window.user && singer.id === window.user.id));
+      this.display(this.restartBtn, canControlSong);
+      this.display(this.stopBtn, canControlSong);
+    }
     this.display(this.pauseBtn, host && hasPlaylist);
     this.setText(this.pauseBtn, player.paused ? 'Play' : 'Pause');
     this.setStyle(this.pauseBtn, 'backgroundColor', player.paused ? '#2e7d32' : '#c62828');
@@ -726,19 +778,26 @@ var FirePlaylistPanel = class {
     this.display(this.takeOverBtn, host || !!player.canTakeOver);
     this.setText(this.takeOverBtn, player.canTakeOver ? (host ? 'Take Over: On' : 'Take Over') : 'Take Over: Off');
     this.setStyle(this.takeOverBtn, 'backgroundColor', player.canTakeOver ? (host ? '#c62828' : '#2e7d32') : '#00838f');
-    this.display(this.votingBtn, host);
-    this.setText(this.votingBtn, player.canVote ? 'Voting: On' : 'Voting: Off');
-    this.display(this.clearBtn, host && hasPlaylist);
-    this.display(this.loadDefaultBtn, host && !hasPlaylist && !!this.core.params.playlist);
+    if (this.karaoke) {
+      this.display(this.autoAdvanceBtn, host);
+      this.setText(this.autoAdvanceBtn, player.autoAdvance ? 'Auto Advance: On' : 'Auto Advance: Off');
+      this.setStyle(this.autoAdvanceBtn, 'backgroundColor', player.autoAdvance ? '#2e7d32' : '#00838f');
+    } else {
+      this.display(this.votingBtn, host);
+      this.setText(this.votingBtn, player.canVote ? 'Voting: On' : 'Voting: Off');
+      this.display(this.clearBtn, host && hasPlaylist);
+      this.display(this.loadDefaultBtn, host && !hasPlaylist && !!this.core.params.playlist);
+    }
 
     // Tabs
     const onSearch = this.tab === 'search';
-    this.setText(this.tabPlaylistBtn, `Playlist (${playlist.length})`);
+    const list = this.listItems();
+    this.setText(this.tabPlaylistBtn, `${this.karaoke ? 'Singers' : 'Playlist'} (${list.length})`);
     this.setStyle(this.tabPlaylistBtn, 'backgroundColor', onSearch ? '#455a64' : '#1565c0');
     this.setStyle(this.tabSearchBtn, 'backgroundColor', onSearch ? '#1565c0' : '#455a64');
     this.display(this.searchRow, onSearch);
 
-    const items = onSearch ? this.searchResults : playlist;
+    const items = onSearch ? this.searchResults : list;
     const pages = Math.max(1, Math.ceil(items.length / this.rowsPerPage));
     if (onSearch) this.searchPage = Math.min(this.searchPage, pages - 1);
     else this.page = Math.min(this.page, pages - 1);
@@ -753,11 +812,16 @@ var FirePlaylistPanel = class {
       this.display(slot.row, !!v);
       if (!v) continue;
       if (onSearch) this.fillSearchRow(slot, v, host);
+      else if (this.karaoke) this.fillSingerRow(slot, v, i, items, host);
       else this.fillPlaylistRow(slot, v, i, player, host);
     }
 
     let empty = '';
-    if (!items.length) empty = onSearch ? 'Search YouTube above, or paste a link.' : 'The playlist is empty. Use Search to add videos.';
+    if (!items.length) {
+      if (onSearch) empty = this.karaoke ? 'Search for a song above, or paste a link.' : 'Search YouTube above, or paste a link.';
+      else if (this.karaoke) empty = host ? 'No singers yet. Use Search to pick a song and join the queue.' : 'No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first (More...).';
+      else empty = 'The playlist is empty. Use Search to add videos.';
+    }
     this.setText(this.emptyLabel, empty);
     this.display(this.emptyLabel, !!empty);
   }
@@ -806,6 +870,31 @@ var FirePlaylistPanel = class {
     this.setButtons(slot, defs.slice(0, 4));
   }
 
+  // Karaoke: one singer in the queue. `s` is { id, name, v: video }.
+  fillSingerRow(slot, s, i, singers, host) {
+    const me = !!(window.user && s.id === window.user.id);
+    const v = s.v || {};
+    this.setStyle(slot.row, 'backgroundColor', me ? '#2e4a3a' : (i % 2 === 0 ? '#2a2a33' : '#31313c'));
+    this.setText(slot.title, `${i + 1}. ${s.name || 'Someone'}${me ? ' (you)' : ''}`);
+    const dur = v.duration ? this.timeCode(v.duration / 1000) : '';
+    this.setText(slot.sub, `will sing ${v.title || 'a song'}${dur ? '  -  ' + dur : ''}`);
+    this.setThumb(slot, v.thumbnail);
+
+    const defs = [];
+    // The host can start any singer; a singer can start themselves when they're up next.
+    if (host || (i === 0 && me)) {
+      defs.push({ text: 'Play & Sing', color: '#2e7d32', fn: () => this.send(Commands.PLAY_KARAOKE_TRACK, (host && i > 0) ? { userId: s.id } : null) });
+    }
+    if (host || me) {
+      defs.push({ text: me ? 'Remove Me' : 'Remove', color: '#c62828', fn: () => this.send(Commands.REMOVE_FROM_PLAYERS, s.id) });
+    }
+    if (host) {
+      if (i > 0) defs.push({ text: 'Up', fn: () => this.send(Commands.MOVE_SINGER, { userId: s.id, direction: 'up' }) });
+      if (i < singers.length - 1) defs.push({ text: 'Down', fn: () => this.send(Commands.MOVE_SINGER, { userId: s.id, direction: 'down' }) });
+    }
+    this.setButtons(slot, defs.slice(0, 4));
+  }
+
   fillSearchRow(slot, v, host) {
     this.setStyle(slot.row, 'backgroundColor', '#2a2a33');
     this.setText(slot.title, v.title || 'Untitled');
@@ -814,6 +903,10 @@ var FirePlaylistPanel = class {
     this.setText(slot.sub, [channel, dur].filter(Boolean).join('  -  '));
     this.setThumb(slot, v.thumbnail);
 
+    if (this.karaoke) {
+      this.setButtons(slot, this.isInQueue() ? [] : [{ text: 'Sing It', color: '#2e7d32', fn: () => this.singIt(v) }]);
+      return;
+    }
     const defs = [{ text: 'Add', fn: () => { this.send(Commands.ADD_TO_PLAYLIST, v); this.setStatus(`Added "${v.title}"`); } }];
     if (host) {
       defs.push({ text: 'Play Now', color: '#2e7d32', fn: () => { this.send(Commands.ADD_AND_PLAY, v); this.setTab('playlist'); } });

@@ -1,73 +1,20 @@
+// Karaoke mode entry point, added to a world page as a <script> tag.
+// See USAGE.md. For the SideQuest/Altspace Creator SDK, snippet.js (<bs-snippet> with
+// mode="karaoke") also works.
 (() => {
   // Capture the current script element immediately, before any async work.
   const karaokePlayerScript = document.currentScript;
   const currentScriptUrl = new URL(karaokePlayerScript.src);
 
-  // --- Banter Readiness Gate ---
-  // Wait for the Banter BS SDK to fully initialise and fire "unity-loaded".
-  // Only at that point is window.user guaranteed to contain the real Banter identity.
-  // If BS never loads within 30 seconds we assume this is a non-Banter browser context
-  // and proceed immediately so the player still works outside of Banter.
-  const waitForBanter = () => new Promise(resolve => {
-    const fallbackTimeout = setTimeout(() => {
-      console.warn('Vidya (karaoke): bs-loaded/unity-loaded timed out after 30s. Assuming non-Banter context.');
-      resolve();
-    }, 30000);
+  const start = () => window.FireVPlayer.startKaraokePlayer(karaokePlayerScript);
 
-    const init = () => {
-      console.log("VIDYA: INIT")
-      clearTimeout(fallbackTimeout);
-      const banterScene = BS.BanterScene.GetInstance();
-      if (banterScene.unityLoaded) {
-        console.log("VIDYA: UNITY LOADED");
-        resolve();
-      } else {
-          banterScene.On('unity-loaded', () => {
-            resolve();
-          });
-      }
-    };
-
-    if (window.BS) {
-      init();
-    } else {
-      window.addEventListener('bs-loaded', init);
-    }
-  });
-
-  waitForBanter().then(() => {
-    // Dynamically load the base player script only once Banter is ready.
-    const baseScript = document.createElement("script");
-    baseScript.setAttribute("src", `${currentScriptUrl.origin}/base-player.js`);
-
-    // Once the base player script is loaded, define and instantiate our specific player.
-    baseScript.addEventListener("load", () => {
-      var KaraokePlayer = class extends BasePlayer {
-        constructor() {
-          // Pass the original script element to the base class.
-          super(karaokePlayerScript);
-          this.init();
-        }
-
-        async init() {
-          // Run the common initialization sequence from BasePlayer.
-          await super.init();
-
-          // Now run the karaoke-specific setup.
-          this.core.isKaraoke = true; // Set mode after core init
-          await this.core.setupWebsocket("space", d => this.core.parseMessage(d), () => {
-            this.core.sendMessage({path: "instance", data: this.core.params.instance, u: window.user});
-            this.core.sendMessage({path: Commands.SET_INSTANCE_MODE, data: 'karaoke'});
-          });
-          const proto = this.core.hostProtocol || (this.core.hostUrl.startsWith('localhost') || this.core.hostUrl.startsWith('127.0.0.1') ? 'http' : 'https');
-          const url = `${proto}://${this.core.hostUrl}/?youtube=${encodeURIComponent(this.core.params.youtube)}&start=${this.core.params.start}&playlist=${this.core.params.playlist}&mute=${this.core.params.mute}&volume=${this.core.tempVolume}&instance=${this.core.params.instance}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}&mode=karaoke`;
-          this.core.setupBrowserElement(url);
-          this.core.setupJoinLeaveButton();
-        }
-      }
-      window.karaokePlayerInstance = new KaraokePlayer();
-    }, false);
-
-    document.body.appendChild(baseScript);
-  });
+  if (window.FireVPlayer && window.FireVPlayer.startKaraokePlayer) {
+    start();
+    return;
+  }
+  const s = document.createElement("script");
+  s.setAttribute("src", `${currentScriptUrl.origin}/playlist-player.js`);
+  s.addEventListener("load", start, false);
+  s.addEventListener("error", () => console.error("Vidya: failed to load playlist-player.js"), false);
+  document.body.appendChild(s);
 })();

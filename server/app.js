@@ -40,7 +40,7 @@ class App {
       }
 
       // Create a lean version of the playlist for storage.
-      const leanPlaylist = player.playlist.map(video => {
+      const lean = list => (list || []).map(video => {
         if (video.user && video.user.id) {
           userMap[video.user.id] = video.user.name;
         }
@@ -51,6 +51,11 @@ class App {
           userId: video.user ? video.user.id : null
         };
       });
+      const leanPlaylist = lean(player.playlist);
+      // The playlist kept aside while the room is in karaoke mode (see setInstanceMode).
+      const savedPlaylist = player.savedPlaylist
+        ? { playlist: lean(player.savedPlaylist.playlist), currentTrack: player.savedPlaylist.currentTrack }
+        : null;
 
       const stateToSave = {
         playlist: leanPlaylist,
@@ -64,6 +69,7 @@ class App {
         hostId: player.host ? player.host.id : null,
         autoAdvance: player.autoAdvance,
         isKaraoke: player.isKaraoke,
+        savedPlaylist: savedPlaylist,
         paused: player.paused
       };
 
@@ -389,12 +395,7 @@ class App {
         this.localSkip(ws, true);
         break;
       case Commands.SET_INSTANCE_MODE:
-        const playerInstanceForMode = this.videoPlayers[ws.i];
-        if (playerInstanceForMode) {
-          // This flag determines how track advancement is handled.
-          playerInstanceForMode.isKaraoke = msg.data === 'karaoke';
-          await this.savePlayerState(ws.i);
-        }
+        await this.setInstanceMode(ws.i, msg.data === 'karaoke');
         break;
       case Commands.VIDEO_UNAVAILABLE:
         await this.handleVideoUnavailable(msg.data, ws);
@@ -772,7 +773,7 @@ class App {
                 });
               }
 
-              existingState.playlist = existingState.playlist.map(video => {
+              const hydrate = video => {
                 // Re-hydrate thumbnail if missing (from lean format)
                 if (!video.thumbnail) {
                   const videoId = this.getYoutubeId(video.link);
@@ -789,7 +790,11 @@ class App {
                 // Always reset non-persistent state
                 video.votes = 0;
                 return video;
-              });
+              };
+              existingState.playlist = existingState.playlist.map(hydrate);
+              if (existingState.savedPlaylist && Array.isArray(existingState.savedPlaylist.playlist)) {
+                existingState.savedPlaylist.playlist = existingState.savedPlaylist.playlist.map(hydrate);
+              }
 
               // Re-hydrate host object if missing (from lean format)
               if (!existingState.host && existingState.hostId && userMap[existingState.hostId]) {
@@ -904,6 +909,7 @@ class App {
         host: player.host,
         duration: player.playlist.length && player.playlist[player.currentTrack] ? player.playlist[player.currentTrack].duration / 1000 : 0,
         autoAdvance: player.autoAdvance, // Ensure autoAdvance state is always included
+        isKaraoke: !!player.isKaraoke,
         paused: player.paused
       };
 
@@ -944,6 +950,44 @@ class App {
         duration: player.playlist.length && player.playlist[player.currentTrack] ? player.playlist[player.currentTrack].duration / 1000 : 0
       });
     }
+  }
+  // Switches a room between playlist and karaoke. Karaoke uses the main playlist for the song
+  // being sung (and clears it when a song stops), so the shared playlist is kept aside while the
+  // room is in karaoke mode, and comes back, from its saved track, when it returns to playlist mode.
+  async setInstanceMode(instanceId, karaoke) {
+    const player = this.videoPlayers[instanceId];
+    if (!player || !!player.isKaraoke === karaoke) return;
+    console.log(`Instance ${instanceId} switching to ${karaoke ? 'karaoke' : 'playlist'} mode.`);
+    player.votes = [];
+    player.currentTime = 0;
+    player.lastStartTime = new Date().getTime() / 1000;
+    if (karaoke) {
+      player.savedPlaylist = { playlist: player.playlist, currentTrack: player.currentTrack };
+      player.playlist = [];
+      player.currentTrack = 0;
+    } else {
+      const saved = player.savedPlaylist;
+      player.playlist = saved && Array.isArray(saved.playlist) ? saved.playlist : [];
+      player.currentTrack = saved && saved.currentTrack > -1 && saved.currentTrack < player.playlist.length ? saved.currentTrack : 0;
+      player.savedPlaylist = null;
+    }
+    player.isKaraoke = karaoke;
+
+    if (player.playlist.length) {
+      player.paused = false;
+      this.updateClients(instanceId, 'mode-changed', { includeSingers: true });
+      this.resetBrowserIfNeedBe(player, player.currentTrack);
+      player.sockets.forEach(socket => {
+        this.send(socket, Commands.TRACK_CHANGED, {
+          newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused,
+          newLastStartTime: player.lastStartTime, playlist: player.playlist
+        });
+      });
+    } else {
+      // Nothing to play: the same as a stop, so every screen goes back to its idle video.
+      this.updateClients(instanceId, 'stop', { includeSingers: true });
+    }
+    await this.savePlayerState(instanceId);
   }
   updateClients(instanceId, type, options = {}) {
     if (this.videoPlayers[instanceId]) {

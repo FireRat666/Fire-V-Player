@@ -62,8 +62,8 @@ var Playlist = class {
     this.setupSearchOverlay();
     await this.core.init();
     await this.core.setupWebsocket("playlist", d => this.parseMessage(d), () => {
+      // The in-world player sets the room's mode (it can change in world), so this page doesn't.
       this.core.sendMessage({path: "instance", data: this.core.params.instance, u: window.user});
-      this.core.sendMessage({path: Commands.SET_INSTANCE_MODE, data: 'playlist'});
     }, ()=>{
         this.core.showToast("Reconnecting...");
     });

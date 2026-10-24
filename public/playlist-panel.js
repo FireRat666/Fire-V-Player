@@ -352,6 +352,13 @@ var FirePlaylistPanel = class {
       return box;
     };
 
+    // Space admin: switch the mode for everyone (saved in the space state, see Core.switchMode)
+    this.adminSection = await section('Space admin');
+    const adminRow = await row(this.adminSection, { flexWrap: 'wrap' });
+    this.modeLabel = await this.label(adminRow, '', { fontSize: '20px', marginLeft: '4px', marginRight: '12px' });
+    this.modeSwitchBtn = await this.button(adminRow, '', () => this.switchMode(), { backgroundColor: '#6a1b9a' });
+    this.modeDefaultBtn = await this.button(adminRow, 'Use Snippet Default', () => this.useDefaultMode(), { backgroundColor: GREY });
+
     // Host controls
     this.hostSection = await section('Host controls');
     const hostRow = await row(this.hostSection, { flexWrap: 'wrap' });
@@ -629,6 +636,19 @@ var FirePlaylistPanel = class {
   }
 
   // Karaoke: join the singer queue with this song.
+  modeName(mode) { return mode === 'karaoke' ? 'Karaoke' : 'Playlist'; }
+
+  switchMode() {
+    const next = this.karaoke ? 'playlist' : 'karaoke';
+    if (this.core.setModeOverride(next)) this.setStatus(`Switching everyone to ${this.modeName(next)} mode...`, 0);
+    else this.setStatus('Only space admins can change the mode.');
+  }
+
+  useDefaultMode() {
+    if (this.core.setModeOverride(null)) this.setStatus(`Going back to the snippet's ${this.modeName(this.core.defaultMode)} mode...`, 0);
+    else this.setStatus('Only space admins can change the mode.');
+  }
+
   singIt(v) {
     if (this.isInQueue()) { this.setStatus('You are already in the singer queue.'); return; }
     this.send(Commands.ADD_TO_PLAYERS, v);
@@ -770,6 +790,19 @@ var FirePlaylistPanel = class {
     if (this.loadPlaylistBtn) this.display(this.loadPlaylistBtn, host);
     this.setText(this.notHostLabel, host ? '' : (player.canTakeOver ? 'The host allows take over.' : 'Only the host can use these.'));
     this.display(this.notHostLabel, !host);
+
+    // Space admin
+    const admin = typeof this.core.isSpaceAdmin === 'function' && this.core.isSpaceAdmin();
+    this.display(this.adminSection, admin);
+    if (admin) {
+      const def = this.core.defaultMode || (this.karaoke ? 'karaoke' : 'playlist');
+      const override = this.core.modeOverride;
+      const from = override ? 'set by a space admin' : 'the snippet default';
+      this.setText(this.modeLabel, `Mode: ${this.modeName(this.karaoke ? 'karaoke' : 'playlist')} (${from})`);
+      this.setText(this.modeSwitchBtn, `Switch to ${this.karaoke ? 'Playlist' : 'Karaoke'}`);
+      this.display(this.modeDefaultBtn, !!override);
+      this.setText(this.modeDefaultBtn, `Use Snippet Default (${this.modeName(def)})`);
+    }
 
     // Host controls
     this.display(this.lockBtn, host);

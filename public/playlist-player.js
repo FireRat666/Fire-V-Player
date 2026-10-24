@@ -66,15 +66,16 @@
   FVP.startPlaylistPlayer = (source) => FVP.startPlayer(source, 'playlist');
   FVP.startKaraokePlayer = (source) => FVP.startPlayer(source, 'karaoke');
 
-  const startPlayer = async (source, mode) => {
+  // `mode` is the snippet's (or script tag's) default. A space admin's choice, saved in the space
+  // state, takes its place, and the player follows later changes to it (see Core.switchMode).
+  const startPlayer = async (source, defaultMode) => {
     const origin = new URL(source.src).origin;
-    const karaoke = mode === 'karaoke';
-    await FVP.waitForBanter(mode);
+    await FVP.waitForBanter(defaultMode);
 
     if (typeof BasePlayer === 'undefined') {
       const loaded = await FVP.loadScript(`${origin}/base-player.js`);
       if (!loaded || typeof BasePlayer === 'undefined') {
-        console.error(`Vidya: could not load ${origin}/base-player.js, so the ${mode} player can't start.`);
+        console.error(`Vidya: could not load ${origin}/base-player.js, so the ${defaultMode} player can't start.`);
         return;
       }
     }
@@ -82,17 +83,26 @@
     const Player = class extends BasePlayer {
       constructor() {
         super(source);
-        this.ready = this.init().catch(e => console.error(`Vidya: ${mode} player failed to start.`, e));
+        this.ready = this.init().catch(e => console.error(`Vidya: ${defaultMode} player failed to start.`, e));
       }
 
       async init() {
         // Run the common initialization sequence from BasePlayer.
         await super.init();
-        this.core.isKaraoke = karaoke;
+        const core = this.core;
+        core.defaultMode = defaultMode;
+        core.modeOverride = await core.loadModeOverride();
+        const mode = core.modeOverride || defaultMode;
+        const karaoke = mode === 'karaoke';
+        core.isKaraoke = karaoke;
+        if (core.modeOverride && core.modeOverride !== defaultMode) {
+          console.log(`Vidya: a space admin set ${mode} mode, so starting in that instead of ${defaultMode}.`);
+        }
 
-        await this.core.setupWebsocket("space", d => this.core.parseMessage(d), () => {
-          this.core.sendMessage({path: "instance", data: this.core.params.instance, u: window.user});
-          this.core.sendMessage({path: Commands.SET_INSTANCE_MODE, data: mode});
+        await core.setupWebsocket("space", d => core.parseMessage(d), () => {
+          core.sendMessage({path: "instance", data: core.params.instance, u: window.user});
+          // The current mode, which may have changed since the player started.
+          core.sendMessage({path: Commands.SET_INSTANCE_MODE, data: core.getMode()});
         });
         // Pass the mode to the player iframe so it knows which skip time to use.
         const proto = this.core.hostProtocol || (this.core.hostUrl.startsWith('localhost') || this.core.hostUrl.startsWith('127.0.0.1') ? 'http' : 'https');
@@ -105,10 +115,18 @@
         if (this.core.shouldUsePlaylistPanel()) {
           await this.core.setupPlaylistPanel();
         }
+        // An admin may have changed the mode while this was starting, so check once more.
+        core.watchModeOverride();
+        // (The local copy can still be empty here, so an empty one changes nothing.)
+        const latest = core.readModeOverride();
+        if (latest && latest !== core.modeOverride) {
+          core.modeOverride = latest;
+          await core.switchMode(latest || defaultMode);
+        }
       }
     };
     const instance = new Player();
-    if (karaoke) window.karaokePlayerInstance = instance;
+    if (defaultMode === 'karaoke') window.karaokePlayerInstance = instance;
     else window.playlistPlayerInstance = instance;
     return instance;
   };

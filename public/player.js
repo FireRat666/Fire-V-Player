@@ -241,6 +241,8 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
   parseMessage(msg) {
     let json;
     try { json = JSON.parse(msg); } catch { return; }
+    // Messages from the in-world script carry its current mode, which can change in world.
+    if (json && typeof json.km === 'boolean') this.core.isKaraoke = json.km;
     switch(json.path) {
       case Commands.SET_VOLUME:
         if(json.data >= 0 && json.data <= 100) {

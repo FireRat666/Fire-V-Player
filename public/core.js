@@ -1,3 +1,6 @@
+// Protected space state key holding a space admin's mode choice (see switchMode).
+var MODE_STATE_KEY = 'fire-v-player-mode';
+
 var Core = class {
     constructor() {
         this.urlParams = new URLSearchParams(window.location.search);
@@ -217,12 +220,17 @@ var Core = class {
     }
     this.sendBrowserMessage({path: Commands.SET_VOLUME, data: this.params.volume});
   }
+  // Karaoke's Singers button and optional box trigger. Removed again by removeJoinLeaveButton()
+  // when the player switches to playlist mode.
   setupJoinLeaveButton() {
     const scene = document.querySelector("a-scene");
     if(!scene) {
       console.log("No a-scene tag found, is this an AFRAME scene ?");
       return;
     }
+    if (!this.playlistContainer) return;
+    this.removeJoinLeaveButton();
+    this.singerButtonElements = [];
     const playlistButton = document.createElement('a-entity');
     playlistButton.setAttribute('sq-boxcollider', 'size: 1 0.3 0.05');
     playlistButton.setAttribute('sq-interactable', '');
@@ -234,6 +242,7 @@ var Core = class {
     playlistButton.setAttribute('opacity', '0.3');
     playlistButton.setAttribute('transparent', 'true');
     this.playlistContainer.appendChild(playlistButton);
+    this.singerButtonElements.push(playlistButton);
     const playlistButtonText = document.createElement('a-text');
     playlistButtonText.setAttribute('value', "singers");
     playlistButtonText.setAttribute('position', '0 0.01 0.03');
@@ -285,7 +294,12 @@ var Core = class {
         }
       });
       this.playlistContainer.appendChild(boxTrigger);
+      this.singerButtonElements.push(boxTrigger);
     }
+  }
+  removeJoinLeaveButton() {
+    (this.singerButtonElements || []).forEach(el => { if (el.parentNode) el.parentNode.removeChild(el); });
+    this.singerButtonElements = [];
   }
   showToast(text, duration = 3000) {
     if(typeof Toastify !== 'undefined') {
@@ -314,7 +328,9 @@ var Core = class {
     const playlistIconUrl = this.params["data-playlist-icon-url"];
     // Use the isKaraoke flag to provide a context-specific text label
     const buttonText = this.isKaraoke ? 'Singers' : 'Playlist';
-    this.setupButton(scene, playlistContainer, '-0.633', playlistIconUrl, () => this.openPlaylist(), buttonText);
+    const icon = this.setupButton(scene, playlistContainer, '-0.633', playlistIconUrl, () => this.openPlaylist(), buttonText);
+    // Kept so the label can follow a mode change.
+    this.playlistButtonText = icon && icon.parentNode ? icon.parentNode.querySelector('a-text') : null;
   }
 
   openPlaylist() {
@@ -393,6 +409,145 @@ var Core = class {
       console.error('[Core] Could not create the in-world playlist panel, falling back to the page.', e);
       this.playlistPanel = null;
     }
+  }
+
+  // ---------------------------------------------------------------- mode (playlist / karaoke)
+  //
+  // The snippet (or script tag) picks the default mode. A space admin can switch it in world from
+  // the panel; that choice is saved as protected space state, which only the world's owner, the
+  // community's Owners and Moderators, and SideQuest admins can write (the server enforces it).
+  // Everyone in the space follows it, and players who join later start in it. "default" means no
+  // override. Space state lasts 24 hours after its last change, so after a quiet day the player
+  // goes back to the snippet's mode.
+
+  getMode() { return this.isKaraoke ? 'karaoke' : 'playlist'; }
+
+  banterScene() {
+    try { return (window.BS && BS.BanterScene) ? BS.BanterScene.GetInstance() : null; } catch (e) { return null; }
+  }
+
+  // Shows the mode switch. Not a security check: the server refuses protected writes from anyone else.
+  isSpaceAdmin() {
+    const scene = this.banterScene();
+    return !!(scene && scene.localUser && scene.localUser.isSpaceAdmin);
+  }
+
+  parseModeValue(value) {
+    if (value && typeof value === 'object' && 'value' in value) value = value.value;
+    const v = String(value == null ? '' : value).trim().replace(/^"|"$/g, '').toLowerCase();
+    return v === 'karaoke' || v === 'playlist' ? v : null;
+  }
+
+  // The saved override from the local copy of the space state (protected values only).
+  readModeOverride() {
+    const scene = this.banterScene();
+    if (!scene) return null;
+    const json = scene.spaceStateJson && scene.spaceStateJson.protected;
+    if (json && json[MODE_STATE_KEY] !== undefined) return this.parseModeValue(json[MODE_STATE_KEY]);
+    const str = scene.spaceState && scene.spaceState.protected;
+    return str ? this.parseModeValue(str[MODE_STATE_KEY]) : null;
+  }
+
+  // The override, asked of the server when the SDK can, so a player who has just arrived starts in
+  // the right mode instead of switching a moment later.
+  async loadModeOverride(timeoutMs = 4000) {
+    const scene = this.banterScene();
+    if (!scene) return null;
+    if (typeof scene.SpaceStateGetAll === 'function') {
+      try {
+        const all = await Promise.race([
+          scene.SpaceStateGetAll(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('timed out')), timeoutMs))
+        ]);
+        if (all && all.protected) {
+          const v = all.protected[MODE_STATE_KEY];
+          return v === undefined ? this.readModeOverride() : this.parseModeValue(v);
+        }
+      } catch (e) {
+        console.log(`[Core] Could not read the space state (${e && (e.code || e.message)}), using the local copy.`);
+      }
+    }
+    return this.readModeOverride();
+  }
+
+  // Follows changes to the saved mode. Public writes to the same key are ignored, so only an
+  // admin's choice counts.
+  watchModeOverride() {
+    const scene = this.banterScene();
+    if (!scene || this.watchingMode) return;
+    this.watchingMode = true;
+    scene.On('space-state-changed', e => {
+      const d = e && e.detail;
+      const changes = Array.isArray(d) ? d : (d && Array.isArray(d.changes) ? d.changes : []);
+      const c = changes.find(c => c && c.property === MODE_STATE_KEY);
+      if (!c) return;
+      const isPublic = c.isPublic === true || c.type === 'public';
+      const isProtected = c.isPublic === false || c.type === 'protected';
+      if (isPublic) return;
+      const override = isProtected ? this.parseModeValue(c.newValue) : this.readModeOverride();
+      this.modeOverride = override;
+      this.switchMode(override || this.defaultMode);
+    });
+    scene.On('space-state-error', e => {
+      const d = (e && e.detail) || {};
+      if (d.key !== MODE_STATE_KEY && d.path !== MODE_STATE_KEY) return;
+      console.warn('[Core] Could not save the mode:', d.code, d.message);
+      const msg = d.code === 'not_authorized' ? 'Only space admins can change the mode.' : 'Could not change the mode.';
+      this.showToast(msg);
+      if (this.playlistPanel) this.playlistPanel.setStatus(msg);
+    });
+  }
+
+  // Saves the mode for everyone in the space ('karaoke', 'playlist', or null for the snippet's).
+  // The change comes back through space-state-changed, which does the switch.
+  setModeOverride(mode) {
+    const scene = this.banterScene();
+    if (!scene || typeof scene.SetProtectedSpaceProps !== 'function') return false;
+    if (!this.isSpaceAdmin()) {
+      this.showToast('Only space admins can change the mode.');
+      return false;
+    }
+    scene.SetProtectedSpaceProps({ [MODE_STATE_KEY]: mode || 'default' });
+    return true;
+  }
+
+  // Switches this player in place: the server room, the buttons, the panel and the video page.
+  // Switches run one at a time, so quick changes can't interleave the panel rebuild.
+  switchMode(mode) {
+    const run = () => this._switchMode(mode).catch(e => console.error('[Core] Mode switch failed:', e));
+    this.modeSwitch = (this.modeSwitch || Promise.resolve()).then(run, run);
+    return this.modeSwitch;
+  }
+
+  async _switchMode(mode) {
+    mode = mode === 'karaoke' ? 'karaoke' : 'playlist';
+    if (mode === this.getMode()) {
+      if (this.playlistPanel) this.playlistPanel.renderSoon();
+      return;
+    }
+    const karaoke = mode === 'karaoke';
+    console.log(`[Core] Switching to ${mode} mode.`);
+    this.isKaraoke = karaoke;
+    this.sendMessage({ path: Commands.SET_INSTANCE_MODE, data: mode });
+    // The video page only uses the mode for its skip times, and every message to it carries the
+    // mode (see sendBrowserMessage), so it needs no message of its own.
+    if (this.playlistButtonText) this.playlistButtonText.setAttribute('value', karaoke ? 'Singers' : 'Playlist');
+    if (karaoke) this.setupJoinLeaveButton();
+    else this.removeJoinLeaveButton();
+    if (this.playlistPanel) {
+      // The panel's layout depends on the mode, so build a new one, open on the same view.
+      const wasOpen = this.playlistPanel.visible;
+      const view = this.playlistPanel.view;
+      this.playlistPanel.destroy();
+      this.playlistPanel = null;
+      await this.setupPlaylistPanel();
+      if (this.playlistPanel) this.playlistPanel.view = view;
+      if (wasOpen && this.playlistPanel && this.getMode() === mode) {
+        await this.playlistPanel.build();
+        if (this.playlistPanel && !this.playlistPanel.failed) await this.playlistPanel.open();
+      }
+    }
+    this.showToast(karaoke ? 'Switched to Karaoke mode' : 'Switched to Playlist mode');
   }
 
   // Lets other modules (e.g. the in-world playlist panel) observe server messages.
@@ -646,6 +801,7 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
     msg.u = window.user;
     msg.i = this.params.instance;
     msg.id = this.getUniquId();
+    msg.km = !!this.isKaraoke; // the current mode, which can change in world
     return new Promise((resolve, reject) => {
       if(this.browser) {
         this.browserAcks[msg.id] = resolve;
@@ -671,7 +827,9 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
       case Commands.RESET_BROWSER:
         if(window.isBanter && this.browser) {
           // console.log("RESET_BROWSER", {"url": this.initialUrl});
-          this.browser.setAttribute("sq-browser", {"url": this.initialUrl});
+          // The mode may have changed in world since the page first loaded.
+          const url = String(this.initialUrl || '').replace(/([?&]mode=)[^&]*/, `$1${this.getMode()}`);
+          this.browser.setAttribute("sq-browser", {"url": url});
         }
         break;
       case Commands.ITEM_REMOVED:

@@ -131,9 +131,9 @@ These always work, as the sites moderate what's on them:
 
 | Link | Example | Notes |
 |---|---|---|
-| Twitch channel | `https://www.twitch.tv/<channel>` | Live, so it plays until someone skips. Seek and skip do nothing. If Twitch waits for a click to start, the player clicks the screen for you (twice at most). |
+| Twitch channel | `https://www.twitch.tv/<channel>` | Live, so it plays until someone skips. Seek and skip do nothing. If Twitch waits for a click to start, or starts muted, the player clicks the screen for you until it plays with sound (a few tries at most). |
 | Twitch video (VOD) | `https://www.twitch.tv/videos/<id>` | Stays in sync like YouTube. |
-| Twitch clip | `https://www.twitch.tv/<channel>/clip/<id>` or `https://clips.twitch.tv/<id>` | Twitch's clip player can't be controlled, so clips aren't kept in sync, the volume buttons and spatial volume don't change them (mute does), and each gets 60 seconds (the longest a clip can be) before the playlist moves on. |
+| Twitch clip | `https://www.twitch.tv/<channel>/clip/<id>` or `https://clips.twitch.tv/<id>` | Twitch's clip player can't be controlled, so clips aren't kept in sync, volume, mute and spatial volume don't change them, and each gets 60 seconds (the longest a clip can be) before the playlist moves on. |
 | Vimeo | `https://vimeo.com/<id>` | Only videos whose owner allows embedding on other sites. |
 
 These only work with `untrusted-links="true"` in the snippet, as they can come from any site:
@@ -142,6 +142,7 @@ These only work with `untrusted-links="true"` in the snippet, as they can come f
 |---|---|---|
 | Video or audio file | `https://.../movie.mp4` (also .webm, .mov, .m4v, .mp3, .m4a, .ogg) | Stays in sync. |
 | HLS stream | `https://.../index.m3u8` | Live streams play until someone skips; recorded ones stay in sync. The server must allow other sites to load it (CORS). |
+| VDO.Ninja | `https://vdo.ninja/?view=<stream id>`, or `?room=<room>&scene` for a whole room | Shown as VDO.Ninja's own page and plays until someone skips. Volume and mute work; there's no pause or seek. Links that would join a room or send video (`?push=`, `?room=` without `scene`) aren't accepted. |
 
 Without it, the server won't add them, and a player whose world doesn't allow them shows a notice instead of playing one. If a browser won't start a file with sound, it starts muted and the sound comes on at the first click on the screen.
 
@@ -176,7 +177,7 @@ All parameters are optional unless marked as **(Required)**.
 | `youtube` | The URL of a single YouTube video to use as the default "silent" video when nothing is playing. | A silent visual video |
 | `volume` | The initial volume, from `0` to `100`. | `40` |
 | `mute` | Whether the player should start muted. | `false` |
-| `untrusted-links` | Whether links from any site (video files, `.m3u8` streams) can be played, as well as YouTube, Twitch and Vimeo. Off by default, as those links aren't moderated. Each viewer's own world must allow them for them to play on their screen. See [Links from other sites](#links-from-other-sites). | `false` |
+| `untrusted-links` | Whether links from any site (video files, `.m3u8` streams, VDO.Ninja) can be played, as well as YouTube, Twitch and Vimeo. Off by default, as those links aren't moderated. Each viewer's own world must allow them for them to play on their screen. See [Links from other sites](#links-from-other-sites). | `false` |
 | `captions` | Whether closed captions start on. Each viewer can turn them on or off in the panel's More view, and their choice is remembered on their device. | `true` |
 | `resolution` | The resolution (width in pixels) of the browser surface. Higher values are crisper but use more resources. | `1600` |
 

@@ -23,6 +23,7 @@ var MediaSources = (() => {
   //   twitch  { channel | video } - a live Twitch channel, or a recorded Twitch video (VOD)
   //   twitchclip { clip, channel } - a Twitch clip (channel is '' for clips.twitch.tv links)
   //   vimeo   { id, hash }        - a Vimeo video (hash is the key for unlisted videos)
+  //   vdoninja { name }           - a VDO.Ninja stream (a view or scene link), shown as its own page
   function detect(link) {
     const u = parseUrl(link);
     if (!u) return null;
@@ -70,6 +71,15 @@ var MediaSources = (() => {
       return { type: 'vimeo', id: parts[i], hash };
     }
 
+    // VDO.Ninja: vdo.ninja/?view=<stream id> (or ?room=<room>&scene for a whole room), also obs.ninja.
+    if (/(^|\.)(vdo|obs)\.ninja$/.test(host)) {
+      // Only links that watch: a room link without "scene" would join the room and ask for a camera.
+      const q = (k) => u.searchParams.get(k) || '';
+      const scene = u.searchParams.has('scene') || u.searchParams.has('s');
+      const name = q('view') || q('v') || (scene ? q('room') || q('r') : '');
+      return name ? { type: 'vdoninja', name: name.slice(0, 100) } : null;
+    }
+
     if (/\.m3u8$/i.test(u.pathname)) return { type: 'hls' };
     if (FILE_EXT.test(u.pathname)) return { type: 'file' };
     return null;
@@ -88,8 +98,8 @@ var MediaSources = (() => {
     return name.slice(0, 120);
   }
 
-  // YouTube, Twitch and Vimeo moderate what's on them. Files and streams can come from any site,
-  // so they only play where the snippet sets untrusted-links="true".
+  // YouTube, Twitch and Vimeo moderate what's on them. Files, streams and VDO.Ninja can come from
+  // anyone, so they only play where the snippet sets untrusted-links="true".
   const TRUSTED = new Set(['youtube', 'twitch', 'twitchclip', 'vimeo']);
   function isTrusted(media) {
     return !!media && TRUSTED.has(media.type);

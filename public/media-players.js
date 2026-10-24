@@ -167,26 +167,35 @@ class TwitchSource extends BaseMediaSource {
         this.wantPaused ? p.pause() : p.play();
         this.kick = setTimeout(() => this.ensurePlaying(0), 3000);
       });
+      // isPaused() can say "playing" while Twitch is still waiting for a click, so these events
+      // are what count as playing.
       p.addEventListener(Twitch.Player.PLAYING, () => {
+        this.playing = true;
         if (!this.live) this.reportDuration(p.getDuration());
       });
+      p.addEventListener(Twitch.Player.PAUSE, () => { this.playing = false; });
+      if (Twitch.Player.ENDED) p.addEventListener(Twitch.Player.ENDED, () => { this.playing = false; });
       if (Twitch.Player.OFFLINE) p.addEventListener(Twitch.Player.OFFLINE, () => opts.onError(`${media.channel} isn't live on Twitch right now.`));
     }).catch(err => opts.onError(err.message));
   }
-  // Twitch's player sometimes waits for a click before it starts (it did in Altspace). If it's still
-  // paused when it shouldn't be, ask it again, then have the world click the middle of the screen,
-  // which is Twitch's play button. It stops after two clicks, and never clicks a playing stream,
-  // as a click there would pause it.
+  // Twitch's player waits for a click before it starts in Altspace, or starts muted and then pauses
+  // when it's unmuted. So until it's playing with sound: ask it to play, then have the world click
+  // the middle of the screen (a click also lets it unmute). A click on a playing stream pauses it,
+  // so it only clicks when the stream isn't playing, and stops after a few tries.
   ensurePlaying(tries) {
     clearTimeout(this.kick);
-    if (this.destroyed || this.wantPaused || !this.p) return;
-    if (!this.p.isPaused()) {
-      if (!this.muted && this.p.getMuted()) this.p.setMuted(false); // it may have started muted
-      return;
+    if (this.destroyed || this.wantPaused || !this.p || tries > 6) return;
+    const playing = this.playing && !this.p.isPaused();
+    if (playing) {
+      if (this.muted || !this.p.getMuted()) return; // playing as it should
+      // It started muted: unmute it, then check it didn't pause because of that.
+      this.p.setMuted(false);
+    } else if (tries === 0) {
+      this.p.play();
+    } else {
+      console.log('[Twitch] not playing yet, clicking the screen');
+      this.opts.requestClick();
     }
-    if (tries === 0) this.p.play();
-    else if (tries <= 2) this.opts.requestClick();
-    else return;
     this.kick = setTimeout(() => this.ensurePlaying(tries + 1), 2500);
   }
   play() {
@@ -217,7 +226,8 @@ class TwitchSource extends BaseMediaSource {
 
 // A Twitch clip, in Twitch's clip player. That player can't be controlled from the page: no
 // pause, seek or volume, and it doesn't say how long the clip is. So a clip isn't kept in sync
-// (it's under a minute), and mute reloads it muted or unmuted.
+// (it's under a minute), and mute and volume don't reach it: the only way would be to reload it,
+// which starts the clip again.
 class TwitchClipSource extends BaseMediaSource {
   constructor(opts, media) {
     super(opts);
@@ -245,11 +255,57 @@ class TwitchClipSource extends BaseMediaSource {
   setMuted(m) {
     if (!!m === this.muted) return;
     this.muted = !!m;
-    this.load();
+    if (!this.toldMute) {
+      this.toldMute = true;
+      this.opts.onError("Twitch clips can't be muted or turned down here.");
+    }
   }
   destroy() {
     this.destroyed = true;
     if (this.frame) this.frame.remove();
+  }
+}
+
+// A VDO.Ninja stream, in its own page. Volume and mute go through VDO.Ninja's iframe API
+// (postMessage). It has no position to sync and no pause, so it counts as live. The frame isn't
+// allowed the camera or microphone, so a link can't make viewers send video.
+class VdoNinjaSource extends BaseMediaSource {
+  constructor(opts) {
+    super(opts);
+    this.live = true;
+    this.muted = !!opts.muted;
+    this.volume = opts.volume;
+    this.startedAt = performance.now();
+    const f = this.frame = document.createElement('iframe');
+    f.src = opts.link;
+    f.allow = 'autoplay; fullscreen';
+    Object.assign(f.style, { width: '100%', height: '100%', border: '0' });
+    f.addEventListener('load', () => {
+      this.ready = true;
+      this.sendSettings();
+      // Browsers may hold its sound back until the page is clicked, so click it once.
+      this.kick = setTimeout(() => { if (!this.destroyed) opts.requestClick(); }, 4000);
+    });
+    opts.container.appendChild(f);
+  }
+  post(msg) {
+    try { this.frame.contentWindow.postMessage(msg, '*'); } catch (e) {}
+  }
+  sendSettings() {
+    this.post({ volume: Math.max(0, Math.min(1, Number(this.volume) / 100)) });
+    this.post({ mute: this.muted });
+  }
+  play() { this.wantPaused = false; }
+  pause() { this.wantPaused = true; }
+  seek() {}
+  time() { return (performance.now() - this.startedAt) / 1000; }
+  state() { return this.ready ? MEDIA_STATE.PLAYING : MEDIA_STATE.BUFFERING; }
+  setVolume(v) { this.volume = v; if (this.ready) this.post({ volume: Math.max(0, Math.min(1, Number(v) / 100)) }); }
+  setMuted(m) { this.muted = !!m; if (this.ready) this.post({ mute: this.muted }); }
+  destroy() {
+    this.destroyed = true;
+    clearTimeout(this.kick);
+    this.frame.remove();
   }
 }
 
@@ -380,6 +436,7 @@ class MediaSwitch {
     if (media.type === 'twitch') this.source = new TwitchSource(opts, media);
     else if (media.type === 'twitchclip') this.source = new TwitchClipSource(opts, media);
     else if (media.type === 'vimeo') this.source = new VimeoSource(opts, media);
+    else if (media.type === 'vdoninja') this.source = new VdoNinjaSource(opts, media);
     else this.source = new VideoElementSource(opts, media.type === 'hls');
   }
   stopSource() {

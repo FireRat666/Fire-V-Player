@@ -78,6 +78,10 @@ async function resolveMediaLink(link) {
     }
   }
 
+  if (media.type === 'vdoninja') {
+    return { title: `VDO.Ninja: ${media.name}`, thumbnail: '', duration: 0, link };
+  }
+
   // A file or stream: the player page learns its length when it loads.
   return { title: MediaSources.nameFromLink(link), thumbnail: '', duration: 0, link };
 }

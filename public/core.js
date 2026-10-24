@@ -768,6 +768,14 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
   }
   setOrDefault(attr, defaultValue) {
     const value = this.currentScript.getAttribute(attr);
+    // A true/false setting from a snippet checkbox may come as "True"/"False", or empty when it's
+    // unticked. Empty must mean false here, not the default, or unticking a box that's on by
+    // default (spatial) would do nothing.
+    if (defaultValue === 'true' || defaultValue === 'false') {
+      const v = String(value == null ? '' : value).trim().toLowerCase();
+      if (v === 'true' || v === 'false') { this.params[attr] = v; return; }
+      if (value != null && v === '') { this.params[attr] = 'false'; return; }
+    }
     this.params[attr] = value || (this.urlParams.has(attr) ? this.urlParams.get(attr) : defaultValue);
   }
   setupWebsocket(type, messageCallback, connectedCallback, closeCallback){

@@ -275,6 +275,9 @@ class App {
           console.log(`${ws.u.name || 'Unknown'} (host) returned to space, takeover not enabled.`);
         }
         break;
+      case Commands.REQUEST_STATE:
+        this.sendFullState(ws);
+        break;
       case Commands.SET_TIME:
         await hostHandler.setVideoTime(this, ws, msg.data);
         break;
@@ -874,6 +877,16 @@ class App {
     // This prevents race conditions on the client and ensures all data is available on connect.
     this.send(ws, Commands.PLAYBACK_UPDATE, {
       video: this.getVideoObject(instanceId, { includePlaylist: true, includeSingers: true }),
+      type: 'initial-sync'
+    });
+  }
+  // Sends a client the whole player state, as on joining. Clients ask for this to refresh a
+  // copy of the playlist that has fallen out of step.
+  sendFullState(ws) {
+    if (!ws.i || !this.videoPlayers[ws.i]) return;
+    this.syncWsTime(ws, ws.i);
+    this.send(ws, Commands.PLAYBACK_UPDATE, {
+      video: this.getVideoObject(ws.i, { includePlaylist: true, includeSingers: true }),
       type: 'initial-sync'
     });
   }

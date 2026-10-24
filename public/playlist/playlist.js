@@ -68,6 +68,14 @@ var Playlist = class {
         this.core.showToast("Reconnecting...");
     });
   }
+  refresh(showToast) {
+    if (this.core.requestState()) {
+      this.refreshToast = showToast;
+      if (showToast) this.core.showToast("Refreshing playlist...", 2000);
+    } else if (showToast) {
+      this.core.showToast("Not connected. Reconnecting...", 3000);
+    }
+  }
   playPlaylist(shouldClear) {
     this.core.sendMessage({path: Commands.FROM_PLAYLIST, data: {id: this.playlistId || this.core.params.playlist, shouldClear, fromPlaylist: true}});
     this.playlistId = null;
@@ -91,6 +99,10 @@ var Playlist = class {
         }
         this.updatePlaylist(this.core.player);
         this.startUiUpdater();
+        if (json.data.type === 'initial-sync' && this.refreshToast) {
+          this.refreshToast = false;
+          this.core.showToast("Playlist is up to date.", 2000);
+        }
         break;
       case Commands.SEARCH_RESULTS:
         this.loadVideos(json.data);
@@ -185,6 +197,8 @@ var Playlist = class {
           }
           this.core.player.currentTrack = json.data.newTrackIndex;
           this.core.player.lastStartTime = json.data.newLastStartTime;
+          if (typeof json.data.paused === 'boolean') this.core.player.paused = json.data.paused;
+          this.core.fixTrackMismatch(this.core.player, json.data);
           // The UI also needs the duration and current time of the new track.
           this.core.player.currentTime = json.data.newCurrentTime || 0;
           if (this.core.player.playlist[this.core.player.currentTrack]) {
@@ -695,6 +709,14 @@ var Playlist = class {
     
     this.clearPlaylistButton.addEventListener('click', () => this.clearPlaylist());
     
+    // Refresh: fetch the whole state from the server, in case this list is out of date.
+    this.refreshState = document.querySelector('#refreshState');
+    this.refreshState.addEventListener('click', () => this.refresh(true));
+    // Coming back to the page (e.g. after a headset sleep) is also a good time to catch up.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') this.refresh(false);
+    });
+
     this.autoSync = document.querySelector('#autoSync');
     
     this.autoSyncEnabled = false;

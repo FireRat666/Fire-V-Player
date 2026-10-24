@@ -72,7 +72,8 @@ var Commands = {
   SET_ABSOLUTE_VOLUME: 'set-absolute-volume',
   SET_VOLUME_INCREMENT: 'set-volume-increment',
   TOGGLE_PAUSE: 'toggle-pause',
-  PAUSE_STATE_CHANGED: 'pause-state-changed'
+  PAUSE_STATE_CHANGED: 'pause-state-changed',
+  REQUEST_STATE: 'request-state'
 };
 if ((typeof process !== 'undefined') && 
 (process.release.name.search(/node|io.js/) !== -1)) {

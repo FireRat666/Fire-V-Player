@@ -772,7 +772,8 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
           this.player.lastStartTime = json.data.newLastStartTime;
           this.player.currentTime = json.data.newCurrentTime || 0;
           // The server resumes playback when the track changes (skip, set track, auto-advance).
-          this.player.paused = false;
+          this.player.paused = typeof json.data.paused === 'boolean' ? json.data.paused : false;
+          this.fixTrackMismatch(this.player, json.data);
           const track = this.player.playlist && this.player.playlist[this.player.currentTrack];
           if (track) this.player.duration = track.duration / 1000;
         }
@@ -807,6 +808,26 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
         try { fn(json); } catch (e) { console.error('[Core] Message listener error:', e); }
       });
     }
+  }
+  // Asks the server for the whole player state again (it replies as on joining).
+  // Returns false when not connected, as the socket then reconnects and refreshes by itself.
+  requestState() {
+    if (!this.connected()) return false;
+    this.sendMessage({ path: Commands.REQUEST_STATE });
+    return true;
+  }
+  // For a TRACK_CHANGED message: when the server's track isn't at that index in this copy
+  // of the playlist, puts it there and asks for the full state, so the copy lines up again.
+  // Returns true when the copy was out of date.
+  fixTrackMismatch(state, data) {
+    if (!state || !data || !data.track) return false;
+    if (!Array.isArray(state.playlist)) state.playlist = [];
+    const copy = state.playlist[data.newTrackIndex];
+    if (copy && copy.link === data.track.link) return false;
+    console.warn(`Playlist copy is out of date at track ${data.newTrackIndex}; refreshing from the server.`);
+    state.playlist[data.newTrackIndex] = data.track;
+    this.requestState();
+    return true;
   }
   getId(url){
     if (!url) return false;

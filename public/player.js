@@ -536,13 +536,8 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
     if (typeof data.paused === 'boolean') this.playerData.paused = data.paused;
 
     const index = data.newTrackIndex;
-    const copy = this.playerData.playlist[index];
-    if (data.track && (!copy || copy.link !== data.track.link)) {
-      console.warn(`[PLAYER] Playlist copy is out of date at track ${index}; playing the server's track and refreshing the playlist.`);
-      this.playerData.playlist[index] = data.track;
-      // Ask for the full state again so later track changes line up too.
-      this.core.sendMessage({ path: Commands.INSTANCE, data: this.core.params.instance, u: window.user });
-    }
+    // Plays the server's track even if this copy of the playlist has drifted, and refreshes it.
+    this.core.fixTrackMismatch(this.playerData, data);
 
     // The server provides the definitive start time.
     this.playVidya(index, data.newCurrentTime || 0, true, undefined, data.track);

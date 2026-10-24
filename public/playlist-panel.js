@@ -235,6 +235,7 @@ var FirePlaylistPanel = class {
     const header = await row(rootEl);
     await this.label(header, 'Fire-V-Player', { fontSize: '30px', fontWeight: 'bold', flexGrow: 1 });
     this.hostLabel = await this.label(header, '', { fontSize: '20px', color: '#bbbbbb', marginRight: '12px' });
+    await this.button(header, 'Refresh', () => this.refresh(true), { backgroundColor: GREY });
     this.moreBtn = await this.button(header, 'More...', () => this.setView(this.view === 'more' ? 'main' : 'more'), { backgroundColor: GREY });
     await this.button(header, 'Close', () => this.close(), { backgroundColor: GREY });
 
@@ -436,9 +437,20 @@ var FirePlaylistPanel = class {
     else if (o.transform) o.transform.localPosition = pos;
   }
 
+  // Fetches the whole state from the server, in case the panel's list is out of date.
+  refresh(showStatus) {
+    if (this.core.requestState()) {
+      this.refreshing = showStatus;
+      if (showStatus) this.setStatus('Refreshing...', 0);
+    } else if (showStatus) {
+      this.setStatus('Not connected to the server. Reconnecting...');
+    }
+  }
+
   async open() {
     if (this.destroyed) return;
     this.visible = true;
+    this.refresh(false);
     // Start on the page holding the current track.
     const player = this.core.player;
     if (this.tab === 'playlist' && player && typeof player.currentTrack === 'number') {
@@ -616,6 +628,12 @@ var FirePlaylistPanel = class {
         break;
       case Commands.AUTO_SYNC_STATE_CHANGED:
         if (json.data && typeof json.data.enabled === 'boolean') this.autoSync = json.data.enabled;
+        break;
+      case Commands.PLAYBACK_UPDATE:
+        if (json.data && json.data.type === 'initial-sync' && this.refreshing) {
+          this.refreshing = false;
+          this.setStatus('Playlist is up to date.');
+        }
         break;
     }
     // Estimate the client/server clock difference so the progress bar matches the server.

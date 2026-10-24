@@ -774,7 +774,7 @@ var FirePlaylistPanel = class {
 
     const defs = [];
     if (!isCurrent) {
-      if (host) defs.push({ text: 'Play', color: '#2e7d32', fn: () => this.send(Commands.SET_TRACK, i) });
+      if (host) defs.push({ text: 'Play', color: '#2e7d32', fn: () => this.send(Commands.SET_TRACK, { index: i, link: v.link }) });
       if (player.canVote) {
         defs.push({ text: 'Vote +', fn: () => this.send(Commands.UP_VOTE, v.link) });
         defs.push({ text: 'Vote -', fn: () => this.send(Commands.DOWN_VOTE, v.link) });

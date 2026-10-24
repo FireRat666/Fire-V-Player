@@ -131,6 +131,7 @@ async function playNextKaraokeSong(app, instanceId) {
   player.sockets.forEach(socket => {
       app.send(socket, Commands.TRACK_CHANGED, {
           newTrackIndex: 0,
+          track: player.playlist[0], paused: player.paused,
           newLastStartTime: player.lastStartTime,
           playlist: player.playlist
           // The 'singers' payload is no longer bundled here.
@@ -201,7 +202,7 @@ async function restartSong(app, ws) {
     player.currentTime = 0;
 
     player.sockets.forEach(socket => {
-      app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, newLastStartTime: player.lastStartTime, newCurrentTime: 0 });
+      app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, newCurrentTime: 0 });
     });
     await app.savePlayerState(ws.i);
   }

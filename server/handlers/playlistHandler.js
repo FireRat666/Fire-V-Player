@@ -214,7 +214,7 @@ async function fromPlaylist(app, ws, data) {
         if (player.playlist.length > 0) {
           player.lastStartTime = new Date().getTime() / 1000;
           player.sockets.forEach(socket => {
-            app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, newLastStartTime: player.lastStartTime, playlist: player.playlist });
+            app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, playlist: player.playlist });
           });
         } else {
           app.updateClients(ws.i); // This is fine, sends an empty playlist.
@@ -268,7 +268,7 @@ async function addAndPlay(app, ws, v) {
       app.resetBrowserIfNeedBe(player, newIndex);
       app.updateVotes(ws.i);
       player.sockets.forEach(socket => {
-        app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, newLastStartTime: player.lastStartTime, playlist: player.playlist });
+        app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, playlist: player.playlist });
       });
       await app.savePlayerState(ws.i);
     }, app.videoPlayers[ws.i].locked);

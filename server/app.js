@@ -625,7 +625,7 @@ class App {
 
                   // Broadcast the change to all clients, including the updated playlist.
                   player.sockets.forEach(socket => {
-                    this.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, newLastStartTime: player.lastStartTime, playlist: player.playlist });
+                    this.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, playlist: player.playlist });
                   });
                   await this.savePlayerState(instanceId);
                 }
@@ -636,7 +636,7 @@ class App {
                 player.currentTrack = (player.currentTrack + 1) % player.playlist.length;
                 this.resetBrowserIfNeedBe(player, player.currentTrack);
                 player.sockets.forEach(socket => {
-                  this.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, newLastStartTime: player.lastStartTime });
+                  this.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime });
                 });
                 await this.savePlayerState(instanceId);
               }
@@ -724,7 +724,7 @@ class App {
         if (wasCurrentTrack) {
           player.lastStartTime = new Date().getTime() / 1000;
           player.sockets.forEach(socket => {
-            this.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, newLastStartTime: player.lastStartTime, playlist: player.playlist });
+            this.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, playlist: player.playlist });
           });
         } else {
           player.sockets.forEach(socket => {

@@ -442,7 +442,7 @@ var Playlist = class {
             playTrack.innerText = "Play Now.";
 
             playTrack.addEventListener('click', () => {
-              this.core.sendMessage({path: Commands.SET_TRACK, data: i });
+              this.core.sendMessage({path: Commands.SET_TRACK, data: { index: i, link: v.link } });
             });          
           };    
         };

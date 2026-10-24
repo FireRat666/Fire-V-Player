@@ -182,23 +182,11 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
             if (!this.readyToPlay) {
               this.readyToPlay = true;
               // First time player is playing. Check for pending changes or initial sync.
-              if (this.pendingTrackChange) {
+              if (this.pendingTrackChange && this.playerData) {
                 // A track change was received before we were ready. Apply it now.
                 const data = this.pendingTrackChange;
-                if (data.playlist) {
-                  this.playerData.playlist = data.playlist;
-                }
-                this.playerData.currentTrack = data.newTrackIndex;
-                this.playerData.lastStartTime = data.newLastStartTime;
-                const startTime = data.newCurrentTime || 0;
-                this.playVidya(this.playerData.currentTrack, startTime, true);
-                this.initialSyncComplete = true;
                 this.pendingTrackChange = null; // Clear the cached message
-                // A track change occurred, so we should start with a fast sync.
-                if (this.autoSync) {
-                  this.syncIntervalMs = SYNC_INTERVAL_FAST;
-                  this.scheduleNextSync();
-                }
+                this.applyTrackChange(data);
               } else if (this.playerData && this.playerData.playlist && this.playerData.playlist.length > 0 && !this.initialSyncComplete) {
                 // This handles rejoining an instance that already has a playlist.
                 this.playVidya(this.playerData.currentTrack, this.playerData.currentTime, true);
@@ -218,7 +206,7 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
           // Error 150: The video owner has not made this video available in your country.
           // Error 101 is a variation of this.
           if (event.data === 150 || event.data === 101) {
-            const currentVideo = this.playerData.playlist[this.playerData.currentTrack];
+            const currentVideo = this.currentVideo || (this.playerData && this.playerData.playlist && this.playerData.playlist[this.playerData.currentTrack]);
             if (currentVideo) {
               this.core.showToast(`Video unavailable in your region: ${currentVideo.title}`);
               this.core.sendMessage({ path: Commands.VIDEO_UNAVAILABLE, data: { link: currentVideo.link } });
@@ -349,23 +337,7 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
       case Commands.TRACK_CHANGED:
         // This is the new authoritative command for changing tracks.
         if (this.playerData && this.readyToPlay) { // Player is ready, apply immediately.
-          // If the message includes a new playlist (e.g., from add-and-play), update it.
-          if (json.data.playlist) {
-            this.playerData.playlist = json.data.playlist;
-          }
-          this.playerData.currentTrack = json.data.newTrackIndex;
-          this.playerData.lastStartTime = json.data.newLastStartTime;
-          // The server now provides the definitive start time.
-          const startTime = json.data.newCurrentTime || 0;
-          this.playVidya(this.playerData.currentTrack, startTime, true);
-
-          // When a track changes, reset the sync interval to be fast to ensure
-          // the new song starts off perfectly in sync.
-          if (this.autoSync) {
-            this.syncIntervalMs = SYNC_INTERVAL_FAST;
-            this.scheduleNextSync();
-          }
-          this.initialSyncComplete = true; // A track change is a definitive sync.
+          this.applyTrackChange(json.data);
         } else {
           // Player isn't ready. Cache the track change data to be applied when it is.
           this.pendingTrackChange = json.data;
@@ -552,20 +524,55 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
       this.latencyGraphElement.appendChild(bar);
     });
   }
-  playVidya(currentTrack, currentTime, force, volume) {
+  // Applies a TRACK_CHANGED message. The server sends the track itself, so this plays the
+  // song the server chose even if this page's copy of the playlist has drifted out of line.
+  applyTrackChange(data) {
+    if (data.playlist) {
+      this.playerData.playlist = data.playlist;
+    }
+    if (!Array.isArray(this.playerData.playlist)) this.playerData.playlist = [];
+    this.playerData.currentTrack = data.newTrackIndex;
+    this.playerData.lastStartTime = data.newLastStartTime;
+    if (typeof data.paused === 'boolean') this.playerData.paused = data.paused;
+
+    const index = data.newTrackIndex;
+    const copy = this.playerData.playlist[index];
+    if (data.track && (!copy || copy.link !== data.track.link)) {
+      console.warn(`[PLAYER] Playlist copy is out of date at track ${index}; playing the server's track and refreshing the playlist.`);
+      this.playerData.playlist[index] = data.track;
+      // Ask for the full state again so later track changes line up too.
+      this.core.sendMessage({ path: Commands.INSTANCE, data: this.core.params.instance, u: window.user });
+    }
+
+    // The server provides the definitive start time.
+    this.playVidya(index, data.newCurrentTime || 0, true, undefined, data.track);
+
+    // When a track changes, sync fast so the new song starts off in sync.
+    if (this.autoSync) {
+      this.syncIntervalMs = SYNC_INTERVAL_FAST;
+      this.scheduleNextSync();
+    }
+    this.initialSyncComplete = true; // A track change is a definitive sync.
+  }
+  playVidya(currentTrack, currentTime, force, volume, track) {
     if(this.playerData) {
-      if(this.lastUrl !== this.playerData.playlist[currentTrack].link || force) {
-        const url = this.playerData.playlist[currentTrack].link;
-        this.player.loadVideoById(this.core.getId(url), currentTime);
+      const video = track || (this.playerData.playlist && this.playerData.playlist[currentTrack]);
+      if (!video) {
+        console.warn(`[PLAYER] No track at index ${currentTrack}.`);
+        return;
+      }
+      if(this.lastUrl !== video.link || force) {
+        this.player.loadVideoById(this.core.getId(video.link), currentTime);
         if (this.playerData.paused) {
           this.player.pauseVideo();
         } else {
           this.player.playVideo();
         }
-        this.core.showToast("Playing: " + this.playerData.playlist[currentTrack].title);
+        this.core.showToast("Playing: " + video.title);
         this.setVolume("spatial");
       }
-      this.lastUrl = this.playerData.playlist[currentTrack].link;
+      this.lastUrl = video.link;
+      this.currentVideo = video;
     }else{
       console.log("No player data!");
     }

@@ -104,9 +104,17 @@ async function stop(app, ws) {
   app.onlyIfHost(ws, async () => internalStop(app, ws.i), app.videoPlayers[ws.i].locked);
 }
 
-async function setVideoTrack(app, ws, index) {
+// data is a track index, or { index, link }. With a link the server picks that video, so a
+// client whose copy of the playlist is out of date still plays the song that was clicked.
+async function setVideoTrack(app, ws, data) {
   const player = app.videoPlayers[ws.i];
   if (!player) return;
+  let index = data;
+  if (data && typeof data === 'object') {
+    index = Number(data.index);
+    const byLink = data.link ? player.playlist.findIndex(v => v.link === data.link) : -1;
+    if (byLink > -1) index = byLink;
+  }
 
   app.onlyIfHost(ws, async () => {
     if(index < player.playlist.length && index > -1) {
@@ -121,7 +129,7 @@ async function setVideoTrack(app, ws, index) {
       app.resetBrowserIfNeedBe(player, index);
       app.updateVotes(ws.i);
       player.sockets.forEach(socket => {
-        app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, newLastStartTime: player.lastStartTime });
+        app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime });
       });
       await app.savePlayerState(ws.i);
     } else {

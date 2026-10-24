@@ -1,5 +1,6 @@
 // Protected space state key holding a space admin's mode choice (see switchMode).
 var MODE_STATE_KEY = 'fire-v-player-mode';
+var MODE_WRITE_TIMEOUT_MS = 6000;
 
 var Core = class {
     constructor() {
@@ -426,7 +427,7 @@ var Core = class {
     try { return (window.BS && BS.BanterScene) ? BS.BanterScene.GetInstance() : null; } catch (e) { return null; }
   }
 
-  // Shows the mode switch. Not a security check: the server refuses protected writes from anyone else.
+  // Informational only (it can read false for a real admin); the server decides who may write.
   isSpaceAdmin() {
     const scene = this.banterScene();
     return !!(scene && scene.localUser && scene.localUser.isSpaceAdmin);
@@ -482,6 +483,7 @@ var Core = class {
       const c = changes.find(c => c && c.property === MODE_STATE_KEY);
       if (!c) return;
       const isPublic = c.isPublic === true || c.type === 'public';
+      if (!isPublic) { clearTimeout(this.modeWriteTimer); this.modeWriteTimer = null; }
       const isProtected = c.isPublic === false || c.type === 'protected';
       if (isPublic) return;
       const override = isProtected ? this.parseModeValue(c.newValue) : this.readModeOverride();
@@ -492,23 +494,33 @@ var Core = class {
       const d = (e && e.detail) || {};
       if (d.key !== MODE_STATE_KEY && d.path !== MODE_STATE_KEY) return;
       console.warn('[Core] Could not save the mode:', d.code, d.message);
-      const msg = d.code === 'not_authorized' ? 'Only space admins can change the mode.' : 'Could not change the mode.';
-      this.showToast(msg);
-      if (this.playlistPanel) this.playlistPanel.setStatus(msg);
+      this.modeWriteRefused(d.code);
     });
   }
 
   // Saves the mode for everyone in the space ('karaoke', 'playlist', or null for the snippet's).
   // The change comes back through space-state-changed, which does the switch.
+  // Anyone can press the button, since the client can't always tell who is a space admin
+  // (isSpaceAdmin can read false for a real one). The server refuses other players' writes: that
+  // may arrive as a space-state-error, or as nothing at all, so a switch that hasn't come back
+  // after a few seconds is reported as refused too.
   setModeOverride(mode) {
     const scene = this.banterScene();
     if (!scene || typeof scene.SetProtectedSpaceProps !== 'function') return false;
-    if (!this.isSpaceAdmin()) {
-      this.showToast('Only space admins can change the mode.');
-      return false;
-    }
+    clearTimeout(this.modeWriteTimer);
+    this.modeWriteTimer = setTimeout(() => this.modeWriteRefused(), MODE_WRITE_TIMEOUT_MS);
     scene.SetProtectedSpaceProps({ [MODE_STATE_KEY]: mode || 'default' });
     return true;
+  }
+
+  modeWriteRefused(code) {
+    clearTimeout(this.modeWriteTimer);
+    this.modeWriteTimer = null;
+    const msg = code && code !== 'not_authorized'
+      ? 'Could not change the mode.'
+      : "The mode didn't change. Only space admins can switch it.";
+    this.showToast(msg);
+    if (this.playlistPanel) this.playlistPanel.setStatus(msg);
   }
 
   // Switches this player in place: the server room, the buttons, the panel and the video page.

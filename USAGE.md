@@ -102,11 +102,11 @@ The player uses the SDK's legacy A-Frame bridge, so `snippet.js` adds an `<a-sce
 
 In these worlds the Playlist button opens an **in-world panel** beside the screen. The main view has playback and volume controls, the playlist (play, reorder, remove, vote) and YouTube search. Search also accepts a video link, or a playlist link (host only), which replaces the playlist. **Refresh** fetches the latest playlist from the server; the panel also does this each time it opens. **More...** opens a second view with:
 
-- space admins: switch between playlist and karaoke mode (see [Switching mode in world](#switching-mode-in-world))
 - host controls: lock, take over, voting, clear, load the default playlist
 - seek to a time (host)
 - your player only: skip back/forward and Auto Sync
 - add by link: a video, or a playlist (host)
+- mode: switch between playlist and karaoke, for space admins (see [Switching mode in world](#switching-mode-in-world))
 
 The Creator SDK client currently doesn't open the 2D playlist page, so the panel has no button for it.
 
@@ -123,12 +123,12 @@ Whoever runs the karaoke should take over the player first, as only the host can
 
 ### Switching mode in world
 
-A **space admin** (the world's owner, an Owner or Moderator of the community hosting it, or a SideQuest admin) sees a **Space admin** section at the top of the panel's **More...** view. It has:
+At the bottom of the panel's **More...** view, the **Mode (space admins only)** section has:
 
 - **Switch to Karaoke** / **Switch to Playlist**, which switches the player for everyone in the space.
 - **Use Snippet Default**, shown once the mode has been changed, which goes back to the snippet's `karaoke` setting.
 
-The choice is saved as protected space state (the key `fire-v-player-mode`), which only space admins can write: the server refuses anyone else, so a modified client can't change it. Everyone in the space switches straight away, and people who join later start in the saved mode. With nothing saved, the player uses the snippet's setting.
+Everyone sees these buttons, because the client can't always tell who is a space admin, but they only work for a space admin: the world's owner, an Owner or Moderator of the community hosting it, or a SideQuest admin. The choice is saved as protected space state (the key `fire-v-player-mode`), which the server refuses to let anyone else write, so a modified client can't change it either. When someone else presses one, nothing changes and the panel says so after a few seconds. Everyone in the space switches straight away, and people who join later start in the saved mode. With nothing saved, the player uses the snippet's setting.
 
 - Space state lasts 24 hours after its last change, so after a day with no changes the player goes back to the snippet's mode.
 - The shared playlist is kept while the room is in karaoke mode. Switching back to playlist mode brings it back and plays its current track from the start. Switching to karaoke stops what's playing.

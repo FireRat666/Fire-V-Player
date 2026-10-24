@@ -1,6 +1,7 @@
 // Protected space state key holding a space admin's mode choice (see switchMode).
 var MODE_STATE_KEY = 'fire-v-player-mode';
 var MODE_WRITE_TIMEOUT_MS = 6000;
+var CAPTIONS_PREF_KEY = 'fire-v-player-captions';
 
 var Core = class {
     constructor() {
@@ -720,6 +721,7 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
     this.setOrDefault("playlist", "");
     this.setOrDefault("volume", '40');
     this.setOrDefault("mute", 'false');
+    this.setOrDefault("captions", 'true');
     this.setOrDefault("is3d", 'false');
     this.setOrDefault("announce", 'true');
     this.setOrDefault("announce-four-twenty", 'false');
@@ -753,6 +755,9 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
     this.params['mip-maps'] = Number(this.params['mip-maps']);
     this.tempVolume = this.params.volume;
     this.params.mute = this.params.mute === 'true' ? 'true' : 'false';
+    // Closed captions, for this viewer only. The setting is the default; loadCaptionsPref() and
+    // setCaptions() change it.
+    this.captions = String(this.params.captions).toLowerCase() !== 'false';
     if(this.params["one-for-each-instance"] === "true" && window.user && window.user.instance) {
         this.params.instance += window.user.instance;
     }
@@ -805,6 +810,21 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
       }
     }
   }
+  // Closed captions are per viewer: each person's screen is their own browser. The choice is
+  // remembered on this device, over the snippet's captions setting.
+  loadCaptionsPref() {
+    try {
+      const saved = localStorage.getItem(CAPTIONS_PREF_KEY);
+      if (saved === 'true' || saved === 'false') this.captions = saved === 'true';
+    } catch (e) {}
+    return this.captions;
+  }
+  setCaptions(on) {
+    this.captions = !!on;
+    try { localStorage.setItem(CAPTIONS_PREF_KEY, String(this.captions)); } catch (e) {}
+    Promise.resolve(this.sendBrowserMessage({ path: Commands.CAPTIONS, data: this.captions })).catch(() => {});
+    this.showToast(this.captions ? 'Captions on' : 'Captions off');
+  }
   sendBrowserMessage(msg){
     if(!window.isBanter) {
       return;
@@ -814,6 +834,7 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
     msg.i = this.params.instance;
     msg.id = this.getUniquId();
     msg.km = !!this.isKaraoke; // the current mode, which can change in world
+    msg.cc = this.captions !== false; // this viewer's closed captions setting
     return new Promise((resolve, reject) => {
       if(this.browser) {
         this.browserAcks[msg.id] = resolve;
@@ -840,7 +861,7 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
         if(window.isBanter && this.browser) {
           // console.log("RESET_BROWSER", {"url": this.initialUrl});
           // The mode may have changed in world since the page first loaded.
-          const url = String(this.initialUrl || '').replace(/([?&]mode=)[^&]*/, `$1${this.getMode()}`);
+          const url = String(this.initialUrl || '').replace(/([?&]mode=)[^&]*/, `$1${this.getMode()}`).replace(/([?&]captions=)[^&]*/, `$1${this.captions !== false}`);
           this.browser.setAttribute("sq-browser", {"url": url});
         }
         break;

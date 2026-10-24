@@ -96,6 +96,7 @@ async function internalStop(app, instanceId) {
   player.playlist = [];
   player.currentTrack = 0;
   player.currentTime = 0;
+  player.paused = false; // nothing is playing, so the next song shouldn't start paused
   app.updateClients(instanceId, "stop");
   await app.savePlayerState(instanceId);
 }

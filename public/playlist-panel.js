@@ -390,7 +390,7 @@ var FirePlaylistPanel = class {
 
     // Your own player
     const mineSection = await section('Your player only');
-    const mineRow = await row(mineSection);
+    const mineRow = await row(mineSection, { flexWrap: 'wrap' });
     await this.button(mineRow, '<< Skip', () => this.send(Commands.LOCAL_SKIP_BACK));
     await this.button(mineRow, 'Skip >>', () => this.send(Commands.LOCAL_SKIP_FORWARD));
     this.autoSyncBtn = await this.button(mineRow, 'Auto Sync: Off', () => {
@@ -398,7 +398,11 @@ var FirePlaylistPanel = class {
       this.send(Commands.AUTO_SYNC, this.autoSync);
       this.render();
     });
-    await this.label(mineRow, 'Nudges only your copy, e.g. if it drifts.', { fontSize: '16px', color: '#999999', marginLeft: '8px', flexShrink: 1 });
+    this.captionsBtn = await this.button(mineRow, 'Captions: On', () => {
+      this.core.setCaptions(this.core.captions === false);
+      this.render();
+    });
+    await this.label(mineRow, 'These change only your own screen.', { fontSize: '16px', color: '#999999', marginLeft: '8px', flexShrink: 1 });
 
     // Add by link (in karaoke mode, pasting a link into Search does this)
     const linkSection = this.karaoke ? null : await section('Add by link');
@@ -788,6 +792,9 @@ var FirePlaylistPanel = class {
     // More view
     this.setText(this.autoSyncBtn, this.autoSync ? 'Auto Sync: On' : 'Auto Sync: Off');
     this.setStyle(this.autoSyncBtn, 'backgroundColor', this.autoSync ? '#2e7d32' : '#00838f');
+    const captions = this.core.captions !== false;
+    this.setText(this.captionsBtn, captions ? 'Captions: On' : 'Captions: Off');
+    this.setStyle(this.captionsBtn, 'backgroundColor', captions ? '#2e7d32' : '#00838f');
     this.display(this.seekSection, host);
     if (this.loadPlaylistBtn) this.display(this.loadPlaylistBtn, host);
     this.setText(this.notHostLabel, host ? '' : (player.canTakeOver ? 'The host allows take over.' : 'Only the host can use these.'));

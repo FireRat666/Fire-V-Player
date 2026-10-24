@@ -58,6 +58,7 @@ In a Creator SDK world (`Assets/WebRoot/index.html`), add the player as a snippe
   youtube=""
   volume="10"
   mute="false"
+  captions="true"
   hand-controls="true"
   position="0 1.5 2"
   rotation="0 0 0"
@@ -104,7 +105,7 @@ In these worlds the Playlist button opens an **in-world panel** beside the scree
 
 - host controls: lock, take over, voting, clear, load the default playlist
 - seek to a time (host)
-- your player only: skip back/forward and Auto Sync
+- your player only: skip back/forward, Auto Sync and Captions (closed captions on or off for you, remembered on your device)
 - add by link: a video, or a playlist (host)
 - mode: switch between playlist and karaoke, for space admins (see [Switching mode in world](#switching-mode-in-world))
 
@@ -117,7 +118,7 @@ In karaoke mode the Singers button (and the Join/Leave Queue button) opens the s
 - **Now singing** shows who is singing which song. The host and the person singing get **Restart Song** and **Stop Song**.
 - **Singers** is the queue. The host can **Play & Sing** anyone, move singers **Up** / **Down** and **Remove** them. The singer at the top can start their own song, and anyone can **Remove Me**.
 - **Search** finds a song (or takes a pasted video link). **Sing It** adds you to the queue with that song. You can be in the queue once.
-- **More...** has the host controls (lock, take over, Auto Advance, which starts the next singer when a song ends), seek, and your own player's skip and Auto Sync.
+- **More...** has the host controls (lock, take over, Auto Advance, which starts the next singer when a song ends), seek, and your own player's skip, Auto Sync and Captions.
 
 Whoever runs the karaoke should take over the player first, as only the host can start other people's songs.
 
@@ -150,6 +151,7 @@ All parameters are optional unless marked as **(Required)**.
 | `youtube` | The URL of a single YouTube video to use as the default "silent" video when nothing is playing. | A silent visual video |
 | `volume` | The initial volume, from `0` to `100`. | `40` |
 | `mute` | Whether the player should start muted. | `false` |
+| `captions` | Whether closed captions start on. Each viewer can turn them on or off in the panel's More view, and their choice is remembered on their device. | `true` |
 | `resolution` | The resolution (width in pixels) of the browser surface. Higher values are crisper but use more resources. | `1600` |
 
 ### 3D Environment Parameters

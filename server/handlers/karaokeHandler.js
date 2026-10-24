@@ -115,6 +115,9 @@ async function playNextKaraokeSong(app, instanceId) {
   player.playlist = []; // Clear the main playlist
   player.currentTrack = 0;
   player.currentTime = 0;
+  // A new song always plays, as a skip or picking a track does. Otherwise a pause left over
+  // from before (e.g. from playlist mode) loads every song paused, on a black screen.
+  player.paused = false;
   const newVideo = app._createVideoObject(videoToPlay, nextSinger.user, 'scraper');
   player.playlist.push(newVideo);
   
@@ -200,6 +203,7 @@ async function restartSong(app, ws) {
   if (isHost || isCurrentSinger) {
     player.lastStartTime = (new Date().getTime() / 1000);
     player.currentTime = 0;
+    player.paused = false; // a restart plays from the start, like a new song
 
     player.sockets.forEach(socket => {
       app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, newCurrentTime: 0 });

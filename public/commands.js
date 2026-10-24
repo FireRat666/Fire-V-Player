@@ -27,6 +27,7 @@ var Commands = {
   SINGER_REMOVED: 'singer-removed',
   SET_VOLUME: 'set-volume',
   MUTE: 'mute',
+  CAPTIONS: 'captions', // in-world script -> its own player page: show or hide closed captions
   AUTO_SYNC: 'auto-sync',
   SKIP_BACK: 'skip-back',
   SKIP_FORWARD: 'skip-forward',

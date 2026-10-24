@@ -972,9 +972,9 @@ class App {
       player.savedPlaylist = null;
     }
     player.isKaraoke = karaoke;
+    player.paused = false; // a pause from the other mode would start the next song paused
 
     if (player.playlist.length) {
-      player.paused = false;
       this.updateClients(instanceId, 'mode-changed', { includeSingers: true });
       this.resetBrowserIfNeedBe(player, player.currentTrack);
       player.sockets.forEach(socket => {

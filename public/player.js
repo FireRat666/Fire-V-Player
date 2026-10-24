@@ -169,7 +169,7 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
         'disablekb': 1,
         'controls': 0,
         'modestbranding': true,
-        'cc_load_policy': 1,
+        'cc_load_policy': this.core.captions === false ? 0 : 1,
         'cc_lang_pref': 'en',
         'iv_load_policy': 3,
         'origin': window.location.origin,
@@ -179,6 +179,7 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
       events: {
         onStateChange: event => {
           if (event.data === YT.PlayerState.PLAYING) {
+            this.applyCaptions(); // each new video loads with the player's caption default
             if (!this.readyToPlay) {
               this.readyToPlay = true;
               // First time player is playing. Check for pending changes or initial sync.
@@ -243,6 +244,11 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
     try { json = JSON.parse(msg); } catch { return; }
     // Messages from the in-world script carry its current mode, which can change in world.
     if (json && typeof json.km === 'boolean') this.core.isKaraoke = json.km;
+    // ...and this viewer's closed captions setting.
+    if (json && typeof json.cc === 'boolean' && json.cc !== (this.core.captions !== false)) {
+      this.core.captions = json.cc;
+      this.applyCaptions(true);
+    }
     switch(json.path) {
       case Commands.SET_VOLUME:
         if(json.data >= 0 && json.data <= 100) {
@@ -390,6 +396,10 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
           console.log("[PLAYER] Player not ready or missing", { player: !!this.player, ready: this.readyToPlay });
         }
         break;
+      case Commands.CAPTIONS:
+        this.core.captions = json.data !== false;
+        this.applyCaptions(true);
+        break;
       case Commands.MUTE:
         this.core.params.mute = json.data;
         this.core.showToast(this.core.params.mute === true || this.core.params.mute === 'true' ? "mute" : "unmute");
@@ -525,6 +535,26 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
       });
       this.latencyGraphElement.appendChild(bar);
     });
+  }
+  // Shows or hides closed captions, as this viewer chose (core.captions). YouTube turns them back
+  // to its default for each new video, so this runs again whenever a different video plays.
+  applyCaptions(force) {
+    const p = this.player;
+    if (!p || typeof p.getVideoData !== 'function') return;
+    const on = this.core.captions !== false;
+    const key = `${(p.getVideoData() || {}).video_id || ''}:${on}`;
+    if (!force && this.captionsApplied === key) return;
+    this.captionsApplied = key;
+    try {
+      if (on) {
+        p.loadModule('captions');
+      } else {
+        p.setOption('captions', 'track', {});
+        p.unloadModule('captions');
+      }
+    } catch (e) {
+      console.warn('[PLAYER] Could not change captions:', e);
+    }
   }
   // Applies a TRACK_CHANGED message. The server sends the track itself, so this plays the
   // song the server chose even if this page's copy of the playlist has drifted out of line.

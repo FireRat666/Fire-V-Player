@@ -546,8 +546,10 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
     if (!force && this.captionsApplied === key) return;
     this.captionsApplied = key;
     try {
+      clearTimeout(this.captionsTimer);
       if (on) {
         p.loadModule('captions');
+        this.pickCaptionTrack(0);
       } else {
         p.setOption('captions', 'track', {});
         p.unloadModule('captions');
@@ -555,6 +557,22 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
     } catch (e) {
       console.warn('[PLAYER] Could not change captions:', e);
     }
+  }
+  // Turning captions off clears the track, so turning them on has to choose one again: English if
+  // the video has it (as cc_lang_pref asks), else its first. The track list only appears once the
+  // captions module has loaded, so this waits for it, for up to 5 seconds.
+  pickCaptionTrack(tries) {
+    clearTimeout(this.captionsTimer);
+    const p = this.player;
+    if (!p || this.core.captions === false) return;
+    let list = [];
+    try { list = p.getOption('captions', 'tracklist') || []; } catch (e) {}
+    if (list.length) {
+      const track = list.find(t => /^en/i.test(t.languageCode || '')) || list[0];
+      try { p.setOption('captions', 'track', { languageCode: track.languageCode }); } catch (e) {}
+      return;
+    }
+    if (tries < 10) this.captionsTimer = setTimeout(() => this.pickCaptionTrack(tries + 1), 500);
   }
   // Applies a TRACK_CHANGED message. The server sends the track itself, so this plays the
   // song the server chose even if this page's copy of the playlist has drifted out of line.

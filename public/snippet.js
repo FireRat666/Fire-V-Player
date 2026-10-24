@@ -8,8 +8,9 @@
 // - position / rotation are Unity world values, like every snippet, so the Scene-view gizmo
 //   shows where the screen will be. They are converted to the player's A-Frame units here.
 // - scale may be a single number.
+// - playlist-panel-position / -rotation are world values too, so the panel gets its own gizmo.
 // - the room id is "room", because Unity's BSSnippet component writes its own "instance"
-//   attribute. Without "room", that per-placement id is used.
+//   attribute. Without "room" the player uses the space URL, so each space has its own room.
 //
 // The player still uses the SDK's legacy A-Frame bridge, so this adds an <a-scene> if the page
 // has none.
@@ -34,7 +35,9 @@
 
   const KIND = {
     'position': 'pos', 'button-position': 'pos', 'box-trigger-position': 'pos', 'singer-button-position': 'pos',
+    'playlist-panel-position': 'pos', 'playlist-panel-offset': 'pos',
     'rotation': 'rot', 'button-rotation': 'rot', 'box-trigger-rotation': 'rot', 'singer-button-rotation': 'rot',
+    'playlist-panel-rotation': 'rot',
     'scale': 'scale', 'button-scale': 'scale', 'box-trigger-scale': 'scale'
   };
 
@@ -45,7 +48,9 @@
       src: `${scriptUrl.origin}/playlist.js`,
       snippet: el,
       getAttribute(name) {
-        if (name === 'instance') return el.getAttribute('room') || el.getAttribute('instance');
+        // Not the element's own "instance" (BSSnippet's per-placement id): without a room the
+        // player falls back to the space URL.
+        if (name === 'instance') return el.getAttribute('room') || null;
         const v = el.getAttribute(name);
         if (v == null || v === '' || !KIND[name]) return v;
         return convert(v, KIND[name]);

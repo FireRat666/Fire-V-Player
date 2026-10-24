@@ -187,15 +187,17 @@ var FirePlaylistPanel = class {
     const screenScale = this.vec3(p.scale, [1, 1, 1]);
     const panelScale = parseFloat(p['playlist-panel-scale']) || 1;
     const panelWidthM = 1.4 * panelScale;
-    // The screen is 1 unit wide at scale 1, so put the panel just past its right edge.
-    const offset = this.vec3(p['playlist-panel-offset'], [screenScale[0] * 0.5 + 0.1 + panelWidthM * 0.5, 0, 0.15]);
-    const rot = this.vec3(p['playlist-panel-rotation'], [0, -20, 0]);
+    // Either a world position (and world rotation, default the screen's), or an offset from the
+    // screen. The screen is 1 unit wide at scale 1, so the default offset is just past its right edge.
+    const worldPos = this.vec3(p['playlist-panel-position'], null);
+    const offset = worldPos || this.vec3(p['playlist-panel-offset'], [screenScale[0] * 0.5 + 0.1 + panelWidthM * 0.5, 0, 0.15]);
+    const rot = this.vec3(p['playlist-panel-rotation'], worldPos ? screenRot : [0, -20, 0]);
 
     console.log('[PlaylistPanel] Building...');
     this.root = await this.withTimeout(new BS.GameObject({
       name: 'FireVPlayer_PlaylistRoot',
-      localPosition: this.toUnityPos(screenPos),
-      localEulerAngles: this.toUnityEuler(screenRot)
+      localPosition: worldPos ? new BS.Vector3(0, 0, 0) : this.toUnityPos(screenPos),
+      localEulerAngles: worldPos ? new BS.Vector3(0, 0, 0) : this.toUnityEuler(screenRot)
     }).Async(), 15000, 'Creating the panel root object');
     this.checkAlive();
 

@@ -564,11 +564,14 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
     this.setOrDefault("spatial-max-distance", '40');
     this.setOrDefault("youtube", "https://www.youtube.com/watch?v=GiwStUzx8fg");
     this.setOrDefault("start", '0');
-    // In-world playlist panel (new SDK). Offset/rotation are relative to the screen, in the same
-    // A-Frame units as "position"/"rotation". Empty offset = to the right of the screen.
+    // In-world playlist panel (new SDK), in the same A-Frame units as "position"/"rotation".
+    // playlist-panel-position places it in the world, and playlist-panel-rotation is then a world
+    // rotation (empty = the screen's). Otherwise offset/rotation are relative to the screen, and an
+    // empty offset puts it just right of the screen.
     this.setOrDefault("playlist-ui", 'auto');
+    this.setOrDefault("playlist-panel-position", '');
     this.setOrDefault("playlist-panel-offset", '');
-    this.setOrDefault("playlist-panel-rotation", '0 -20 0');
+    this.setOrDefault("playlist-panel-rotation", '');
     this.setOrDefault("playlist-panel-scale", '1');
 
     if (this.params.playlist) {

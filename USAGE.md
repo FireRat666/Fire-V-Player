@@ -50,16 +50,31 @@ In a Creator SDK world (`Assets/WebRoot/index.html`), add the player as a snippe
 <bs-snippet name="fire-v-player" title="Fire-V-Player" single="true"
   description="Synced YouTube player with a shared playlist and an in-world playlist panel."
   script="https://vidya.firer.at/snippet.js"
-  room="my-private-room"
+  room=""
   playlist="PLZWiw-xxQ4SPDmADhvme7-pU2bx3s7nKX"
+  youtube=""
   volume="10"
+  mute="false"
   hand-controls="true"
   position="0 1.5 2"
   rotation="0 0 0"
   scale="2"
-  playlist-ui="auto">
+  resolution="1600"
+  spatial="true"
+  spatial-min-distance="5"
+  spatial-max-distance="40"
+  button-position="0 0.83 2"
+  button-rotation=""
+  button-scale="1"
+  playlist-ui="auto"
+  playlist-panel-position="1.8 1.5 1.85"
+  playlist-panel-rotation="0 20 0"
+  playlist-panel-scale="1">
   <bs-gizmo type="position" attribute="position"/>
   <bs-gizmo type="plane" attribute="position" size="2 1.125" rotation="0 180 0"/>
+  <bs-gizmo type="position" attribute="playlist-panel-position"/>
+  <bs-gizmo type="plane" attribute="playlist-panel-position" size="1.4 1.2" rotation="0 200 0"/>
+  <bs-gizmo type="position" attribute="button-position"/>
 </bs-snippet>
 <!-- end snippet section -->
 ```
@@ -68,7 +83,10 @@ Settings are the same as the script attributes below, except:
 
 - `position` and `rotation` are **Unity world values**, as for every snippet, so the Scene-view gizmo shows where the screen will be. (Script-tag values use A-Frame axes, where Z is flipped: script `position="0 1.5 -2"` is snippet `position="0 1.5 2"`.)
 - `scale` can be a single number. The screen is 1 m wide and 0.5625 m tall at scale 1, so the gizmo's `size` should be `scale × 1` by `scale × 0.5625`.
-- The room ID is `room`, not `instance`: Unity's BSSnippet component writes its own `instance` attribute. Without `room`, that per-placement ID is used.
+- The room ID is `room`, not `instance`: Unity's BSSnippet component writes its own `instance` attribute. Without `room`, the space URL is used, so each space has its own room.
+- `playlist-panel-position` and `playlist-panel-rotation` place the in-world panel in the world (Unity values), and it has its own drag handle in the Scene view. Clear `playlist-panel-position` to put the panel beside the screen instead; `playlist-panel-rotation` is then relative to the screen.
+- `button-position` is where the in-world buttons go (Unity world position), with its own drag handle. Empty puts them just under the screen; an empty `button-rotation` uses the screen's.
+- An empty `youtube` uses the default silent video.
 - The section between the two comments is read as XML by Unity: quote every attribute, close every element, and write `&` as `&amp;`.
 
 The player uses the SDK's legacy A-Frame bridge, so `snippet.js` adds an `<a-scene>` if the page has none. With the plain script tag, add `<a-scene></a-scene>` to the page yourself.
@@ -123,8 +141,9 @@ All parameters are optional unless marked as **(Required)**.
 | `button-rotation` | The `x y z` rotation of the in-world UI buttons. | `0 0 0` |
 | `button-scale` | The `x y z` scale of the in-world UI buttons. | `1 1 1` |
 | `playlist-ui` | What the Playlist button opens. `panel`: an in-world panel (UI Toolkit) with controls, playlist and search. `page`: the 2D playlist page in the client's menu browser. `auto`: `panel` whenever the client has the UI system (the SideQuest/Altspace Creator SDK), otherwise `page`. Playlist mode only. | `auto` |
+| `playlist-panel-position` | Where the in-world panel sits in the world, in the same units as `position`. When set, `playlist-panel-rotation` is a world rotation too (empty = the screen's rotation), and `playlist-panel-offset` is ignored. | (beside the screen) |
 | `playlist-panel-offset` | Where the in-world panel sits, relative to the screen, in metres: `x` right, `y` up, `z` toward the viewer. Empty puts it just right of the screen. | (beside the screen) |
-| `playlist-panel-rotation` | The in-world panel's rotation relative to the screen. The default turns it slightly toward the screen's centre. | `0 -20 0` |
+| `playlist-panel-rotation` | The in-world panel's rotation: relative to the screen, or a world rotation when `playlist-panel-position` is set. Empty: relative `0 -20 0` (turned slightly toward the screen's centre), or the screen's rotation. | (see description) |
 | `playlist-panel-scale` | Size of the in-world panel. `1` is 1.4 m wide. | `1` |
 | `data-playlist-icon-url` | URL for a custom "Playlist/Singers" button icon. | Default icon |
 | `data-vol-up-icon-url` | URL for a custom "Volume Up" button icon. | Default icon |

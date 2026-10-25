@@ -340,7 +340,7 @@ var Karaoke = class {
           }
           const currentTimeText = document.querySelector('.currentTimeText');
           if (currentTimeText) {
-            currentTimeText.innerText = `${this.timeCode(this.core.player.currentTime)} / ${this.timeCode(this.core.player.duration)}`;
+            currentTimeText.innerText = `${this.timeCode(this.core.player.currentTime)} / ${this.durationCode(this.core.player.duration)}`;
           }
         }
         break;
@@ -487,7 +487,7 @@ var Karaoke = class {
         whiteSpace: 'nowrap'
       }, videoTitleAndAction);
       currentTimeText.className = "currentTimeText";
-      currentTimeText.innerText = `${this.timeCode(player.currentTime)} / ${this.timeCode(player.duration)}`;
+      currentTimeText.innerText = `${this.timeCode(player.currentTime)} / ${this.durationCode(player.duration)}`;
 
       const isCurrentSinger = video.user.id === window.user.id;
       // Add a stop button for the host or the current singer.
@@ -518,7 +518,7 @@ var Karaoke = class {
         background: 'red',
         transition: 'width 1s',
         transitionTimingFunction: 'linear',
-        width: `${(player.currentTime / player.duration) * 100}%`,
+        width: `${player.duration > 0 ? (player.currentTime / player.duration) * 100 : 0}%`,
       }, currentTime);
       currentTimeInner.className = "currentTime";
     }
@@ -685,7 +685,7 @@ var Karaoke = class {
         // No known length (some files): just how far in it is.
         const t = this.core.player.paused ? (this.core.player.currentTime || 0) : ((Date.now() / 1000) - this.clockSkew) - lastStartTime;
         const text = document.querySelector('.currentTimeText');
-        if (text) text.innerText = `${this.timeCode(Math.max(0, t))} / --:--`;
+        if (text) text.innerText = `${this.timeCode(Math.max(0, t))} / ${this.durationCode(0)}`;
         const bar = document.querySelector('.currentTime');
         if (bar) bar.style.width = '0%';
         return;
@@ -715,6 +715,10 @@ var Karaoke = class {
   }
   timeCode(seconds) {
     return new Date(seconds * 1000).toISOString().substring(11, 19);
+  }
+  // A track's length, or --:-- when it isn't known (some files).
+  durationCode(seconds) {
+    return seconds > 0 ? this.timeCode(seconds) : '--:--';
   }
   setupYoutubePlayer() {
     const youtubeUrl = 'https://www.youtube.com/watch?v=GiwStUzx8fg'; // Default video (Silence)
@@ -748,7 +752,7 @@ var Karaoke = class {
      * This value is used to align the UI time with the server's time.
      */
     estimateClockSkew() {
-      if (this.core.player.lastStartTime && this.core.player.duration > 0) {
+      if (this.core.player.lastStartTime && Number.isFinite(Number(this.core.player.currentTime))) {
         const serverNow = this.core.player.lastStartTime + this.core.player.currentTime;
         const clientNow = Date.now() / 1000;
         this.clockSkew = clientNow - serverNow;

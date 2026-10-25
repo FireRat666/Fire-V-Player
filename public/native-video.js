@@ -16,6 +16,7 @@ var FireNativeScreen = (() => {
   // How often to ask Unity for the player's state. Unity sends the time only once a second, so
   // asking more often gains nothing and costs frames on Quest.
   const POLL_MS = 1000;
+  const GET_TIMEOUT_MS = 3000;      // a GetProperty Unity never answers mustn't stall the polling
   const DURATION_TRIES = 15;        // polls after loading to wait for a length before giving up
   const SYNC_EVERY_MS = 5000;
   const MAX_DRIFT_S = 1.0;          // jump when further out than this (time reports come once a second)
@@ -86,9 +87,15 @@ var FireNativeScreen = (() => {
       const vp = this.vp;
       const P = BS.PN || BS.PropertyName;
       if (!vp || !P) return;
-      const get = async (name) => {
-        if (typeof vp.GetProperty !== 'function') return vp[name];
-        try { return await vp.GetProperty(P[name]); } catch (e) { return vp[name]; }
+      const get = (name) => {
+        if (typeof vp.GetProperty !== 'function') return Promise.resolve(vp[name]);
+        // No answer (an error or a timeout) leaves that value as it was: the component's own field
+        // is stale, so it isn't used as a reading.
+        return new Promise(resolve => {
+          const timer = setTimeout(() => resolve(undefined), GET_TIMEOUT_MS);
+          const done = v => { clearTimeout(timer); resolve(v); };
+          try { Promise.resolve(vp.GetProperty(P[name])).then(done, () => done(undefined)); } catch (e) { done(undefined); }
+        });
       };
       const names = ['isPlaying'];
       if (!this.state.isPrepared) names.push('isPrepared');
@@ -99,17 +106,20 @@ var FireNativeScreen = (() => {
       }
       const values = await Promise.all(names.map(get));
       if (this.destroyed || vp !== this.vp) return;
-      const wasPlaying = this.state.isPlaying;
       names.forEach((n, i) => {
         const v = values[i];
+        if (v === undefined || v === null) return;
         if (n === 'duration') { const d = Number(v); this.state.duration = Number.isFinite(d) && d > 0 ? d : 0; }
-        else if (v !== undefined && v !== null) this.state[n] = v === true || v === 'true' || v === 1;
+        else this.state[n] = v === true || v === 'true' || v === 1;
       });
       // Stopped by itself while it should be playing: the file has ended. Without a length that's
       // the only way to tell, and playing again would start it over, so it stays stopped until
-      // someone seeks, skips or changes track.
-      if (wasPlaying && !this.state.isPlaying && !this.wantPaused
-          && performance.now() - this.lastToggleAt > TOGGLE_COOLDOWN_MS) {
+      // someone seeks, skips or changes track. Only a stop after Unity itself said it was playing
+      // since the last toggle counts, so a reading that hasn't caught up with a toggle doesn't.
+      const isPlaying = names.indexOf('isPlaying');
+      const reported = isPlaying >= 0 && values[isPlaying] !== undefined && values[isPlaying] !== null;
+      if (reported && this.state.isPlaying) this.seenPlaying = true;
+      else if (reported && this.seenPlaying && !this.wantPaused && this.endedAt == null) {
         this.endedAt = this.localTimeAt(true);
       }
     }
@@ -188,6 +198,7 @@ var FireNativeScreen = (() => {
       const d = this.duration();
       if (!this.wantPaused && (this.endedAt != null || (d && this.localTime() >= d - 0.5))) return;
       this.lastToggleAt = now;
+      this.seenPlaying = false; // wait for Unity to say it's playing again
       vp.PlayToggle();
       this.state.isPlaying = !this.state.isPlaying; // until the next readState confirms it
     }
@@ -197,8 +208,9 @@ var FireNativeScreen = (() => {
       t = Math.max(0, d ? Math.min(t, d - 0.25) : t);
       // Seeking back from the end plays again; seeking to or past it stays at the end.
       if (this.endedAt != null) {
-        if (t >= this.endedAt - 0.5) return;
+        if (t >= this.endedAt) return;
         this.endedAt = null;
+        this.seenPlaying = false; // still stopped until it's started again
       }
       this.vp.time = t;
       this.lastRaw = this.vp.time; // the setter keeps the new value until Unity sends its own

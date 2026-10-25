@@ -14,7 +14,7 @@ In a SideQuest / Altspace Creator SDK world, add the player as a snippet. Its sl
 4. Type `fire-v-player` as the slug, then refresh / load it. The component downloads the snippet and writes it into your world's `Assets/WebRoot/index.html`.
 5. The player's settings now show in the Inspector. Change them there, or drag the handles in the Scene view to place the screen, buttons and playlist panel. See [Settings](#sidequest--altspace-creator-sdk-snippet) for what each one does.
 
-**Live preview (optional):** the SDK's outlines follow a setting's position, but not its scale or rotation. For a preview that updates as you change anything, copy [`unity/Editor/FireVPlayerSnippetPreview.cs`](unity/Editor/FireVPlayerSnippetPreview.cs) into an `Editor` folder in your project (e.g. `Assets/Editor/`). With the snippet's GameObject selected, it draws the screen, buttons and playlist panel in orange, and karaoke's Singers button in pink, exactly where the player will put them.
+**Live preview (optional):** the SDK's outlines follow a setting's position, but not its scale or rotation. For a preview that updates as you change anything, copy [`unity/Editor/FireVPlayerSnippetPreview.cs`](unity/Editor/FireVPlayerSnippetPreview.cs) into an `Editor` folder in your project (e.g. `Assets/Editor/`). With the snippet's GameObject selected, it draws the screen, buttons and playlist panel in orange, and karaoke's Singers button in pink, where the player will put them.
 
 ### On the website
 

@@ -1038,7 +1038,7 @@ var Core = class {
       // hand-controls-rotation settings change them.
       const wrapper = await this.makeObject('FireVPlayer_HandWrapper', {
         parent: root,
-        position: this.toVector3(this.vec3(this.params['hand-controls-position'], [0, 0.046, -0.01])),
+        position: this.toVector3(this.vec3(this.params['hand-controls-position'], [0, 0.046, 0.07])),
         rotation: this.toVector3(this.vec3(this.params['hand-controls-rotation'], [0, 90, 180])),
         scale: new BS.Vector3(0.1, 0.1, 0.1)
       });

@@ -79,6 +79,7 @@
    */
   const adapter = (el) => {
     const scriptUrl = new URL(el.getAttribute('script') || (thisScript && thisScript.src) || 'https://vidya.firer.at/snippet.js', location.href);
+    /** Reads and trims an attribute from snippet element. @param {string} name @returns {string} */
     const attr = (name) => (el.getAttribute(name) || '').trim();
 
     // controls-follow-screen: button-position / playlist-panel-position (and their rotations) are
@@ -88,9 +89,18 @@
     const screenPos = vec(attr('position'), [0, 0, 0]);
     const screenQ = qEuler(vec(attr('rotation'), [0, 0, 0]));
 
-    // A vector that isn't "0 0 0", or null.
+    /**
+     * Parses a 3D vector and returns it only if at least one component is non-zero (non-default).
+     * @param {string} name - Attribute name.
+     * @returns {number[]|null} Parsed vector or null.
+     */
     const setVec = (name) => { const v = vec(attr(name), null); return v && v.some(n => n !== 0) ? v : null; };
 
+    /**
+     * Computes relative attribute value when controls-follow-screen is active.
+     * @param {string} name - Attribute name.
+     * @returns {string|null|undefined}
+     */
     const relative = (name) => {
       if (name === 'playlist-panel-position') return null; // the panel's own offset mode handles it
       if (name === 'playlist-panel-offset') {
@@ -117,6 +127,11 @@
     // "0 0 0" counts as empty, like button-position: snippets default these to 0 0 0 so Unity
     // shows X, Y and Z fields (an empty value shows as a single text box).
     const SINGER_TILT = [30, -180, 0];
+    /**
+     * Resolves position, rotation, or coordinate space for karaoke's Singers button.
+     * @param {string} name - Singer attribute name.
+     * @returns {string|null|undefined} Converted value or fallback indicator.
+     */
     const singer = (name) => {
       const pos = setVec('singer-button-position');
       if (!pos) return name === 'singer-button-space' ? null : setVec(name) ? undefined : null; // the default, from the buttons
@@ -136,6 +151,11 @@
       mode: karaoke ? 'karaoke' : 'playlist',
       src: `${scriptUrl.origin}/${karaoke ? 'karaoke' : 'playlist'}.js`,
       snippet: el,
+      /**
+       * Returns attribute value with coordinate system adaptation applied.
+       * @param {string} name - Attribute name.
+       * @returns {string|null}
+       */
       getAttribute(name) {
         // Not the element's own "instance" (BSSnippet's per-placement id): without a room the
         // player falls back to the space URL.

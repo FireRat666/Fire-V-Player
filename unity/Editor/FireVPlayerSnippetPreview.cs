@@ -18,6 +18,11 @@ using UnityEngine;
 
 namespace FireVPlayer.EditorTools
 {
+    /// <summary>
+    /// Editor tool providing live Scene view preview for Fire-V-Player snippets.
+    /// Draws the screen, buttons, playlist panel, and karaoke Singers button
+    /// reflecting Inspector changes in real time.
+    /// </summary>
     [InitializeOnLoad]
     static class FireVPlayerSnippetPreview
     {
@@ -38,12 +43,20 @@ namespace FireVPlayer.EditorTools
         static readonly Color SingerOutline = new Color(1f, 0.3f, 0.7f, 0.95f);
         static readonly Color SingerFill = new Color(1f, 0.3f, 0.7f, 0.07f);
 
+        /// <summary>
+        /// Subscribes to snippet synchronization changes to trigger SceneView repaints.
+        /// </summary>
         static FireVPlayerSnippetPreview()
         {
             // Inspector edits and gizmo drags all go through SnippetHtmlSync, so redraw on each.
             SnippetHtmlSync.Changed += (kind, instanceId, attribute) => SceneView.RepaintAll();
         }
 
+        /// <summary>
+        /// Draws scene gizmos and component outlines for the selected snippet.
+        /// </summary>
+        /// <param name="snippet">Snippet component instance.</param>
+        /// <param name="type">Gizmo drawing context type.</param>
         [DrawGizmo(GizmoType.Selected | GizmoType.Active)]
         static void Draw(BSSnippet snippet, GizmoType type)
         {
@@ -134,6 +147,17 @@ namespace FireVPlayer.EditorTools
 
         // ---- drawing
 
+        /// <summary>
+        /// Draws a transformed oriented rectangle with an outline and text label in the scene.
+        /// </summary>
+        /// <param name="frame">Base transform matrix.</param>
+        /// <param name="pos">Local position offset.</param>
+        /// <param name="rot">Local rotation.</param>
+        /// <param name="scale">Local scale.</param>
+        /// <param name="size">2D width and height dimensions.</param>
+        /// <param name="outline">Outline color.</param>
+        /// <param name="fill">Interior fill color.</param>
+        /// <param name="label">Text label displayed above the rectangle.</param>
         static void Rect(Matrix4x4 frame, Vector3 pos, Quaternion rot, Vector3 scale, Vector2 size, Color outline, Color fill, string label)
         {
             var m = frame * Matrix4x4.TRS(pos, rot, scale);
@@ -143,6 +167,13 @@ namespace FireVPlayer.EditorTools
             Handles.Label(m.MultiplyPoint3x4(new Vector3(-size.x / 2, size.y / 2 + 0.08f, 0)), label);
         }
 
+        /// <summary>
+        /// Draws a solid 2D rectangle with an outline around a given center point.
+        /// </summary>
+        /// <param name="centre">Center coordinates in local space.</param>
+        /// <param name="size">Width and height of the rectangle.</param>
+        /// <param name="fill">Fill color.</param>
+        /// <param name="outline">Outline color.</param>
         static void RectAt(Vector2 centre, Vector2 size, Color fill, Color outline)
         {
             var h = size * 0.5f;
@@ -157,8 +188,20 @@ namespace FireVPlayer.EditorTools
 
         // ---- reading the snippet's values (Unity axes, as typed in the inspector)
 
+        /// <summary>
+        /// Reads a trimmed XML attribute value from a snippet element.
+        /// </summary>
+        /// <param name="e">Snippet XML element.</param>
+        /// <param name="name">Attribute name.</param>
+        /// <returns>Trimmed string value or empty string if missing.</returns>
         static string Attr(XElement e, string name) => ((string)e.Attribute(name) ?? "").Trim();
 
+        /// <summary>
+        /// Parses whitespace- or comma-delimited numbers from a snippet attribute.
+        /// </summary>
+        /// <param name="e">Snippet XML element.</param>
+        /// <param name="name">Attribute name.</param>
+        /// <returns>Array of parsed floats, or null if empty or invalid.</returns>
         static float[] Numbers(XElement e, string name)
         {
             var parts = Attr(e, name).Split(new[] { ' ', ',', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
@@ -169,7 +212,12 @@ namespace FireVPlayer.EditorTools
             return result;
         }
 
-        // "x y z", or one number for all three (as the player reads them). Null when empty.
+        /// <summary>
+        /// Parses a 3D vector from an attribute string (supporting 1 or 3 numbers).
+        /// </summary>
+        /// <param name="e">Snippet XML element.</param>
+        /// <param name="name">Attribute name.</param>
+        /// <returns>Vector3 if valid, or null if missing.</returns>
         static Vector3? Vec(XElement e, string name)
         {
             var n = Numbers(e, name);
@@ -179,13 +227,25 @@ namespace FireVPlayer.EditorTools
             return null;
         }
 
-        // Like Vec, but "0 0 0" counts as empty (the snippet's way of saying "use the default").
+        /// <summary>
+        /// Parses a 3D vector, treating '0 0 0' as empty (indicating fallback to default).
+        /// </summary>
+        /// <param name="e">Snippet XML element.</param>
+        /// <param name="name">Attribute name.</param>
+        /// <returns>Vector3 if non-zero, or null if zero or missing.</returns>
         static Vector3? SetVec(XElement e, string name)
         {
             var v = Vec(e, name);
             return v.HasValue && v.Value != Vector3.zero ? v : null;
         }
 
+        /// <summary>
+        /// Reads the first numeric value from an attribute or falls back to a default value.
+        /// </summary>
+        /// <param name="e">Snippet XML element.</param>
+        /// <param name="name">Attribute name.</param>
+        /// <param name="fallback">Fallback value to return if missing or zero.</param>
+        /// <returns>Parsed float or fallback.</returns>
         static float FirstNumber(XElement e, string name, float fallback)
         {
             var n = Numbers(e, name);

@@ -251,6 +251,10 @@ var FirePlaylistPanel = class {
 
   // ---------------------------------------------------------------- build
 
+  /**
+   * Triggers asynchronous construction of the in-world UI Toolkit panel if not already built.
+   * @returns {Promise<void>}
+   */
   build() {
     if (!this.buildPromise) {
       this.buildPromise = this._build().catch(e => {
@@ -262,6 +266,11 @@ var FirePlaylistPanel = class {
     return this.buildPromise;
   }
 
+  /**
+   * Internal implementation that instantiates GameObjects, mover handles, and UI hierarchies.
+   * @private
+   * @returns {Promise<void>}
+   */
   async _build() {
     const p = this.core.params;
     const screenPos = this.vec3(p.position, [0, 0, 0]);
@@ -680,9 +689,11 @@ var FirePlaylistPanel = class {
 
   // ---------------------------------------------------------------- show / hide
 
-  // where: 'front' opens (or brings it over) in front of the player, as the hand's Playlist button
-  // does; 'singer' just above karaoke's Singers button. Otherwise it opens by the screen. Pressing
-  // the same button again closes it.
+  /**
+   * Toggles the visibility of the in-world playlist panel or positions it.
+   * @param {'front'|'singer'|undefined} [where] - Where to place the panel ('front' in front of player, 'singer' above karaoke button, or undefined for beside screen).
+   * @returns {Promise<void>}
+   */
   async toggle(where) {
     if (!this.built && !this.failed) console.log('[PlaylistPanel] Still building, will open when ready.');
     await this.build();
@@ -702,7 +713,11 @@ var FirePlaylistPanel = class {
     if (!this.visible) await this.open();
   }
 
-  // Shows (shownPos) or hides (hiddenPos) the panel above its handle.
+  /**
+   * Moves the panel root GameObject to show (shownPos) or hide (hiddenPos) it.
+   * @param {Object} pos - Local position vector.
+   * @returns {Promise<void>}
+   */
   async moveTo(pos) {
     const o = this.panelObj;
     if (!o) return;
@@ -711,12 +726,11 @@ var FirePlaylistPanel = class {
 
   // ---------------------------------------------------------------- placement
 
-  // Where the panel goes in front of the player: 0.9 m ahead of their head, at about chest
-  // height, turned to face them (only around the vertical, so it stays upright). Null until the
-  // head's position is known.
-  // fromHand (the hand's Playlist button): the player is looking at their left wrist, so the way
-  // from their head to that hand is the way they face. That needs only positions, which Unity
-  // reports reliably. Otherwise, the head's own rotation gives the way.
+  /**
+   * Calculates the target world position and yaw angle to place the panel directly in front of the local player.
+   * @param {boolean} fromHand - Whether triggered by the wrist controls button.
+   * @returns {{yaw: number, source: string, position: Object}|null}
+   */
   frontPose(fromHand) {
     const head = this.core.headPose();
     if (!head || !head.position) return null;
@@ -746,7 +760,10 @@ var FirePlaylistPanel = class {
     };
   }
 
-  // Whether the player now faces more than 45 degrees away from where the panel was put.
+  /**
+   * Checks whether the player's head has rotated more than 45 degrees away from the panel.
+   * @returns {boolean} True if player looked away.
+   */
   lookedAway() {
     const now = this.frontPose(true);
     if (!now || this.frontYaw === undefined) return false;
@@ -754,9 +771,10 @@ var FirePlaylistPanel = class {
     return diff > 45;
   }
 
-  // Where the panel goes for karaoke's Singers button: just above it, upright, turned the way the
-  // button faces (only around the vertical, so a tilted button doesn't tilt the panel). Null until
-  // the button's position is known.
+  /**
+   * Calculates the position and yaw angle to place the panel just above karaoke's Singers button.
+   * @returns {{yaw: number, position: Object}|null} Position descriptor or null.
+   */
   singerPose() {
     const s = this.core.singerPose;
     if (!s || !s.position) return null;
@@ -770,6 +788,12 @@ var FirePlaylistPanel = class {
     return { yaw, position: new BS.Vector3(s.position.x, s.position.y, s.position.z) };
   }
 
+  /**
+   * Positions and orients the playlist panel root and mover GameObjects.
+   * @param {'front'|'singer'|'home'} where - Destination anchor location.
+   * @param {boolean} [fromHand] - Whether triggered from wrist controls.
+   * @returns {Promise<void>}
+   */
   async place(where, fromHand) {
     const root = this.root, mover = this.mover;
     if (!root || !mover) return;
@@ -803,7 +827,13 @@ var FirePlaylistPanel = class {
     await this.moveTo(this.visible ? this.shownPos : this.hiddenPos);
   }
 
-  // The root has no parent, so its local position and rotation are world ones.
+  /**
+   * Applies local position and Euler angles to a Banter GameObject.
+   * @param {Object} o - Target GameObject.
+   * @param {Object} [pos] - Local position.
+   * @param {Object} [euler] - Local Euler angles.
+   * @returns {Promise<void>}
+   */
   async setLocal(o, pos, euler) {
     if (pos) {
       if (typeof o.SetLocalPosition === 'function') await o.SetLocalPosition(pos);
@@ -815,7 +845,10 @@ var FirePlaylistPanel = class {
     }
   }
 
-  // Fetches the whole state from the server, in case the panel's list is out of date.
+  /**
+   * Re-requests full playback state from server and updates UI status message.
+   * @param {boolean} showStatus - Whether to show loading status in toast/footer.
+   */
   refresh(showStatus) {
     if (this.core.requestState()) {
       this.refreshing = showStatus;
@@ -825,6 +858,10 @@ var FirePlaylistPanel = class {
     }
   }
 
+  /**
+   * Reveals the panel, triggers render, and starts the playback ticker timer.
+   * @returns {Promise<void>}
+   */
   async open() {
     if (this.destroyed) return;
     this.visible = true;
@@ -844,6 +881,10 @@ var FirePlaylistPanel = class {
     this.tickTimer = setInterval(() => this.updateTime(), 1000);
   }
 
+  /**
+   * Hides the panel, releases active grab holds, and stops the ticker timer.
+   * @returns {Promise<void>}
+   */
   async close() {
     if (this.held && this.mover && typeof this.mover.ReleaseGrab === 'function') {
       try { await this.mover.ReleaseGrab(); } catch (e) {}

@@ -211,12 +211,28 @@ var Core = class {
     go.On('click', () => callback());
     return go;
   }
+  /**
+   * Adds a box collider component to a GameObject.
+   * @param {Object} go - Banter GameObject.
+   * @param {Object} size - Box collider dimensions.
+   * @param {boolean} isTrigger - Whether collider acts as a trigger.
+   * @returns {Promise<Object>}
+   */
   addColliderBox(go, size, isTrigger) {
     const center = new BS.Vector3(0, 0, 0);
     return this.addComponent(go, this.bsComponent('BoxCollider', { isTrigger, center, size }, 'BoxCollider', [isTrigger, center, size]));
   }
-  // Text, centred on its object. It reads from the object's -Z side, like the buttons.
-  // made: an optional list the label's object is added to, for builds that clean up after themselves.
+
+  /**
+   * Creates an in-world centered 3D text label component facing -Z.
+   * @param {string} name - GameObject name.
+   * @param {Object} parent - Parent GameObject.
+   * @param {Object} position - Relative position vector.
+   * @param {string} text - Display text string.
+   * @param {number} fontSize - Text font size.
+   * @param {Array<Object>} [made] - Optional tracking array for automatic cleanup on rebuild.
+   * @returns {Promise<Object>} Created text component.
+   */
   async makeLabel(name, parent, position, text, fontSize, made) {
     const go = await this.makeObject(name, { parent, position });
     if (made) made.push(go);
@@ -480,8 +496,11 @@ var Core = class {
     }
     this.sendBrowserMessage({path: Commands.SET_VOLUME, data: this.params.volume});
   }
-  // Karaoke's Singers button and optional box trigger. Removed again by removeJoinLeaveButton()
-  // when the player switches to playlist mode.
+  /**
+   * Sets up karaoke's 3D in-world Singers button and optional trigger volume box.
+   * Cleans up automatically on mode changes or teardown.
+   * @returns {Promise<void>}
+   */
   async setupJoinLeaveButton() {
     if (!this.playlistContainer || !this.inWorld()) return;
     this.removeJoinLeaveButton();
@@ -536,8 +555,12 @@ var Core = class {
       this.watchBoxTrigger(boxTrigger, triggerEnter, triggerExit);
     }
   }
-  // The local player's body, head, hands and feet each enter and leave the trigger, so they count
-  // as inside until the last part has left.
+  /**
+   * Monitors avatar body part contacts with the trigger volume to auto-start or stop karaoke.
+   * @param {Object} boxTrigger - Trigger volume GameObject.
+   * @param {boolean} triggerEnter - Auto-queue song on enter.
+   * @param {boolean} triggerExit - Auto-remove and stop on exit.
+   */
   watchBoxTrigger(boxTrigger, triggerEnter, triggerExit) {
     const inside = new Set();
     const isLocal = d => {
@@ -587,7 +610,12 @@ var Core = class {
       }, 5000);
     });
   }
-  // Keeps this.singerPose = { position, rotation } (world space), for opening the panel by it.
+  /**
+   * Tracks the world transform of the Singers button to position the playlist panel directly above it.
+   * @param {Object} button - Singers button GameObject.
+   * @param {Object} token - Cancellation token for current build lifecycle.
+   * @returns {Promise<void>}
+   */
   async watchSingerButton(button, token) {
     const PN = BS.PN || BS.PropertyName;
     if (typeof button.WatchTransform !== 'function' || !PN) return;
@@ -599,6 +627,10 @@ var Core = class {
       console.warn('[Core] Could not watch the Singers button:', e);
     }
   }
+
+  /**
+   * Cleans up and destroys all GameObjects associated with the karaoke Singers button and trigger.
+   */
   removeJoinLeaveButton() {
     this.singerToken = null;
     this.singerPose = null;
@@ -628,6 +660,11 @@ var Core = class {
       }).showToast();
     }
   }
+  /**
+   * Sets up the in-world 3D Playlist/Singers button under the video screen.
+   * @param {Object} playlistContainer - Parent container GameObject.
+   * @returns {Promise<void>}
+   */
   async setupPlaylistButton(playlistContainer) {
     const playlistIconUrl = this.params["data-playlist-icon-url"];
     // Use the isKaraoke flag to provide a context-specific text label
@@ -637,8 +674,10 @@ var Core = class {
     this.playlistButtonText = button.label;
   }
 
-  // where: 'front' (the hand's Playlist button) opens the panel in front of the player, 'singer'
-  // (karaoke's Singers button) just above that button, and nothing beside the screen.
+  /**
+   * Toggles or opens the playlist panel or web interface.
+   * @param {'front'|'singer'|undefined} [where] - Where to place the panel ('front' in front of player, 'singer' above karaoke button, or undefined for beside screen).
+   */
   openPlaylist(where) {
     // Clicks can arrive twice in quick succession (pointer + trigger), so debounce.
     const now = Date.now();
@@ -1019,9 +1058,11 @@ var Core = class {
   }
 
   // ---------------------------------------------------------------- hand controls
-  // A small panel of buttons on the local player's left hand, laid out as in FireScreen v2.
-  // This was a great innovation by HBR, who wanted Skizot to also get credit for the original idea.
-  // The SDK drops attachments when the player leaves, so they're made again when they come back.
+  /**
+   * Sets up wrist-attached playback controls on the local player's left hand.
+   * Reattaches automatically when users rejoin or scene resets.
+   * @returns {Promise<void>}
+   */
   async setupHandControls() {
     if (this.destroyed) return;
     const scene = this.banterScene();

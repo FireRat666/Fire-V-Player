@@ -170,7 +170,7 @@ class VideoElementSource extends BaseMediaSource {
     const el = this.el, t = this.pendingSeek;
     if (!this.ready || this.live || t == null) return;
     if (isFinite(el.duration)) {
-      if (t < el.duration) el.currentTime = t;
+      el.currentTime = Math.min(t, el.duration); // past the end goes to the end, as a direct seek would
       this.pendingSeek = null;
       return;
     }

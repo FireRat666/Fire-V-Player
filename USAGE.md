@@ -203,8 +203,8 @@ All parameters are optional unless marked as **(Required)**.
 | Attribute | Description | Default Value |
 | :--- | :--- | :--- |
 | `hand-controls` | Set to `true` to put six buttons on your left hand in VR: mute, volume down and up, skip back and forward (your player only), and the Playlist / Singers panel, which opens in front of you. They lie flat on the back of the wrist, and come back if you leave and rejoin the space. | `false` |
-| `hand-controls-position` | Moves the hand buttons: `x y z` in metres, in the hand's own Unity axes (not converted, in a snippet or a script tag). Empty uses the built-in layout. | `0 0.046 0.03` |
-| `hand-controls-rotation` | Turns the hand buttons: `x y z` in degrees, in the hand's own Unity axes. For example add `180` to `y` if they face into the wrist, or change `z` by `90` to turn them on the wrist. | `0 90 180` |
+| `hand-controls-position` | Moves the hand buttons: `x y z` in metres, in the hand's own Unity axes (not converted, in a snippet or a script tag). Empty uses the built-in layout. `x` moves them off the back of the hand (more negative is further out). | `-0.02 0.046 0.03` |
+| `hand-controls-rotation` | Turns the hand buttons: `x y z` in degrees, in the hand's own Unity axes. For example add `180` to `y` if they face into the wrist, add `180` to `z` if they're upside down, or change `z` by `90` to turn them on the wrist. | `0 90 0` |
 | `button-position` | The `x y z` position of the in-world UI buttons, relative to the player screen. | `0 0 0` |
 | `button-rotation` | The `x y z` rotation of the in-world UI buttons. | `0 0 0` |
 | `button-scale` | The `x y z` scale of the in-world UI buttons. | `1 1 1` |

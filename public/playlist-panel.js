@@ -268,7 +268,7 @@ var FirePlaylistPanel = class {
     const screenRot = this.vec3(p.rotation, [0, 0, 0]);
     const screenScale = this.vec3(p.scale, [1, 1, 1]);
     const panelScale = parseFloat(p['playlist-panel-scale']) || 1;
-    const panelWidthM = 1.4 * panelScale;
+    const panelWidthM = this.panelWidthM = 1.4 * panelScale;
     // Either a world position (and world rotation, default the screen's), or an offset from the
     // screen. The screen is 1 unit wide at scale 1, so the default offset is just past its right edge.
     const worldPos = this.vec3(p['playlist-panel-position'], null);
@@ -338,7 +338,7 @@ var FirePlaylistPanel = class {
     this.moreBtn = await this.button(header, 'More...', () => this.setView(this.view === 'more' ? 'main' : 'more'), { backgroundColor: GREY });
     // Brings the panel round in front of you, wherever you're standing.
     await this.button(header, 'Move Here', () => {
-      if (this.frontPose()) this.place('front');
+      if (this.frontPose(false)) this.place('front', false);
       else this.setStatus('Move your head a little first, so the world knows where you are.');
     }, { backgroundColor: GREY });
     await this.button(header, 'Close', () => this.close(), { backgroundColor: GREY });
@@ -575,19 +575,23 @@ var FirePlaylistPanel = class {
       return;
     }
     const LAYER_GRABBABLE = (BS.L && BS.L.Grabbable) || 20;
-    // In the panel's own units: it is W/100 wide and H/100 tall, centred.
-    const bar = await new BS.GameObject({
+    // On the mover, which isn't scaled: under the panel's (scaled) object the grab worked in its
+    // tiny units, and grabbing threw the hand away. In metres, just below the panel's bottom edge.
+    const panelHeightM = this.panelWidthM * this.H / this.W;
+    this.barShownPos = new BS.Vector3(0, -panelHeightM / 2 - 0.06, 0);
+    this.barHiddenPos = new BS.Vector3(0, this.barShownPos.y - 1000, 0);
+    const bar = this.grabBar = await new BS.GameObject({
       name: 'FireVPlayer_PlaylistGrabBar',
-      parent: this.panelObj,
-      localPosition: new BS.Vector3(0, -this.H / 200 - 0.45, 0),
+      parent: this.mover,
+      localPosition: this.visible ? this.barShownPos : this.barHiddenPos,
       layer: LAYER_GRABBABLE
     }).Async();
     this.checkAlive();
-    const w = 4, h = 0.35;
+    const w = 0.5 * this.panelWidthM / 1.4, h = 0.045;
     if (BS.Box) await bar.AddComponent(new BS.Box({ width: w, height: h, depth: h }));
     if (BS.Material) await bar.AddComponent(new BS.Material({ shaderName: 'Unlit/Diffuse', color: new BS.Vector4(0.6, 0.6, 0.66, 1) }));
     // A little bigger than the bar, so it's easy to catch.
-    await bar.AddComponent(new BS.BoxCollider({ isTrigger: false, size: new BS.Vector3(w + 0.4, h + 0.4, h + 0.4) }));
+    await bar.AddComponent(new BS.BoxCollider({ isTrigger: false, size: new BS.Vector3(w + 0.04, h + 0.04, h + 0.04) }));
     this.checkAlive();
     this.body = await this.mover.AddComponent(new BS.Rigidbody({
       mass: 1, drag: 20, angularDrag: 20, useGravity: false, isKinematic: false,
@@ -639,7 +643,7 @@ var FirePlaylistPanel = class {
       } catch (e) {
         console.warn('[PlaylistPanel] Could not remove the panel objects:', e);
       }
-      this.root = this.mover = this.panelObj = this.ui = this.body = null;
+      this.root = this.mover = this.panelObj = this.ui = this.body = this.grabBar = null;
     };
     if (this.buildPromise) this.buildPromise.then(removeObjects, removeObjects);
     else removeObjects();
@@ -658,57 +662,77 @@ var FirePlaylistPanel = class {
       this.core.openPlaylistPage();
       return;
     }
-    const want = inFront && this.frontPose() ? 'front' : 'home';
+    const want = inFront && this.frontPose(true) ? 'front' : 'home';
     if (this.visible && this.placement === want && want === 'home') return this.close();
     // In front, a press while it's open in front closes it only when the player hasn't turned
     // away from it; otherwise it comes round to where they're looking.
     if (this.visible && want === 'front' && this.placement === 'front' && !this.lookedAway()) return this.close();
-    await this.place(want);
+    await this.place(want, true);
     if (!this.visible) await this.open();
   }
 
+  // Shows (shownPos) or hides (hiddenPos) the panel, and its grab bar with it.
   async moveTo(pos) {
     const o = this.panelObj;
     if (!o) return;
-    if (typeof o.SetLocalPosition === 'function') await o.SetLocalPosition(pos);
-    else if (o.transform) o.transform.localPosition = pos;
+    await this.setLocal(o, pos, null);
+    if (this.grabBar) await this.setLocal(this.grabBar, pos === this.shownPos ? this.barShownPos : this.barHiddenPos, null);
   }
 
   // ---------------------------------------------------------------- placement
 
   // Where the panel goes in front of the player: 0.9 m ahead of their head, a little below eye
   // level, turned to face them (only around the vertical, so it stays upright). Null until the
-  // SDK has sent the head's pose, which it does once the player moves.
-  frontPose() {
-    const head = this.core.lastHead;
-    if (!head || !head.position || !head.rotation) return null;
-    const q = head.rotation, p = head.position;
-    // The head's forward (+Z) flattened onto the floor.
-    const fx = 2 * (q.x * q.z + q.w * q.y), fz = 1 - 2 * (q.x * q.x + q.y * q.y);
-    if (Math.abs(fx) + Math.abs(fz) < 1e-6) return null;
-    const yaw = Math.atan2(fx, fz);
+  // head's position is known.
+  // fromHand (the hand's Playlist button): the player is looking at their left wrist, so the way
+  // from their head to that hand is the way they face. That needs only positions, which Unity
+  // reports reliably. Otherwise (Move Here), the head's own rotation gives the way.
+  frontPose(fromHand) {
+    const head = this.core.headPose();
+    if (!head || !head.position) return null;
+    const p = head.position;
+    let yaw = null;
+    const hand = this.core.handPose;
+    if (fromHand && hand && hand.position) {
+      const dx = hand.position.x - p.x, dz = hand.position.z - p.z;
+      if (Math.hypot(dx, dz) > 0.05) yaw = Math.atan2(dx, dz);
+    }
+    const q = head.rotation;
+    if (yaw === null && q) {
+      // The head's forward (+Z) flattened onto the floor.
+      const fx = 2 * (q.x * q.z + q.w * q.y), fz = 1 - 2 * (q.x * q.x + q.y * q.y);
+      if (Math.abs(fx) + Math.abs(fz) > 1e-6) yaw = Math.atan2(fx, fz);
+    }
+    if (yaw === null) return null;
     const d = 0.9;
     return {
       yaw: yaw * 180 / Math.PI,
-      position: new BS.Vector3(p.x + Math.sin(yaw) * d, p.y - 0.15, p.z + Math.cos(yaw) * d)
+      source: head.source,
+      position: new BS.Vector3(p.x + Math.sin(yaw) * d, p.y - 0.1, p.z + Math.cos(yaw) * d)
     };
   }
 
   // Whether the player now faces more than 45 degrees away from where the panel was put.
   lookedAway() {
-    const now = this.frontPose();
+    const now = this.frontPose(true);
     if (!now || this.frontYaw === undefined) return false;
     const diff = Math.abs(((now.yaw - this.frontYaw) % 360 + 540) % 360 - 180);
     return diff > 45;
   }
 
-  async place(where) {
+  async place(where, fromHand) {
     const root = this.root, mover = this.mover;
     if (!root || !mover) return;
     if (where === 'front') {
-      const pose = this.frontPose();
+      const pose = this.frontPose(fromHand);
       if (!pose) return;
       this.frontYaw = pose.yaw;
+      const f = n => Number(n).toFixed(2);
+      const head = this.core.headPose();
+      console.log(`[PlaylistPanel] In front: head (${head.source}) ${f(head.position.x)} ${f(head.position.y)} ${f(head.position.z)}, facing ${Math.round(pose.yaw)} degrees${fromHand ? ' (toward the left hand)' : ''}.`);
+      if (this.core.params['screen-debug'] === 'true') {
+        this.setStatus(`Head (${head.source}) ${f(head.position.x)} ${f(head.position.y)} ${f(head.position.z)}, facing ${Math.round(pose.yaw)}°`, 15000);
+      }
       // The panel is seen from -Z, so facing the same way as the player turns its front to them.
       await this.setLocal(root, pose.position, new BS.Vector3(0, pose.yaw, 0));
       await this.setLocal(mover, new BS.Vector3(0, 0, 0), new BS.Vector3(0, 0, 0));

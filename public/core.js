@@ -77,6 +77,7 @@ var Core = class {
 
       this.setupSpatial();
       this.trackHead();
+      this.setupHeadMarker().catch(e => console.warn('[Core] Could not follow the head:', e));
       // By the time this runs, window.user is already set by the entry-point script
       // (playlist.js / karaoke.js) which waited for bs-loaded + unity-loaded before
       // loading anything. No further waiting is needed here.
@@ -895,6 +896,47 @@ var Core = class {
     };
     scene.On('pose-update', this.onHeadPose);
   }
+  // An empty object on the local player's head. Unity reports where it is in the world, which is
+  // more dependable than pose-update (whose values didn't match the world on Quest: the panel
+  // opened behind the player and low).
+  async setupHeadMarker() {
+    const scene = this.banterScene();
+    if (this.headMarker || this.destroyed || !scene || !this.inWorld()) return;
+    const uid = (scene.localUser && scene.localUser.uid) || (window.user && window.user.id);
+    if (!uid) return;
+    const go = await this.makeObject('FireVPlayer_HeadMarker');
+    this.headMarker = go;
+    if (typeof BS.AttachedObject === 'function') {
+      const head = BS.AvatarBoneName ? BS.AvatarBoneName.HEAD : 0;
+      const attached = await this.addComponent(go, new BS.AttachedObject({ uid, avatarAttachmentPoint: head }));
+      await attached.Attach(uid);
+    } else if (typeof scene.LegacyAttachObject === 'function' && BS.LegacyAttachmentPosition && BS.LegacyAttachmentPosition.HEAD !== undefined) {
+      await scene.LegacyAttachObject(go, uid, BS.LegacyAttachmentPosition.HEAD);
+    } else {
+      console.log('[Core] No way to attach to the head here, so the panel uses pose-update.');
+      return;
+    }
+    await this.watchWorldPose(go, 'headMarkerPose');
+    console.log('[Core] Following the head.');
+  }
+  // Keeps this[key] = { position, rotation } in world space as Unity moves the object.
+  async watchWorldPose(go, key) {
+    const PN = BS.PN || BS.PropertyName;
+    if (!go || typeof go.WatchTransform !== 'function' || !PN) return;
+    try {
+      await go.WatchTransform([PN.position, PN.rotation], t => {
+        if (t && t.position) this[key] = { position: t.position, rotation: t.rotation };
+      });
+    } catch (e) {
+      console.warn(`[Core] Could not watch ${go.name}:`, e);
+    }
+  }
+  // The local player's head in world space: from the head marker when it reports, else pose-update.
+  headPose() {
+    const m = this.headMarkerPose;
+    if (m && m.position) return Object.assign({ source: 'marker' }, m);
+    return this.lastHead ? Object.assign({ source: 'pose-update' }, this.lastHead) : null;
+  }
   setupSpatial() {
     const scene = this.banterScene();
     if (!scene || this.params.spatial !== 'true' || this.onPoseUpdate) return;
@@ -964,8 +1006,8 @@ var Core = class {
       // hand-controls-rotation settings change them.
       const wrapper = await this.makeObject('FireVPlayer_HandWrapper', {
         parent: root,
-        position: this.toVector3(this.vec3(this.params['hand-controls-position'], [0, 0.046, 0.03])),
-        rotation: this.toVector3(this.vec3(this.params['hand-controls-rotation'], [0, 90, 180])),
+        position: this.toVector3(this.vec3(this.params['hand-controls-position'], [-0.02, 0.046, 0.03])),
+        rotation: this.toVector3(this.vec3(this.params['hand-controls-rotation'], [0, 90, 0])),
         scale: new BS.Vector3(0.1, 0.1, 0.1)
       });
       const buttons = [
@@ -989,6 +1031,8 @@ var Core = class {
       const leftHand = BS.LegacyAttachmentPosition ? BS.LegacyAttachmentPosition.LEFT_HAND : 1;
       await scene.LegacyAttachObject(root, uid, leftHand);
       console.log('[Core] Hand controls attached to the left hand.');
+      // Where the left hand is, for opening the panel the way the player is looking.
+      this.watchWorldPose(root, 'handPose');
     } finally {
       this.handControlsBuilding = false;
     }

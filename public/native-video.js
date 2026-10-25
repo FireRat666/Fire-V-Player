@@ -202,7 +202,13 @@ var FireNativeScreen = (() => {
         case Commands.SKIP_BACK:
         case Commands.SKIP_FORWARD: {
           // A viewer's own skip: stop pulling them back into step until the next track or host seek.
-          this.autoSync = false;
+          if (this.autoSync) {
+            this.autoSync = false;
+            // So the panel's Auto Sync button shows Off, as the browser page's skip does.
+            if (typeof this.core.notifyListeners === 'function') {
+              this.core.notifyListeners({ path: Commands.AUTO_SYNC_STATE_CHANGED, data: { enabled: false } });
+            }
+          }
           const amount = this.core.isKaraoke ? SKIP_KARAOKE_S : SKIP_S;
           this.seek(this.localTime() + (msg.path === Commands.SKIP_FORWARD ? amount : -amount));
           break;

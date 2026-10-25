@@ -1421,6 +1421,10 @@ var Core = class {
     }
     // A file track needs the world's video player in place of the browser, and back again after.
     try { this.updateScreen(json); } catch (e) { console.error('[Core] Could not switch screens:', e); }
+    this.notifyListeners(json);
+  }
+  // Passes a message to the panel and the other listeners, as if it came from the server.
+  notifyListeners(json) {
     if (this.messageListeners) {
       this.messageListeners.forEach(fn => {
         try { fn(json); } catch (e) { console.error('[Core] Message listener error:', e); }

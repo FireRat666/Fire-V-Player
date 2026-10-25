@@ -558,6 +558,9 @@ var FirePlaylistPanel = class {
     } catch (e) {
       if (this.destroyed) throw e;
       console.warn('[PlaylistPanel] Could not add the grab bar, so the panel can only be moved with Move Here:', e);
+      // Without it, so showing and hiding the panel doesn't wait on a half-made bar.
+      try { if (this.grabBar && typeof this.grabBar.Destroy === 'function') this.grabBar.Destroy(); } catch (e2) {}
+      this.grabBar = this.body = null;
     }
     this.checkAlive();
     this.built = true;
@@ -580,32 +583,33 @@ var FirePlaylistPanel = class {
     // Just below the panel's bottom edge, in metres.
     const panelHeightM = this.panelWidthM * this.H / this.W;
     this.barDrop = panelHeightM / 2 + 0.06;
-    const bar = this.grabBar = await new BS.GameObject({
+    const T = 15000;
+    const bar = this.grabBar = await this.withTimeout(new BS.GameObject({
       name: 'FireVPlayer_PlaylistGrabBar',
       localPosition: new BS.Vector3(0, -1000, 0),
       layer: LAYER_GRABBABLE
-    }).Async();
+    }).Async(), T, 'Creating the grab bar');
     this.checkAlive();
     const w = 0.5 * this.panelWidthM / 1.4, h = 0.045;
-    if (BS.Box) await bar.AddComponent(new BS.Box({ width: w, height: h, depth: h }));
-    if (BS.Material) await bar.AddComponent(new BS.Material({ shaderName: 'Unlit/Diffuse', color: new BS.Vector4(0.6, 0.6, 0.66, 1) }));
+    if (BS.Box) await this.withTimeout(bar.AddComponent(new BS.Box({ width: w, height: h, depth: h })), T, 'Adding the grab bar box');
+    if (BS.Material) await this.withTimeout(bar.AddComponent(new BS.Material({ shaderName: 'Unlit/Diffuse', color: new BS.Vector4(0.6, 0.6, 0.66, 1) })), T, 'Adding the grab bar material');
     // A little bigger than the bar, so it's easy to catch.
-    await bar.AddComponent(new BS.BoxCollider({ isTrigger: false, size: new BS.Vector3(w + 0.04, h + 0.04, h + 0.04) }));
+    await this.withTimeout(bar.AddComponent(new BS.BoxCollider({ isTrigger: false, size: new BS.Vector3(w + 0.04, h + 0.04, h + 0.04) })), T, 'Adding the grab bar collider');
     this.checkAlive();
     // No gravity, and it can only turn around the vertical, so the panel on it stays upright.
-    this.body = await bar.AddComponent(new BS.Rigidbody({
+    this.body = await this.withTimeout(bar.AddComponent(new BS.Rigidbody({
       mass: 0.5, drag: 5, angularDrag: 10, useGravity: false, isKinematic: false,
       freezeRotationX: true, freezeRotationZ: true
-    }));
+    })), T, 'Adding the grab bar Rigidbody');
     this.checkAlive();
     const soft = BS.BSGrabType && BS.BSGrabType.Soft !== undefined ? BS.BSGrabType.Soft : 3;
-    await bar.AddComponent(new BS.GrabHandle({ grabType: soft, grabRadius: 0.01 }));
+    await this.withTimeout(bar.AddComponent(new BS.GrabHandle({ grabType: soft, grabRadius: 0.01 })), T, 'Adding the grab handle');
     this.checkAlive();
     const PN = BS.PN || BS.PropertyName;
     if (typeof bar.WatchTransform === 'function' && PN) {
-      await bar.WatchTransform([PN.position, PN.rotation], t => {
+      await this.withTimeout(bar.WatchTransform([PN.position, PN.rotation], t => {
         if (this.held && t && t.position) this.followBar(t);
-      });
+      }), T, 'Watching the grab bar');
     }
     bar.On('grab', async () => {
       this.held = true;
@@ -616,7 +620,7 @@ var FirePlaylistPanel = class {
       this.held = false;
       this.stopDrift();
     });
-    await this.placeBar();
+    await this.withTimeout(this.placeBar(), T, 'Placing the grab bar');
     console.log('[PlaylistPanel] Grab bar added under the panel.');
   }
 

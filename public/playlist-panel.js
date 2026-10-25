@@ -298,13 +298,14 @@ var FirePlaylistPanel = class {
       moverPos: new BS.Vector3(centre.x + down[0], centre.y + down[1], centre.z + down[2]),
       moverRot
     };
+    this.moverHidden = true;
     this.placement = 'home'; // 'home' (by the screen) | 'front' (in front of the player) | 'moved' (carried)
     this.shownPos = new BS.Vector3(0, this.handleDrop, 0);
     this.hiddenPos = new BS.Vector3(0, -1000, 0);
     this.mover = await this.withTimeout(new BS.GameObject({
       name: 'FireVPlayer_PlaylistMover',
       parent: this.root,
-      localPosition: new BS.Vector3(0, -1000, 0), // out of sight until opened
+      localPosition: new BS.Vector3(0, -1000, 0), // out of sight until opened (moverHidden)
       localEulerAngles: this.home.moverRot
     }).Async(), 15000, 'Creating the panel mover object');
     this.checkAlive();
@@ -731,7 +732,8 @@ var FirePlaylistPanel = class {
     const d = 0.9;
     // pose-update's height on Quest is about the floor under the player, not their eyes, so the
     // panel goes at standing chest height above it (playlist-panel-front-height).
-    const lift = head.source === 'pose-update' ? (parseFloat(this.core.params['playlist-panel-front-height']) || 1.4) : -0.1;
+    const frontHeight = parseFloat(this.core.params['playlist-panel-front-height']);
+    const lift = head.source === 'pose-update' ? (Number.isFinite(frontHeight) ? frontHeight : 1.4) : -0.1;
     return {
       yaw: yaw * 180 / Math.PI,
       source: head.source,
@@ -769,6 +771,7 @@ var FirePlaylistPanel = class {
       await this.setLocal(mover, h.moverPos, h.moverRot);
     }
     this.stopDrift();
+    this.moverHidden = false;
     this.placement = where;
     await this.moveTo(this.visible ? this.shownPos : this.hiddenPos);
   }
@@ -805,6 +808,9 @@ var FirePlaylistPanel = class {
       this.page = Math.floor(player.currentTrack / this.rowsPerPage);
     }
     this.render();
+    // Closed, or just built (as after a mode change): it needs a place first.
+    if (this.moverHidden && this.placement === 'front') await this.place('front', false);
+    if (this.moverHidden) await this.place('home', false); // also when the head isn't known
     await this.moveTo(this.shownPos);
     clearInterval(this.tickTimer);
     this.tickTimer = setInterval(() => this.updateTime(), 1000);
@@ -822,6 +828,7 @@ var FirePlaylistPanel = class {
     // The handle goes too; opening always places it again first.
     if (this.mover) {
       await this.setLocal(this.mover, new BS.Vector3(0, -1000, 0), null);
+      this.moverHidden = true;
       this.stopDrift();
     }
   }

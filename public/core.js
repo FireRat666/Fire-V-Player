@@ -899,16 +899,31 @@ var Core = class {
   // An empty object on the local player's head. Unity reports where it is in the world, which is
   // more dependable than pose-update (whose values didn't match the world on Quest: the panel
   // opened behind the player and low).
+  // The SDK drops attachments when the player leaves, so the marker is removed then and made
+  // again when they come back, as the hand controls are.
   async setupHeadMarker() {
     const scene = this.banterScene();
     if (this.headMarker || this.destroyed || !scene || !this.inWorld()) return;
+    if (!this.onHeadUserLeft) {
+      this.onHeadUserLeft = e => { if (e && e.detail && e.detail.isLocal) this.removeHeadMarker(); };
+      this.onHeadUserJoined = e => {
+        if (!(e && e.detail && e.detail.isLocal) || this.headMarker) return;
+        // A moment after joining, as for the hand controls, so the SDK is ready.
+        clearTimeout(this.headRejoinTimer);
+        this.headRejoinTimer = setTimeout(() => this.setupHeadMarker().catch(err => console.warn('[Core] Could not follow the head:', err)), 5000);
+      };
+      scene.On('user-left', this.onHeadUserLeft);
+      scene.On('user-joined', this.onHeadUserJoined);
+    }
     const uid = (scene.localUser && scene.localUser.uid) || (window.user && window.user.id);
     if (!uid) return;
     const go = await this.makeObject('FireVPlayer_HeadMarker');
+    if (this.headMarker || this.destroyed) { this.destroyObject(go); return; }
     this.headMarker = go;
     if (typeof BS.AttachedObject === 'function') {
       const head = BS.AvatarBoneName ? BS.AvatarBoneName.HEAD : 0;
       const attached = await this.addComponent(go, new BS.AttachedObject({ uid, avatarAttachmentPoint: head }));
+      if (this.headMarker !== go) return; // removed meanwhile
       await attached.Attach(uid);
     } else if (typeof scene.LegacyAttachObject === 'function' && BS.LegacyAttachmentPosition && BS.LegacyAttachmentPosition.HEAD !== undefined) {
       await scene.LegacyAttachObject(go, uid, BS.LegacyAttachmentPosition.HEAD);
@@ -916,8 +931,24 @@ var Core = class {
       console.log('[Core] No way to attach to the head here, so the panel uses pose-update.');
       return;
     }
-    await this.watchWorldPose(go, 'headMarkerPose');
+    if (this.headMarker !== go) return;
+    const PN = BS.PN || BS.PropertyName;
+    if (typeof go.WatchTransform !== 'function' || !PN) return;
+    try {
+      await go.WatchTransform([PN.position, PN.rotation], t => {
+        if (this.headMarker === go && t && t.position) this.headMarkerPose = { position: t.position, rotation: t.rotation };
+      });
+    } catch (e) {
+      console.warn('[Core] Could not watch the head marker:', e);
+      return;
+    }
     console.log('[Core] Following the head.');
+  }
+  removeHeadMarker() {
+    clearTimeout(this.headRejoinTimer);
+    if (this.headMarker) this.destroyObject(this.headMarker);
+    this.headMarker = null;
+    this.headMarkerPose = null; // so headPose() uses pose-update until the new marker reports
   }
   // Keeps this[key] = { position, rotation } in world space as Unity moves the object.
   async watchWorldPose(go, key) {
@@ -986,6 +1017,7 @@ var Core = class {
         if (!(e && e.detail && e.detail.isLocal) || this.handControls || this.handControlsBuilding) return;
         // Wait a moment after joining before attaching, which avoids a race on Quest.
         clearTimeout(this.handRejoinTimer);
+    clearTimeout(this.headRejoinTimer);
         this.handRejoinTimer = setTimeout(() => this.setupHandControls().catch(err => console.error('[Core] Could not set up the hand controls:', err)), 5000);
       };
       scene.On('user-left', this.onHandUserLeft);
@@ -1567,6 +1599,7 @@ var Core = class {
     // Builds still running (buttons, screen, hand controls) stop when they see this.
     this.destroyed = true;
     clearTimeout(this.handRejoinTimer);
+    clearTimeout(this.headRejoinTimer);
     this.removeJoinLeaveButton();
 
     if (this.playlistPanel) {
@@ -1605,8 +1638,10 @@ var Core = class {
       if (this.onHeadPose) scene.Off('pose-update', this.onHeadPose);
       if (this.onHandUserLeft) scene.Off('user-left', this.onHandUserLeft);
       if (this.onHandUserJoined) scene.Off('user-joined', this.onHandUserJoined);
+      if (this.onHeadUserLeft) scene.Off('user-left', this.onHeadUserLeft);
+      if (this.onHeadUserJoined) scene.Off('user-joined', this.onHeadUserJoined);
     }
-    this.onPoseUpdate = this.onHeadPose = this.onHandUserLeft = this.onHandUserJoined = null;
+    this.onPoseUpdate = this.onHeadPose = this.onHandUserLeft = this.onHandUserJoined = this.onHeadUserLeft = this.onHeadUserJoined = null;
     this.watchingHandUser = false;
     console.log("Removed the world's objects.");
 

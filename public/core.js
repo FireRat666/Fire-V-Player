@@ -126,6 +126,7 @@ var Core = class {
     } catch (e) {
       console.error('[Core] Could not create the in-world buttons:', e);
     }
+    if (this.destroyed) return; // cleaned up while the buttons were being made
     // The screen itself: the browser, or the world's video player when a file is playing.
     this.screenReady = true;
     this.updateScreen();
@@ -180,6 +181,11 @@ var Core = class {
     if (opts.scale) config.localScale = opts.scale;
     if (opts.layer !== undefined) config.layer = opts.layer;
     const go = await new BS.GameObject(config).Async();
+    // Cleaned up while this was being made: don't leave it in the world, and stop the build.
+    if (this.destroyed) {
+      try { go.Destroy(); } catch (e) {}
+      throw new Error('The player was removed.');
+    }
     this.worldObjects.push(go);
     return go;
   }
@@ -233,9 +239,14 @@ var Core = class {
     const track = p && Array.isArray(p.playlist) && p.playlist.length ? p.playlist[p.currentTrack] : null;
     return track && track.link ? track.link : '';
   }
-  // The browser page's address, with the mode and captions as they are now.
+  // The browser page's address, with the mode, captions, mute and volume as they are now.
   browserUrl() {
-    return String(this.initialUrl || '').replace(/([?&]mode=)[^&]*/, `$1${this.getMode()}`).replace(/([?&]captions=)[^&]*/, `$1${this.captions !== false}`);
+    const volume = this.params.spatial === 'true' ? this.tempVolume : this.params.volume;
+    return String(this.initialUrl || '')
+      .replace(/([?&]mode=)[^&]*/, `$1${this.getMode()}`)
+      .replace(/([?&]captions=)[^&]*/, `$1${this.captions !== false}`)
+      .replace(/([?&]mute=)[^&]*/, `$1${this.params.mute}`)
+      .replace(/([?&]volume=)[^&]*/, `$1${volume}`);
   }
   // Puts up whichever screen the current track needs. `json` is the message that changed things.
   updateScreen(json) {
@@ -907,6 +918,7 @@ var Core = class {
   // This was a great innovation by HBR, who wanted Skizot to also get credit for the original idea.
   // The SDK drops attachments when the player leaves, so they're made again when they come back.
   async setupHandControls() {
+    if (this.destroyed) return;
     const scene = this.banterScene();
     if (!scene || !this.inWorld()) {
       console.warn('[Core] Not in a world with the BS SDK, so no hand controls.');
@@ -919,7 +931,8 @@ var Core = class {
       this.onHandUserJoined = e => {
         if (!(e && e.detail && e.detail.isLocal) || this.handControls || this.handControlsBuilding) return;
         // Wait a moment after joining before attaching, which avoids a race on Quest.
-        setTimeout(() => this.setupHandControls().catch(err => console.error('[Core] Could not set up the hand controls:', err)), 5000);
+        clearTimeout(this.handRejoinTimer);
+        this.handRejoinTimer = setTimeout(() => this.setupHandControls().catch(err => console.error('[Core] Could not set up the hand controls:', err)), 5000);
       };
       scene.On('user-left', this.onHandUserLeft);
       scene.On('user-joined', this.onHandUserJoined);
@@ -1484,6 +1497,9 @@ var Core = class {
   }
   destroy() { // To Use : window.cleanupVideoPlayer();
     console.log("Cleaning up Fire-V-Player instance...");
+    // Builds still running (buttons, screen, hand controls) stop when they see this.
+    this.destroyed = true;
+    clearTimeout(this.handRejoinTimer);
     this.removeJoinLeaveButton();
 
     if (this.playlistPanel) {

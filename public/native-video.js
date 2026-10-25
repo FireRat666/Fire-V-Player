@@ -218,6 +218,11 @@ var FireNativeScreen = (() => {
         case Commands.SYNC_TIME:
           this.onSync(msg.data);
           break;
+        case Commands.AUTO_SYNC:
+          // The viewer's own Auto Sync button: on pulls them back into step straight away.
+          this.autoSync = msg.data === true || msg.data === 'true';
+          if (this.autoSync) this.requestSync(false);
+          break;
       }
     }
 

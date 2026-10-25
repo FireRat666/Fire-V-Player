@@ -126,6 +126,15 @@ var FirePlaylistPanel = class {
     this.core.sendMessage(msg);
   }
 
+  // A control for this viewer's player only. The server passes these on to their browser page,
+  // which isn't there while a file plays on the world's video player, so then they go to it here.
+  sendMine(serverPath, playerPath, data) {
+    if (!this.core.nativeScreen) return this.send(serverPath, data);
+    const msg = { path: playerPath };
+    if (data !== undefined) msg.data = data;
+    this.core.sendBrowserMessage(msg);
+  }
+
   setStatus(text, ms = 4000) {
     if (!this.statusLabel) return;
     this.setText(this.statusLabel, text);
@@ -465,11 +474,11 @@ var FirePlaylistPanel = class {
     // Your own player
     const mineSection = await section('Your player only');
     const mineRow = await row(mineSection, { flexWrap: 'wrap' });
-    await this.button(mineRow, '<< Skip', () => this.send(Commands.LOCAL_SKIP_BACK));
-    await this.button(mineRow, 'Skip >>', () => this.send(Commands.LOCAL_SKIP_FORWARD));
+    await this.button(mineRow, '<< Skip', () => this.sendMine(Commands.LOCAL_SKIP_BACK, Commands.SKIP_BACK));
+    await this.button(mineRow, 'Skip >>', () => this.sendMine(Commands.LOCAL_SKIP_FORWARD, Commands.SKIP_FORWARD));
     this.autoSyncBtn = await this.button(mineRow, 'Auto Sync: Off', () => {
       this.autoSync = !this.autoSync;
-      this.send(Commands.AUTO_SYNC, this.autoSync);
+      this.sendMine(Commands.AUTO_SYNC, Commands.AUTO_SYNC, this.autoSync);
       this.render();
     });
     this.captionsBtn = await this.button(mineRow, 'Captions: On', () => {

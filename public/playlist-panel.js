@@ -11,8 +11,8 @@
 //
 // Each user gets their own local panel. It sits beside the screen and is shown/hidden by the
 // playlist button. It hides by moving out of view, because deactivating a UI Toolkit document
-// can drop the elements created at runtime. The hand's Playlist button and Move Here put it in
-// front of the player, and the cube under it can be grabbed to carry it.
+// can drop the elements created at runtime. The hand's Playlist button puts it in
+// front of the player, and the pill under it can be grabbed to carry it.
 var PAGE_JUMP = 5; // pages the << and >> buttons move
 var FirePlaylistPanel = class {
   constructor(core) {
@@ -283,11 +283,11 @@ var FirePlaylistPanel = class {
     }).Async(), 15000, 'Creating the panel root object');
     this.checkAlive();
 
-    // root (the screen, or the world) > mover (the grab handle: a small cube just under the
-    // panel's bottom edge, which players pick up to carry it) > panel (the UI, above the cube).
+    // root (the screen, or the world) > mover (the grab handle: a pill just under the
+    // panel's bottom edge, which players pick up to carry it) > panel (the UI, above the pill).
     // Closing sends the mover and the panel out of sight; opening puts them back.
     const panelHeightM = panelWidthM * this.H / this.W;
-    this.handleDrop = panelHeightM / 2 + 0.08; // from the panel's middle down to the cube
+    this.handleDrop = panelHeightM / 2 + 0.08; // from the panel's middle down to the handle
     // Where it sits by the screen, to go back to after being opened in front of a player.
     const moverRot = this.toUnityEuler(rot);
     const centre = this.toUnityPos(offset);
@@ -340,12 +340,7 @@ var FirePlaylistPanel = class {
     await this.label(header, this.karaoke ? 'Karaoke' : 'Fire-V-Player', { fontSize: '30px', fontWeight: 'bold', flexGrow: 1 });
     this.hostLabel = await this.label(header, '', { fontSize: '20px', color: '#bbbbbb', marginRight: '12px' });
     await this.button(header, 'Refresh', () => this.refresh(true), { backgroundColor: GREY });
-    this.moreBtn = await this.button(header, 'More...', () => this.setView(this.view === 'more' ? 'main' : 'more'), { backgroundColor: GREY });
-    // Brings the panel round in front of you, wherever you're standing.
-    await this.button(header, 'Move Here', () => {
-      if (this.frontPose(false)) this.place('front', false);
-      else this.setStatus('Move your head a little first, so the world knows where you are.');
-    }, { backgroundColor: GREY });
+    this.moreBtn = await this.button(header, 'More...', () => this.setView(this.view === 'more' ? 'main' : 'more'), { backgroundColor: '#2e7d32' });
     await this.button(header, 'Close', () => this.close(), { backgroundColor: GREY });
 
     // Now playing
@@ -561,7 +556,7 @@ var FirePlaylistPanel = class {
       await this.addGrabHandle();
     } catch (e) {
       if (this.destroyed) throw e;
-      console.warn('[PlaylistPanel] Could not make the panel grabbable, so it can only be moved with Move Here:', e);
+      console.warn('[PlaylistPanel] Could not make the panel grabbable, so it stays where it opens:', e);
       this.body = null;
     }
     this.checkAlive();
@@ -570,9 +565,9 @@ var FirePlaylistPanel = class {
     console.log('[PlaylistPanel] Ready.');
   }
 
-  // Makes the mover a small cube players pick up to carry the panel, as in the SDK docs: a box,
-  // its collider, a Rigidbody, then Grababble (which adds the grab handle, a WorldObject and
-  // HeldEvents, and puts it on the Grabbable layer). The panel is the cube's child, so Unity
+  // Makes the mover the handle players pick up to carry the panel, as in the SDK docs: a shape,
+  // a collider, a Rigidbody, then Grababble (which adds the grab handle, a WorldObject and
+  // HeldEvents, and puts it on the Grabbable layer). The panel is the handle's child, so Unity
   // carries it along. Without the Rigidbody and WorldObject the grab held on to the world like a
   // climbing hold and pulled the player instead.
   async addGrabHandle() {
@@ -581,35 +576,45 @@ var FirePlaylistPanel = class {
       return;
     }
     const T = 15000;
-    const cube = this.mover;
-    const size = 0.1;
-    if (BS.Box) await this.withTimeout(cube.AddComponent(new BS.Box({ width: size, height: size, depth: size })), T, 'Adding the handle box');
-    if (BS.Material) await this.withTimeout(cube.AddComponent(new BS.Material({ shaderName: 'Unlit/Diffuse', color: new BS.Vector4(0.6, 0.6, 0.66, 1) })), T, 'Adding the handle material');
-    await this.withTimeout(cube.AddComponent(new BS.BoxCollider({ isTrigger: false, size: new BS.Vector3(size, size, size) })), T, 'Adding the handle collider');
+    const handle = this.mover;
+    // Looks like a pill lying along the panel's bottom edge, like the one under the menu. A
+    // capsule stands along its Y axis, so it's on a child turned on its side; the collider stays
+    // on the handle itself, at scale 1, sized to the pill.
+    const length = 0.3, thick = 0.05;
+    const pill = await this.withTimeout(new BS.GameObject({
+      name: 'FireVPlayer_PlaylistHandlePill',
+      parent: handle,
+      localPosition: new BS.Vector3(0, 0, 0),
+      localEulerAngles: new BS.Vector3(0, 0, 90)
+    }).Async(), T, 'Creating the handle pill');
+    if (BS.Capsule) await this.withTimeout(pill.AddComponent(new BS.Capsule({ radius: thick, height: length, radialSegments: 24, heightSegments: 8 })), T, 'Adding the handle shape');
+    else if (BS.Box) await this.withTimeout(pill.AddComponent(new BS.Box({ width: thick, height: length, depth: thick })), T, 'Adding the handle shape');
+    if (BS.Material) await this.withTimeout(pill.AddComponent(new BS.Material({ shaderName: 'Unlit/Diffuse', color: new BS.Vector4(0.85, 0.87, 0.9, 1) })), T, 'Adding the handle material');
+    await this.withTimeout(handle.AddComponent(new BS.BoxCollider({ isTrigger: false, size: new BS.Vector3(length, thick + 0.02, thick + 0.02) })), T, 'Adding the handle collider');
     this.checkAlive();
     // No gravity, and it only turns around the vertical, so the panel stays upright.
-    this.body = await this.withTimeout(cube.AddComponent(new BS.Rigidbody({
+    this.body = await this.withTimeout(handle.AddComponent(new BS.Rigidbody({
       mass: 1, drag: 2, angularDrag: 10, useGravity: false, isKinematic: false,
       freezeRotationX: true, freezeRotationZ: true
     })), T, 'Adding the handle Rigidbody');
     this.checkAlive();
-    // Each player's panel is their own, so its network id is too: no one else's cube matches it.
+    // Each player's panel is their own, so its network id is too: no one else's handle matches it.
     const uid = (this.core.banterScene && this.core.banterScene() && this.core.banterScene().localUser && this.core.banterScene().localUser.uid) || (window.user && window.user.id) || Math.random().toString(36).slice(2);
-    if (typeof cube.SetNetworkId === 'function') {
-      try { await this.withTimeout(cube.SetNetworkId(`FireVPlayer_PlaylistHandle_${uid}`), T, 'Naming the handle'); } catch (e) {}
+    if (typeof handle.SetNetworkId === 'function') {
+      try { await this.withTimeout(handle.SetNetworkId(`FireVPlayer_PlaylistHandle_${uid}`), T, 'Naming the handle'); } catch (e) {}
     }
     const soft = BS.BSGrabType && BS.BSGrabType.Soft !== undefined ? BS.BSGrabType.Soft : 3;
     if (BS.Grababble) {
-      await this.withTimeout(cube.AddComponent(new BS.Grababble({ grabType: soft, grabRadius: 0.01 })), T, 'Making the handle grabbable');
+      await this.withTimeout(handle.AddComponent(new BS.Grababble({ grabType: soft, grabRadius: 0.01 })), T, 'Making the handle grabbable');
     } else {
-      if (typeof cube.SetLayer === 'function') await this.withTimeout(cube.SetLayer((BS.L && BS.L.Grabbable) || 20), T, 'Moving the handle to the Grabbable layer');
-      await this.withTimeout(cube.AddComponent(new BS.GrabHandle({ grabType: soft, grabRadius: 0.01 })), T, 'Adding the grab handle');
+      if (typeof handle.SetLayer === 'function') await this.withTimeout(handle.SetLayer((BS.L && BS.L.Grabbable) || 20), T, 'Moving the handle to the Grabbable layer');
+      await this.withTimeout(handle.AddComponent(new BS.GrabHandle({ grabType: soft, grabRadius: 0.01 })), T, 'Adding the grab handle');
     }
     this.checkAlive();
     // Once carried, the screen's Playlist button brings it back beside the screen.
-    cube.On('grab', () => { this.held = true; this.placement = 'moved'; });
-    cube.On('drop', () => { this.held = false; this.stopDrift(); });
-    console.log('[PlaylistPanel] The cube under the panel can be grabbed to carry it.');
+    handle.On('grab', () => { this.held = true; this.placement = 'moved'; });
+    handle.On('drop', () => { this.held = false; this.stopDrift(); });
+    console.log('[PlaylistPanel] The pill under the panel can be grabbed to carry it.');
   }
 
   // Rotations in Unity's convention: Euler degrees applied Z, then X, then Y.
@@ -691,7 +696,7 @@ var FirePlaylistPanel = class {
     if (!this.visible) await this.open();
   }
 
-  // Shows (shownPos) or hides (hiddenPos) the panel above its cube.
+  // Shows (shownPos) or hides (hiddenPos) the panel above its handle.
   async moveTo(pos) {
     const o = this.panelObj;
     if (!o) return;
@@ -705,7 +710,7 @@ var FirePlaylistPanel = class {
   // head's position is known.
   // fromHand (the hand's Playlist button): the player is looking at their left wrist, so the way
   // from their head to that hand is the way they face. That needs only positions, which Unity
-  // reports reliably. Otherwise (Move Here), the head's own rotation gives the way.
+  // reports reliably. Otherwise, the head's own rotation gives the way.
   frontPose(fromHand) {
     const head = this.core.headPose();
     if (!head || !head.position) return null;
@@ -814,7 +819,7 @@ var FirePlaylistPanel = class {
     clearInterval(this.tickTimer);
     this.tickTimer = null;
     await this.moveTo(this.hiddenPos);
-    // The cube goes too; opening always places it again first.
+    // The handle goes too; opening always places it again first.
     if (this.mover) {
       await this.setLocal(this.mover, new BS.Vector3(0, -1000, 0), null);
       this.stopDrift();

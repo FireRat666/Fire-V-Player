@@ -2,17 +2,20 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <!-- Without this, Quest's browser lays the page out wider than the screen and zooms in, so
-         the video is cropped and the page scrolls. -->
+    <!-- Without this, Android's WebView (the screen's browser on Quest) can lay the page out wider
+         than the screen and zoom in, so the video is cropped and the page scrolls. -->
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Roboto&display=swap" rel="stylesheet">
     <style>
       html, body{margin: 0; padding: 0; background: black; width: 100%; height: 100%; overflow: hidden; overscroll-behavior: none; touch-action: none}
+      /* Everything that shows a video sits on the stage, which fit-screen.js keeps over exactly
+         the part of the page that's showing. */
+      #stage{position: fixed; left: 0; top: 0; width: 100%; height: 100%; overflow: hidden; transform-origin: 0 0}
       /* The YouTube player (YT.Player swaps this div for its iframe, which keeps the id) always
-         fills the screen, whatever size the page had when it loaded. */
-      #player{position: fixed; top: 0; left: 0; width: 100% !important; height: 100% !important; border: 0}
+         fills the stage, whatever size the page had when it loaded. */
+      #player{position: absolute; top: 0; left: 0; width: 100% !important; height: 100% !important; border: 0}
       #status{
         position: absolute;
         top: 50px;
@@ -37,8 +40,9 @@
   </head>
   <body>
     <div id="status"></div>
-    <div id="player"></div>
+    <div id="stage"><div id="player"></div></div>
     <div id="getLoadClick"></div>
+    <script src="./fit-screen.js"></script>
     <script src="./player.js"></script>
   </body>
 </html>

@@ -476,6 +476,14 @@ var FirePlaylistPanel = class {
       this.core.setCaptions(this.core.captions === false);
       this.render();
     });
+    // Steps through the screen resolutions (page widths), then back to the snippet's.
+    this.resolutionBtn = await this.button(mineRow, 'Resolution', () => {
+      const choices = SCREEN_RESOLUTIONS.filter(w => w !== this.core.defaultResolution());
+      const now = this.core.viewerResolution;
+      const next = now ? choices[choices.indexOf(now) + 1] : choices[0];
+      this.core.setScreenResolution(next || null);
+      this.render();
+    }, { backgroundColor: '#00838f' });
     await this.label(mineRow, 'These change only your own screen.', { fontSize: '16px', color: '#999999', marginLeft: '8px', flexShrink: 1 });
 
     // Add by link (in karaoke mode, pasting a link into Search does this)
@@ -871,6 +879,8 @@ var FirePlaylistPanel = class {
     const captions = this.core.captions !== false;
     this.setText(this.captionsBtn, captions ? 'Captions: On' : 'Captions: Off');
     this.setStyle(this.captionsBtn, 'backgroundColor', captions ? '#2e7d32' : '#00838f');
+    const [resW, resH] = this.core.screenPageSize();
+    this.setText(this.resolutionBtn, `Resolution: ${resW} x ${resH}${this.core.viewerResolution ? '' : ' (default)'}`);
     this.display(this.seekSection, host);
     if (this.loadPlaylistBtn) this.display(this.loadPlaylistBtn, host);
     this.setText(this.notHostLabel, host ? '' : (player.canTakeOver ? 'The host allows take over.' : 'Only the host can use these.'));

@@ -6,10 +6,16 @@ var CAPTIONS_PREF_KEY = 'fire-v-player-captions';
 // grapple and the ground, but players still touch it, which is what a trigger zone needs.
 var LAYER_UI = 5;
 var LAYER_TRIGGER = 13;
-// The browser screen's page size. The SDK draws pages at 1300 pixels per metre, so this is
-// 0.98 x 0.55 m before the screen's scale.
-var SCREEN_PAGE_WIDTH = 1280;
-var SCREEN_PAGE_HEIGHT = 720;
+// The browser screen. Its page is `resolution` pixels wide and 16:9. The SDK draws pages at 1300
+// pixels per metre, so the screen object is scaled to keep it SCREEN_WIDTH_M wide (before the
+// snippet's scale) whatever the resolution.
+var SCREEN_PIXELS_PER_M = 1300;
+var SCREEN_WIDTH_M = 1;
+var SCREEN_MIN_RESOLUTION = 640;
+var SCREEN_MAX_RESOLUTION = 3840;
+// The choices in the panel's More view, as page widths.
+var SCREEN_RESOLUTIONS = [1280, 1600, 1920];
+var RESOLUTION_PREF_KEY = 'fire-v-player-resolution';
 
 var Core = class {
     constructor() {
@@ -277,17 +283,25 @@ var Core = class {
   async buildBrowser(browser) {
     const p = this.params;
     const t = this.screenTransform();
-    const go = browser.go = await this.makeObject('FireVPlayer_Screen', { position: t.position, rotation: t.rotation, scale: t.scale, layer: LAYER_UI });
+    const go = browser.go = await this.makeObject('FireVPlayer_Screen', { position: t.position, rotation: t.rotation, scale: this.browserScale(), layer: LAYER_UI });
     if (browser.removed) { this.destroyObject(go); return; }
     go.On('browser-message', e => this.onBrowserMessage(e));
     const url = browser.url;
-    const ppu = Number(p.resolution);
+    const [w, h] = browser.size = this.screenPageSize();
+    // pixelsPerUnit only matters to clients from before the SDK, which honour it.
+    const ppu = SCREEN_PIXELS_PER_M;
     const component = await this.addComponent(go, this.bsComponent('Browser',
-      { url, pageWidth: SCREEN_PAGE_WIDTH, pageHeight: SCREEN_PAGE_HEIGHT, mipMaps: p['mip-maps'], pixelsPerUnit: ppu },
-      'BanterBrowser', [url, p['mip-maps'], ppu, SCREEN_PAGE_WIDTH, SCREEN_PAGE_HEIGHT, null]));
+      { url, pageWidth: w, pageHeight: h, mipMaps: p['mip-maps'], pixelsPerUnit: ppu },
+      'BanterBrowser', [url, p['mip-maps'], ppu, w, h, null]));
     if (browser.removed) { this.destroyObject(go); return; }
     browser.component = component;
     if (typeof component.ToggleInteraction === 'function') component.ToggleInteraction(true);
+    // The sound plays from the screen at the same volume everywhere (the SDK's Flat fade); the
+    // `spatial` setting does its own fade. A BS Browser has no 2D sound: on PC it's always heard
+    // from the screen's direction, and on Quest the page plays its own sound, which isn't placed.
+    if ('rolloffMode' in component || this.modernSdk()) component.rolloffMode = 0;
+    // A size picked meanwhile in the panel.
+    if (this.screenPageSize()[0] !== w) this.applyScreenResolution();
     // The address may have changed while the screen was being made.
     if (browser.url !== url) component.url = browser.url;
     browser.queue.splice(0).forEach(json => component.RunActions(json));
@@ -341,9 +355,64 @@ var Core = class {
     }
     if (msg && typeof msg === 'object') this.recieveBrowserMessage(msg);
   }
-  clickBrowser(x,y) {
-    // No browser while the world's video player is up instead.
+  // `fx`/`fy` place the click as a fraction of the page (0.5 = the middle), as the page doesn't know
+  // its size in the browser's pixels; `x`/`y` are page pixels.
+  clickBrowser(x, y, fx, fy) {
+    const browser = this.browser;
+    if (!browser) return; // the world's video player is up instead
+    const [w, h] = browser.size || this.screenPageSize();
+    if (Number.isFinite(fx) && Number.isFinite(fy)) { x = Math.round(w * fx); y = Math.round(h * fy); }
     this.runBrowserActions([{actionType: "click2d", numParam1: x, numParam2: y}]);
+  }
+
+  // ---------------------------------------------------------------- screen resolution
+  // `resolution` is the page's width in pixels (16:9). Each viewer can pick another in the panel,
+  // remembered on their device, as their screen is their own browser.
+  clampResolution(value) {
+    const w = Math.round(Number(value));
+    if (!Number.isFinite(w) || w <= 0) return null;
+    return Math.max(SCREEN_MIN_RESOLUTION, Math.min(SCREEN_MAX_RESOLUTION, w));
+  }
+  defaultResolution() { return this.clampResolution(this.params.resolution) || 1600; }
+  screenResolution() { return this.viewerResolution || this.defaultResolution(); }
+  screenPageSize() {
+    const w = this.screenResolution();
+    return [w, Math.round(w * 9 / 16)];
+  }
+  // The screen object's scale: the snippet's, times what keeps the page SCREEN_WIDTH_M wide.
+  browserScale() {
+    const k = SCREEN_WIDTH_M * SCREEN_PIXELS_PER_M / this.screenPageSize()[0];
+    const [x, y, z] = this.vec3(this.params.scale, [1, 1, 1]);
+    return new BS.Vector3(x * k, y * k, z);
+  }
+  loadResolutionPref() {
+    try {
+      const saved = this.clampResolution(localStorage.getItem(RESOLUTION_PREF_KEY));
+      if (saved) this.viewerResolution = saved;
+    } catch (e) {}
+    return this.screenResolution();
+  }
+  // null goes back to the snippet's resolution.
+  setScreenResolution(width) {
+    const w = this.clampResolution(width);
+    this.viewerResolution = w && w !== this.defaultResolution() ? w : null;
+    try {
+      if (this.viewerResolution) localStorage.setItem(RESOLUTION_PREF_KEY, String(this.viewerResolution));
+      else localStorage.removeItem(RESOLUTION_PREF_KEY);
+    } catch (e) {}
+    this.applyScreenResolution();
+    const [pw, ph] = this.screenPageSize();
+    this.showToast(`Screen resolution ${pw} x ${ph}`);
+  }
+  // Resizes the page and rescales the screen, so it stays the same size in the world.
+  applyScreenResolution() {
+    const browser = this.browser;
+    if (!browser || !browser.component) return;
+    const [w, h] = browser.size = this.screenPageSize();
+    browser.component.pageWidth = w;
+    browser.component.pageHeight = h;
+    if (browser.go && typeof browser.go.SetLocalScale === 'function') browser.go.SetLocalScale(this.browserScale());
+    console.log(`[Core] Screen page is now ${w} x ${h}.`);
   }
   // The row of buttons under the screen: Playlist (Singers), skip back/forward, mute, volume.
   async setupBrowserUi() {
@@ -953,6 +1022,8 @@ var Core = class {
     this.setOrDefault("volume", '40');
     this.setOrDefault("mute", 'false');
     this.setOrDefault("captions", 'true');
+    // Shows the screen page's size, zoom and pixel ratio on the screen, for checking its fit.
+    this.setOrDefault("screen-debug", 'false');
     this.setOrDefault("untrusted-links", 'false');
     this.setOrDefault("is3d", 'false');
     this.setOrDefault("announce", 'true');
@@ -1205,7 +1276,7 @@ var Core = class {
         break;
       case Commands.CLICK_BROWSER:
         if(window.isBanter) {
-          this.clickBrowser(json.data.x,json.data.y);
+          this.clickBrowser(json.data.x, json.data.y, json.data.fx, json.data.fy);
         }
         break;
       case Commands.SHOW_REPLACE_PROMPT:

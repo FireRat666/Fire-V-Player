@@ -91,7 +91,7 @@ In a Creator SDK world (`Assets/WebRoot/index.html`), add the player as a snippe
 Settings are the same as the script attributes below, except:
 
 - `position` and `rotation` are **Unity world values**, as for every snippet, so the Scene-view gizmo shows where the screen will be. (Script-tag values use A-Frame axes, where Z is flipped: script `position="0 1.5 -2"` is snippet `position="0 1.5 2"`.)
-- `scale` can be a single number. The screen is 1 m wide and 0.5625 m tall at scale 1, so the gizmo's `size` should be `scale × 1` by `scale × 0.5625`.
+- `scale` can be a single number. The screen is 1 m wide and 0.5625 m tall at scale 1, at any `resolution`, so the gizmo's `size` should be `scale × 1` by `scale × 0.5625`.
 - `karaoke` is a checkbox: ticked (`true`) is karaoke mode, unticked or empty is playlist mode. A hand-written `mode="karaoke"` works too. Both modes use the same settings; `playlist` (the default YouTube playlist) only matters in playlist mode.
 - `singer-button-position` and `singer-button-rotation` (karaoke) place the Singers button, a Unity world position and rotation like `button-position`, with its own drag handle. `0 0 0` (or empty) means the default: for the position, below and in front of the in-world buttons, placed from them; for the rotation, tilted back 30° and turned with the screen. With `controls-follow-screen="true"` they're offsets from the screen instead. They default to `0 0 0` rather than empty because Unity picks each setting's field from its value: an empty one shows as a single text box instead of X, Y and Z. The `box-trigger-*` settings from the parameter reference work too.
 - The room ID is `room`, not `instance`: Unity's BSSnippet component writes its own `instance` attribute. Without `room`, the space URL is used, so each space has its own room.
@@ -107,7 +107,7 @@ In these worlds the Playlist button opens an **in-world panel** beside the scree
 
 - host controls: lock, take over, voting, clear, load the default playlist
 - seek to a time (host)
-- your player only: skip back/forward, Auto Sync and Captions (closed captions on or off for you, remembered on your device)
+- your player only: skip back/forward, Auto Sync, Captions (closed captions on or off for you, remembered on your device) and Resolution (steps your screen's page through 1280 x 720, 1600 x 900 and 1920 x 1080, then back to the snippet's `resolution`; remembered on your device)
 - add by link: a video (YouTube, Twitch, Vimeo or a direct link, see [Links from other sites](#links-from-other-sites)), or a YouTube playlist (host)
 - mode: switch between playlist and karaoke, for space admins (see [Switching mode in world](#switching-mode-in-world))
 
@@ -182,8 +182,9 @@ All parameters are optional unless marked as **(Required)**.
 | `mute` | Whether the player should start muted. | `false` |
 | `untrusted-links` | Whether links from any site (video files, `.m3u8` streams, VDO.Ninja) can be played, as well as YouTube, Twitch and Vimeo. Off by default, as those links aren't moderated. Each viewer's own world must allow them for them to play on their screen. See [Links from other sites](#links-from-other-sites). | `false` |
 | `captions` | Whether closed captions start on. Each viewer can turn them on or off in the panel's More view, and their choice is remembered on their device. | `true` |
-| `resolution` | Pixels per unit of the browser surface, in older Banter clients. The Creator SDK draws every browser at 1300 pixels per metre and ignores it; the screen's page is 1280 x 720. | `1600` |
-| `native-screen-size` | The size (`"width height"`, before `scale`) of the world video player that video and audio files play on. Empty matches the browser screen: a 1280 x 720 page at 1300 pixels per unit. | `""` (0.985 x 0.554) |
+| `resolution` | The width in pixels of the screen's page, which is 16:9 (`1600` is 1600 x 900). Higher is sharper, and YouTube and Twitch lay out as for a bigger window, but each frame costs more to draw, especially on Quest. The screen stays the same size in the world whatever the resolution. Each viewer can pick another for their own screen in the panel's More view. From 640 to 3840. | `1600` |
+| `native-screen-size` | The size (`"width height"`, before `scale`) of the world video player that video and audio files play on. Empty matches the browser screen. | `""` (1 x 0.5625) |
+| `screen-debug` | Set to `true` to show, in a corner of the screen, the page's size, zoom and pixel ratio as the screen's browser reports them. For checking how the page fits the screen on a headset. | `false` |
 
 ### 3D Environment Parameters
 
@@ -192,7 +193,7 @@ All parameters are optional unless marked as **(Required)**.
 | `position` | The `x y z` position of the player screen in the 3D scene. | `0 0 0` |
 | `rotation` | The `x y z` rotation of the player screen. | `0 0 0` |
 | `scale` | The `x y z` scale of the player screen. | `1 1 1` |
-| `spatial` | Set to `true` to make the volume fade as you move away from the screen. It only changes the volume: Banter always plays the screen's sound in 3D, coming from the screen, and has no setting for 2D sound. | `true` |
+| `spatial` | Set to `true` to make the volume fade as you move away from the screen. Turned off, the volume is the same wherever you stand. Either way it only changes the volume: on PC the SDK always plays the screen's sound from the screen's direction (its browser has no 2D sound setting), and on Quest the page plays its own sound, which isn't placed in the world, so it's effectively 2D. | `true` |
 | `spatial-min-distance` | With `spatial` on, the distance at which the volume starts to fade. | `5` |
 | `spatial-max-distance` | With `spatial` on, how far past `spatial-min-distance` the volume reaches zero. | `40` |
 | `mip-maps` | The number of mip-map levels for the browser texture, in older Banter clients. The Creator SDK ignores it. | `1` |

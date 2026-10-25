@@ -257,11 +257,17 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
       allowUntrusted: () => this.core.allowUntrusted === true,
       // Asks this viewer's world to click the middle of their screen, for players (Twitch) that
       // won't start on their own until someone does.
-      requestClick: () => this.core.sendMessage({ path: Commands.CLICK_BROWSER, data: { x: Math.round(window.innerWidth / 2), y: Math.round(window.innerHeight / 2) } })
+      requestClick: () => this.clickMiddle()
     }) : this.yt;
   }
   // A file, stream or Twitch video's length isn't known until it loads, so the first player to
   // load it tells the server, which then moves the playlist on when it ends.
+  // Asks the world to click the middle of the screen (some players wait for a click to start).
+  // fx/fy are fractions of the page, as the world knows its size in the browser's pixels, which
+  // can differ from this page's CSS pixels; x/y are for worlds from before that.
+  clickMiddle() {
+    this.core.sendMessage({ path: Commands.CLICK_BROWSER, data: { x: Math.round(window.innerWidth / 2), y: Math.round(window.innerHeight / 2), fx: 0.5, fy: 0.5 } });
+  }
   reportMediaDuration(link, seconds) {
     const video = this.currentVideo;
     if (!video || video.link !== link || video.duration) return;
@@ -269,7 +275,7 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
   }
   startPlayerOrNot() {
     if(this.player && !this.isPlayerStarted && this.core.connected() && !this.readyToPlay) {
-      this.core.sendMessage({path: Commands.CLICK_BROWSER, data: {x: window.innerHeight / 2, y: window.innerWidth / 2}});
+      this.clickMiddle();
       this.isPlayerStarted = true;
     }
   }

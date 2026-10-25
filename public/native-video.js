@@ -10,9 +10,9 @@
 // Unity's player can't change speed, so it keeps in time by jumping: it asks the server where the
 // video should be every few seconds and jumps there when it is more than a second out.
 var FireNativeScreen = (() => {
-  // The browser screen's size before the snippet's scale: a 1280 x 720 page at the SDK's 1300
-  // pixels per world unit. The native-screen-size setting ("width height") changes it.
-  const DEFAULT_SIZE = [1280 / 1300, 720 / 1300];
+  // The browser screen's size before the snippet's scale (Core keeps it 1 x 0.5625 m at any
+  // resolution). The native-screen-size setting ("width height") changes it.
+  const DEFAULT_SIZE = [1, 0.5625];
   const POLL_MS = 250;
   const SYNC_EVERY_MS = 5000;
   const MAX_DRIFT_S = 1.0;          // jump when further out than this (time reports come once a second)

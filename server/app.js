@@ -974,8 +974,11 @@ class App {
   syncWsTime(socket, key, data = {}) {
     // This command is specifically for the video player element to correct its time.
     // The playlist/UI pages use the lastStartTime from PLAYBACK_UPDATE to calculate time.
-    // Therefore, we only send this to the 'player' type socket.
-    if (this.videoPlayers[key] && this.videoPlayers[key].playlist.length && socket.type === "player") {
+    // Therefore, we only send this to the 'player' type socket (or a world's native video player).
+    // The world's own connection ('space') asks too while a file plays on its native video player
+    // (public/native-video.js), as there is no browser page then.
+    const asker = socket.type === "player" || (socket.type === "space" && data && data.native === true);
+    if (this.videoPlayers[key] && this.videoPlayers[key].playlist.length && asker) {
       // --- FIX: Calculate current time on-demand for accuracy ---
       // The server's main loop updates currentTime only once per second.
       // For an accurate sync, we must calculate the exact time at the moment of sending.

@@ -107,6 +107,9 @@
         // Pass the mode to the player iframe so it knows which skip time to use.
         const proto = this.core.hostProtocol || (this.core.hostUrl.startsWith('localhost') || this.core.hostUrl.startsWith('127.0.0.1') ? 'http' : 'https');
         const url = `${proto}://${this.core.hostUrl}/?youtube=${encodeURIComponent(this.core.params.youtube)}&start=${this.core.params.start}&playlist=${this.core.params.playlist}&mute=${this.core.params.mute}&volume=${this.core.tempVolume}&instance=${encodeURIComponent(this.core.params.instance)}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}&mode=${mode}&captions=${core.loadCaptionsPref()}&untrusted-links=${core.allowUntrusted === true}`;
+        // Files play on the world's own video player instead of the browser (native-video.js).
+        await core.setupScript(null, "media-sources");
+        await core.setupScript(null, "native-video");
         this.core.setupBrowserElement(url);
         if (karaoke) this.core.setupJoinLeaveButton();
 

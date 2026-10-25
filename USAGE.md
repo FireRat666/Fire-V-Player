@@ -141,11 +141,13 @@ These only work with `untrusted-links="true"` in the snippet, as they can come f
 
 | Link | Example | Notes |
 |---|---|---|
-| Video or audio file | `https://.../movie.mp4` (also .webm, .mov, .m4v, .mp3, .m4a, .ogg) | Stays in sync. |
+| Video or audio file | `https://.../movie.mp4` (also .webm, .mov, .m4v, .mp3, .m4a, .ogg) | Plays on the world's own video player, which takes the browser screen's place while it plays (see below). Stays in sync to within about a second. |
 | HLS stream | `https://.../index.m3u8` | Live streams play until someone skips; recorded ones stay in sync. The server must allow other sites to load it (CORS). |
 | VDO.Ninja | `https://vdo.ninja/?view=<stream id>`, or `?room=<room>&scene` for a whole room | Shown as VDO.Ninja's own page and plays until someone skips. Volume and mute work; there's no pause or seek. Its video controls (picture-in-picture, fullscreen) are hidden, as fullscreen would blank the screen. Links that would join a room or send video (`?push=`, `?room=` without `scene`) aren't accepted. |
 
 Without it, the server won't add them, and a player whose world doesn't allow them shows a notice instead of playing one. If a browser won't start a file with sound, it starts muted and the sound comes on at the first click on the screen.
+
+**Files play on the world's video player.** Many file hosts (Hostforever, for one) won't let a web page on another site load their files, so in a world a file plays on the SDK's own video player (Unity's) instead of in the browser. While it plays, the browser screen is removed and the video player is put in its place, and when the playlist moves on to YouTube or anything else, the video player is removed and the browser comes back, so only one runs at a time. Volume, mute, `spatial`, skips, pause and the host's controls work as usual. Unity's player can't change speed, so instead of easing back into step it jumps when it is more than a second out. Which formats play depends on the device (MP4 with H.264 video is the safest, especially on Quest). The video player is sized like the browser screen; set `native-screen-size` if it doesn't match yours. Outside a world (the 2D page) files still play in the browser.
 
 Files, streams and Twitch videos show no length until the first player loads them; after that the playlist moves on when they end. Captions and the "unavailable in your region" check only apply to YouTube. Pages that need a login can't be played. Dailymotion isn't supported, because its player now needs a player ID from a Dailymotion account.
 
@@ -181,6 +183,7 @@ All parameters are optional unless marked as **(Required)**.
 | `untrusted-links` | Whether links from any site (video files, `.m3u8` streams, VDO.Ninja) can be played, as well as YouTube, Twitch and Vimeo. Off by default, as those links aren't moderated. Each viewer's own world must allow them for them to play on their screen. See [Links from other sites](#links-from-other-sites). | `false` |
 | `captions` | Whether closed captions start on. Each viewer can turn them on or off in the panel's More view, and their choice is remembered on their device. | `true` |
 | `resolution` | The resolution (width in pixels) of the browser surface. Higher values are crisper but use more resources. | `1600` |
+| `native-screen-size` | The size (`"width height"`, before `scale`) of the world video player that video and audio files play on. Empty matches the browser screen: a 1280 x 720 page at 1300 pixels per unit. | `""` (0.985 x 0.554) |
 
 ### 3D Environment Parameters
 

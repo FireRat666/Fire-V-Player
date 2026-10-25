@@ -137,12 +137,71 @@ var Core = class {
       console.log(`Player is in 2D mode. Open the playlist controls here: ${playlistUrl}`);
       return;
     }
+    this.setupBrowserUi();
+    // The screen itself: the browser, or the world's video player when a file is playing.
+    this.screenReady = true;
+    this.updateScreen();
+  }
+  // --------------------------------------------------------------- screen (browser or native)
+  // Video and audio files play on the world's own video player (native-video.js), which plays
+  // links from hosts that won't let a web page load them. Only one of it and the browser exists at
+  // a time: the other is destroyed, so it isn't running in the background.
+  wantsNativeScreen(link) {
+    if (!link || !window.isBanter || typeof FireNativeScreen === 'undefined' || !window.MediaSources) return false;
+    if (!document.querySelector('a-scene') || !window.BS || !BS.BanterVideoPlayer) return false;
+    // Files come from anywhere, so only where the world's owner allows them (as in the browser).
+    const media = MediaSources.detect(link);
+    return !!media && media.type === 'file' && this.allowUntrusted === true;
+  }
+  currentLink() {
+    const p = this.player;
+    const track = p && Array.isArray(p.playlist) && p.playlist.length ? p.playlist[p.currentTrack] : null;
+    return track && track.link ? track.link : '';
+  }
+  // The browser page's address, with the mode and captions as they are now.
+  browserUrl() {
+    return String(this.initialUrl || '').replace(/([?&]mode=)[^&]*/, `$1${this.getMode()}`).replace(/([?&]captions=)[^&]*/, `$1${this.captions !== false}`);
+  }
+  // Puts up whichever screen the current track needs. `json` is the message that changed things.
+  updateScreen(json) {
+    if (!this.screenReady) return;
+    const link = this.currentLink();
+    const path = json && json.path;
+    if (this.wantsNativeScreen(link)) {
+      if (this.nativeScreen && this.nativeScreen.link === link) {
+        // The same file again (a restart, a one-song playlist), or the host moved it.
+        if (path === Commands.TRACK_CHANGED || path === Commands.HOST_SEEK) this.nativeScreen.resync();
+        return;
+      }
+      this.removeBrowser();
+      if (this.nativeScreen) this.nativeScreen.destroy();
+      console.log('[Core] A file is playing, so the world\'s video player takes the browser\'s place.');
+      this.nativeScreen = new FireNativeScreen(this, link);
+      return;
+    }
+    if (this.nativeScreen) {
+      console.log('[Core] Back to the browser screen.');
+      this.nativeScreen.destroy();
+      this.nativeScreen = null;
+    }
+    if (!this.browser) this.createBrowser(this.browserUrl());
+  }
+  removeBrowser() {
+    if (!this.browser) return;
+    if (this.browser.parentNode) this.browser.parentNode.removeChild(this.browser);
+    this.createdElements = this.createdElements.filter(e => e !== this.browser);
+    this.browser = null;
+    // Messages still waiting for the old page will never be answered.
+    this.browserAcks = {};
+  }
+  createBrowser(url) {
+    const scene = document.querySelector("a-scene");
+    if (!scene) return;
     const browser = document.createElement('a-entity');
     browser.setAttribute("position", this.params.position);
     browser.setAttribute("rotation", this.params.rotation);
     browser.setAttribute("scale", this.params.scale);
     console.log({"mipMaps": this.params['mip-maps'], "pixelsPerUnit": Number(this.params.resolution), "mode": "local"});
-    // console.log("setupBrowserElement", url);
     browser.setAttribute("sq-browser", {"mipMaps": this.params['mip-maps'], "pixelsPerUnit": Number(this.params.resolution), "mode": "local", "url": url});
     if(this.params.geometry && this.params.geometry !== "false") {
       const shape = document.createElement('a-entity');
@@ -162,9 +221,9 @@ var Core = class {
       // console.log("got a browser message");
       // console.log(e);
     });
-    this.setupBrowserUi();
   }
   clickBrowser(x,y) {
+    if (!this.browser) return; // the world's video player is up instead
     this.browser.components['sq-browser'].runActions([{actionType: "click2d", numParam1: x, numParam2: y}])
   }
   setupBrowserUi() {
@@ -720,6 +779,8 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
     this.setOrDefault("box-trigger-rotation", '0 0 0');
     this.setOrDefault("box-trigger-scale", '1 1 1');
     this.setOrDefault("resolution", '1600');
+    // The world video player's size for files (native-video.js); empty matches the browser.
+    this.setOrDefault("native-screen-size", '');
     this.setOrDefault("one-for-each-instance", "false");
     this.setOrDefault("instance", location.href);
     this.setOrDefault("playlist", "");
@@ -851,6 +912,11 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
     msg.id = this.getUniquId();
     msg.km = !!this.isKaraoke; // the current mode, which can change in world
     msg.cc = this.captions !== false; // this viewer's closed captions setting
+    // While a file plays on the world's video player there is no browser page: it takes these.
+    if (this.nativeScreen) {
+      this.nativeScreen.handle(msg);
+      return Promise.resolve();
+    }
     return new Promise((resolve, reject) => {
       if(this.browser) {
         this.browserAcks[msg.id] = resolve;
@@ -878,8 +944,7 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
         if(window.isBanter && this.browser) {
           // console.log("RESET_BROWSER", {"url": this.initialUrl});
           // The mode may have changed in world since the page first loaded.
-          const url = String(this.initialUrl || '').replace(/([?&]mode=)[^&]*/, `$1${this.getMode()}`).replace(/([?&]captions=)[^&]*/, `$1${this.captions !== false}`);
-          this.browser.setAttribute("sq-browser", {"url": url});
+          this.browser.setAttribute("sq-browser", {"url": this.browserUrl()});
         }
         break;
       case Commands.ITEM_REMOVED:
@@ -1041,6 +1106,8 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
         }
         break;
     }
+    // A file track needs the world's video player in place of the browser, and back again after.
+    try { this.updateScreen(json); } catch (e) { console.error('[Core] Could not switch screens:', e); }
     if (this.messageListeners) {
       this.messageListeners.forEach(fn => {
         try { fn(json); } catch (e) { console.error('[Core] Message listener error:', e); }
@@ -1200,6 +1267,12 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
     });
     this.createdElements = [];
     console.log("Removed created DOM elements.");
+
+    if (this.nativeScreen) {
+      this.nativeScreen.destroy();
+      this.nativeScreen = null;
+    }
+    this.screenReady = false;
 
     // Remove any global references to this instance
     this.browser = null;

@@ -1,0 +1,240 @@
+// Plays a video or audio file (.mp4, .mp3, ...) on the world's own video player (Unity's, through
+// the SDK's BanterVideoPlayer) instead of in the screen's web browser. Many file hosts tell browsers
+// not to load their files on other sites; Unity's player isn't a web page, so it plays them anyway.
+//
+// Core puts one of these in place of the browser screen while a file is playing, and puts the
+// browser back afterwards, so only one of them runs at a time (see Core.updateScreen). Each file
+// gets a new one. It takes the messages the browser page would have been sent (volume, mute,
+// skips, pause, sync) through Core.sendBrowserMessage.
+//
+// Unity's player can't change speed, so it keeps in time by jumping: it asks the server where the
+// video should be every few seconds and jumps there when it is more than a second out.
+var FireNativeScreen = (() => {
+  // The browser screen's size before the snippet's scale: a 1280 x 720 page at the SDK's 1300
+  // pixels per world unit. The native-screen-size setting ("width height") changes it.
+  const DEFAULT_SIZE = [1280 / 1300, 720 / 1300];
+  const POLL_MS = 250;
+  const SYNC_EVERY_MS = 5000;
+  const MAX_DRIFT_S = 1.0;          // jump when further out than this (time reports come once a second)
+  const TOGGLE_COOLDOWN_MS = 1500;  // isPlaying takes a moment to catch up after PlayToggle
+  const PREPARE_TIMEOUT_MS = 20000;
+  const SKIP_S = 5, SKIP_KARAOKE_S = 0.25; // as the browser page's skip buttons
+
+  return class {
+    constructor(core, link) {
+      this.core = core;
+      this.link = link;
+      this.destroyed = false;
+      this.prepared = false;
+      this.autoSync = true;
+      this.wantPaused = !!(core.player && core.player.paused);
+      this.volume = Number.isFinite(Number(core.tempVolume)) ? Number(core.tempVolume) : Number(core.params.volume);
+      this.muted = core.params.mute === 'true' || core.params.mute === true;
+      this.baseTime = 0;      // where the video was at baseAt (performance.now())
+      this.baseAt = performance.now();
+      this.lastToggleAt = -Infinity;
+      this.pendingSync = null;
+      this.ready = this.create().catch(e => {
+        console.error('[NativeScreen] Could not set up the video player.', e);
+        this.core.showToast("Couldn't start the world's video player.", 6000);
+      });
+    }
+
+    size() {
+      const parts = String(this.core.params['native-screen-size'] || '').trim().split(/\s+/).map(Number);
+      return parts.length === 2 && parts.every(n => n > 0) ? parts : DEFAULT_SIZE;
+    }
+
+    async create() {
+      const scene = document.querySelector('a-scene');
+      if (!scene || !window.BS || !BS.BanterVideoPlayer) throw new Error('No A-Frame scene or BanterVideoPlayer.');
+      const entity = this.entity = document.createElement('a-entity');
+      entity.setAttribute('position', this.core.params.position);
+      entity.setAttribute('rotation', this.core.params.rotation);
+      entity.setAttribute('scale', this.core.params.scale);
+      scene.appendChild(entity);
+
+      // The SDK's A-Frame bridge gives the entity a Unity object, then sets unityReady.
+      if (!entity.unityReady) await new Promise(resolve => entity.addEventListener('unityready', resolve, { once: true }));
+      if (this.destroyed) return;
+      const go = entity.gameObject;
+      const [w, h] = this.size();
+      // The plane's renderer has to exist before the video player, which draws onto its material.
+      await go.AddComponent(new BS.BanterPlane(w, h));
+      await go.AddComponent(new BS.BanterMaterial('Unlit/Diffuse'));
+      if (this.destroyed) return;
+      // url, volume, loop, playOnAwake, skipOnDrop, waitForFirstFrame
+      const vp = new BS.BanterVideoPlayer(this.link, this.unityVolume(), false, !this.wantPaused, true, true);
+      await go.AddComponent(vp);
+      if (this.destroyed) return;
+      this.vp = vp;
+      // time only reaches the page when asked for; the rest are watched too, to be sure they do.
+      const P = BS.PropertyName;
+      try { vp.WatchProperties([P.time, P.duration, P.isPlaying, P.isPrepared]); } catch (e) {}
+      this.lastRaw = vp.time;
+      this.startedAt = performance.now();
+      this.pollTimer = setInterval(() => this.poll(), POLL_MS);
+      this.syncTimer = setInterval(() => { if (this.autoSync && !this.wantPaused) this.requestSync(false); }, SYNC_EVERY_MS);
+      console.log(`[NativeScreen] Playing ${this.link} on the world's video player.`);
+    }
+
+    // ------------------------------------------------------------------ state from Unity
+    poll() {
+      const vp = this.vp;
+      if (!vp || this.destroyed) return;
+      const now = performance.now();
+      // Unity sends the time once a second, as each second starts, so it is exact when it arrives.
+      if (vp.time !== this.lastRaw) {
+        this.lastRaw = vp.time;
+        this.baseTime = Number(vp.time) || 0;
+        this.baseAt = now;
+      }
+      if (!this.prepared && (vp.isPrepared || vp.duration > 0)) {
+        this.prepared = true;
+        this.reportDuration();
+        this.requestSync(true); // start where everyone else is
+      }
+      if (!this.prepared && now - this.startedAt > PREPARE_TIMEOUT_MS && !this.warned) {
+        this.warned = true;
+        console.warn(`[NativeScreen] ${this.link} hasn't loaded after ${PREPARE_TIMEOUT_MS / 1000}s.`);
+        this.core.showToast("This file won't load on the world's video player. The link may be wrong, or the format unsupported.", 8000);
+      }
+      if (this.prepared) {
+        if (!this.durationReported) this.reportDuration();
+        this.applyPaused();
+      }
+    }
+
+    duration() { return this.vp && Number(this.vp.duration) > 0 ? Number(this.vp.duration) : 0; }
+    playing() { return !!(this.vp && this.vp.isPlaying); }
+    localTime() {
+      const t = this.baseTime + (this.playing() ? (performance.now() - this.baseAt) / 1000 : 0);
+      const d = this.duration();
+      return d ? Math.min(t, d) : t;
+    }
+
+    // A file's length isn't known until it loads, and the server needs it to move on when it ends.
+    reportDuration() {
+      const d = this.duration();
+      if (!d) return;
+      this.durationReported = true;
+      const track = this.currentTrack();
+      if (track && track.link === this.link && !track.duration) {
+        this.core.sendMessage({ path: Commands.MEDIA_DURATION, data: { link: this.link, duration: d } });
+      }
+    }
+    currentTrack() {
+      const p = this.core.player;
+      return p && Array.isArray(p.playlist) ? p.playlist[p.currentTrack] : null;
+    }
+
+    // ------------------------------------------------------------------ control
+    unityVolume() {
+      return this.muted ? 0 : Math.max(0, Math.min(1, Number(this.volume) / 100 || 0));
+    }
+    applyVolume() {
+      if (!this.vp) return;
+      const v = this.unityVolume();
+      if (this.vp.volume !== v) this.vp.volume = v;
+    }
+    // Unity's player only has a play/pause toggle, so this toggles until it matches wantPaused.
+    applyPaused() {
+      const vp = this.vp;
+      if (!vp || !this.prepared) return;
+      const now = performance.now();
+      if (now - this.lastToggleAt < TOGGLE_COOLDOWN_MS) return;
+      if (this.playing() === !this.wantPaused) return;
+      // At the end, playing again would start the file over. The server moves on instead.
+      const d = this.duration();
+      if (!this.wantPaused && d && this.localTime() >= d - 0.5) return;
+      this.lastToggleAt = now;
+      vp.PlayToggle();
+    }
+    seek(t) {
+      if (!this.vp) return;
+      const d = this.duration();
+      t = Math.max(0, d ? Math.min(t, d - 0.25) : t);
+      this.vp.time = t;
+      this.lastRaw = this.vp.time; // the setter keeps the new value until Unity sends its own
+      this.baseTime = t;
+      this.baseAt = performance.now();
+    }
+
+    // ------------------------------------------------------------------ keeping in time
+    requestSync(hard) {
+      if (this.destroyed) return;
+      this.pendingSync = { hard: !!hard || (this.pendingSync && this.pendingSync.hard) };
+      // native: the server answers the world's own connection, not only a browser page's.
+      this.core.sendMessage({ path: Commands.REQUEST_SYNC, data: { clientTimestamp: Date.now(), native: true } });
+    }
+    // Jump to the start of the track, or where it is now, after a track change or host seek.
+    resync() {
+      this.autoSync = true;
+      if (this.core.player) this.wantPaused = !!this.core.player.paused;
+      this.requestSync(true);
+    }
+    onSync(data) {
+      if (!data || !this.prepared) return;
+      const p = this.core.player;
+      if (p && typeof data.currentTrack === 'number' && data.currentTrack !== p.currentTrack) return; // stale
+      const hard = this.pendingSync && this.pendingSync.hard;
+      this.pendingSync = null;
+      const latency = Math.max(0, Date.now() - Number(data.clientTimestamp || Date.now())) / 2000;
+      const serverTime = Number(data.currentTime) + (this.wantPaused ? 0 : latency);
+      if (!Number.isFinite(serverTime)) return;
+      const d = this.duration();
+      if (d && serverTime >= d - 0.5) return; // about to end; the server moves on
+      const drift = serverTime - this.localTime();
+      if (hard || (this.autoSync && Math.abs(drift) > MAX_DRIFT_S)) {
+        if (!hard) console.log(`[NativeScreen] ${drift > 0 ? 'Behind' : 'Ahead'} by ${Math.abs(drift).toFixed(2)}s, jumping.`);
+        this.seek(serverTime);
+      }
+    }
+
+    // The messages the browser page would have had (see Core.sendBrowserMessage).
+    handle(msg) {
+      if (!msg || this.destroyed) return;
+      switch (msg.path) {
+        case Commands.SET_VOLUME:
+          if (Number(msg.data) >= 0 && Number(msg.data) <= 100) {
+            this.volume = Number(msg.data);
+            this.applyVolume();
+          }
+          break;
+        case Commands.MUTE:
+          this.muted = msg.data === true || msg.data === 'true';
+          this.applyVolume();
+          break;
+        case Commands.SKIP_BACK:
+        case Commands.SKIP_FORWARD: {
+          // A viewer's own skip: stop pulling them back into step until the next track or host seek.
+          this.autoSync = false;
+          const amount = this.core.isKaraoke ? SKIP_KARAOKE_S : SKIP_S;
+          this.seek(this.localTime() + (msg.path === Commands.SKIP_FORWARD ? amount : -amount));
+          break;
+        }
+        case Commands.PAUSE_STATE_CHANGED: {
+          const data = msg.data || {};
+          this.wantPaused = !!data.paused;
+          if (!this.wantPaused && Number.isFinite(Number(data.currentTime))) this.seek(Number(data.currentTime));
+          this.lastToggleAt = -Infinity;
+          this.applyPaused();
+          break;
+        }
+        case Commands.SYNC_TIME:
+          this.onSync(msg.data);
+          break;
+      }
+    }
+
+    destroy() {
+      this.destroyed = true;
+      clearInterval(this.pollTimer);
+      clearInterval(this.syncTimer);
+      // Removing the entity destroys its Unity object, and the video player with it.
+      if (this.entity && this.entity.parentNode) this.entity.parentNode.removeChild(this.entity);
+      this.entity = null;
+      this.vp = null;
+    }
+  };
+})();

@@ -1,3 +1,9 @@
+/**
+ * @fileoverview Playlist mode script tag entry point for in-world HTML pages.
+ * Captures script attributes and delegates startup to `FireVPlayer.startPlaylistPlayer`.
+ * @module public/playlist
+ */
+
 // Playlist mode entry point, added to a world page as a <script> tag.
 // See USAGE.md. For the SideQuest/Altspace Creator SDK, snippet.js (<bs-snippet>) also works.
 (() => {

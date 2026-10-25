@@ -1,3 +1,11 @@
+/**
+ * @fileoverview Database initialization, connection management, schema migrations,
+ * and security policy enforcement for Fire-V-Player.
+ * Configures Sequelize with PostgreSQL pooling, keep-alives, automatic retries,
+ * Umzug schema migrations, and optional one-time data migration between databases.
+ * @module server/db
+ */
+
 const { Sequelize, DataTypes, Op } = require('sequelize');
 const { Umzug, SequelizeStorage } = require('umzug');
 
@@ -13,8 +21,14 @@ const TIMESTAMP_OID = 1114;
 types.setTypeParser(TIMESTAMPTZ_OID, val => val);
 types.setTypeParser(TIMESTAMP_OID, val => val);
 
-// Helper to create a sequelize instance from a URL.
-// It's defined here so it can be used by both the main connection and the one-time migrator.
+/**
+ * Creates and configures a Sequelize PostgreSQL instance from a connection string.
+ * Configures connection pooling, query retries for network resilience, keep-alives,
+ * and modern SSL parameters.
+ *
+ * @param {string} dbUrl - PostgreSQL connection URL.
+ * @returns {import('sequelize').Sequelize} Configured Sequelize instance.
+ */
 const createSequelizeInstance = (dbUrl) => {
   const options = {
     logging: false, // Set to console.log for debugging
@@ -81,6 +95,16 @@ const createSequelizeInstance = (dbUrl) => {
 const sequelize = mainDbUrl ? createSequelizeInstance(mainDbUrl) : null;
 
 // --- Helper Functions ---
+
+/**
+ * Turns on Row Level Security (RLS) for a PostgreSQL table with a "Deny All" policy, so roles
+ * subject to RLS (such as a hosting provider's public API roles) can't read or write its rows.
+ * It doesn't block the table's owner (the app's own connection) or roles with BYPASSRLS or
+ * superuser, since RLS isn't forced on the table.
+ *
+ * @param {string} tableName - Name of the database table.
+ * @returns {Promise<void>}
+ */
 const applyRlsPolicy = async (tableName) => {
   if (!sequelize || sequelize.getDialect() !== 'postgres') return;
   try {
@@ -103,6 +127,12 @@ const applyRlsPolicy = async (tableName) => {
   }
 };
 
+/**
+ * Executes all pending Sequelize schema migrations using Umzug.
+ * Reads migration scripts from `server/migrations/*.js`.
+ *
+ * @returns {Promise<void>}
+ */
 const runMigrations = async () => {
   if (!sequelize) return;
   const umzug = new Umzug({
@@ -115,6 +145,13 @@ const runMigrations = async () => {
   console.log('Migrations are up to date.');
 };
 
+/**
+ * Performs a one-time automated data migration from `DATABASE_URL` to `NEW_DATABASE_URL`
+ * if both environment variables are set and differ.
+ * Migrates all records in a single database transaction.
+ *
+ * @returns {Promise<void>}
+ */
 const runOneTimeMigration = async () => {
   const oldDbUrl = process.env.DATABASE_URL;
   const newDbUrl = process.env.NEW_DATABASE_URL;
@@ -162,6 +199,12 @@ const runOneTimeMigration = async () => {
   console.log('✔✔✔ Data migration complete. Application will now use the new database. ✔✔✔');
 };
 
+/**
+ * Initializes the database connection, runs pending migrations, and configures security policies.
+ * If no database URL is provided or if connection fails, logs a warning and falls back to in-memory mode.
+ *
+ * @returns {Promise<{dbConnected: boolean}>} Object indicating whether the DB connection succeeded.
+ */
 const initializeDatabase = async () => {
   if (!sequelize) {
     console.warn('!!! WARNING: No database URL configured. !!!');

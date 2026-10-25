@@ -1,13 +1,10 @@
-// Keeps the screen page's video filling the screen.
-//
-// On Quest the screen's browser is Android's WebView, which draws the page at the screen's size in
-// device pixels but lays it out in CSS pixels, several device pixels each. YouTube and Twitch then
-// lay out for a small window, so everything looks zoomed in. The WebView can also zoom the page
-// itself, so only part of it shows and it scrolls.
-//
-// So the stage (everything that shows a video) is laid out at the page's size in device pixels and
-// scaled back down to fit, which is what a PC's browser does anyway, and it follows the part of the
-// page that's showing. ?screen-debug=true shows the numbers on the screen.
+/**
+ * @fileoverview Screen viewport scaling and aspect-ratio adapter.
+ * Ensures the video stage fills the browser viewport cleanly across VR headsets (e.g. Meta Quest
+ * Android WebView device pixel ratio) and desktop displays, preventing letterboxing and zoom artifacts.
+ * @module public/fit-screen
+ */
+
 (() => {
   const stage = document.getElementById('stage');
   if (!stage) return;
@@ -23,6 +20,12 @@
   }
 
   let last = '';
+
+  /**
+   * Calculates current visual viewport dimensions, device pixel ratio, and zoom level.
+   * Adjusts stage element CSS transform scaling to perfectly fit physical display pixels.
+   * @returns {void}
+   */
   const fit = () => {
     const vv = window.visualViewport;
     const width = vv ? vv.width : window.innerWidth;     // what's showing, in CSS pixels

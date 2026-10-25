@@ -1,13 +1,21 @@
-// Shared start-up for both modes (playlist and karaoke).
-// Used by playlist.js / karaoke.js (a <script> tag in the world page) and snippet.js (a <bs-snippet>
-// element). `source` is anything with `src` and `getAttribute(name)`: the original <script>
-// element, or a small adapter around a <bs-snippet> element.
+/**
+ * @fileoverview Unified launcher and coordinator for playlist and karaoke modes.
+ * Waits for Banter/Unity environment readiness, dynamically loads BasePlayer,
+ * resolves space admin mode overrides, binds WebSockets, and configures in-world screens.
+ * @module public/playlist-player
+ */
+
 (() => {
   const FVP = window.FireVPlayer = window.FireVPlayer || {};
   if (FVP.startPlaylistPlayer) return;
 
-  // Wait for the BS SDK to initialise and Unity to load. Only then is the local user's identity
-  // reliable. If BS never loads within 30 seconds this is a non-Banter browser, so carry on.
+  /**
+   * Waits for the Banter SDK and Unity scene to finish initialization.
+   * Resolves immediately if already loaded or after a 30s timeout fallback for non-Banter browsers.
+   *
+   * @param {string} label - Context label for debugging logs.
+   * @returns {Promise<void>}
+   */
   FVP.waitForBanter = (label) => new Promise(resolve => {
     let done = false;
     const finish = () => { if (!done) { done = true; resolve(); } };
@@ -38,6 +46,11 @@
     else window.addEventListener('bs-loaded', init);
   });
 
+  /**
+   * Loads an external script file into the document head/body.
+   * @param {string} src - Script source URL.
+   * @returns {Promise<boolean>} True if loaded successfully, false on error.
+   */
   FVP.loadScript = (src) => new Promise(resolve => {
     const s = document.createElement("script");
     s.setAttribute("src", src);
@@ -49,6 +62,16 @@
   // Only one player (of either mode) runs on a page.
   const running = () => window.playlistPlayerInstance || window.karaokePlayerInstance;
 
+  /**
+   * Starts a video player in the specified mode ('playlist' or 'karaoke').
+   * Prevents concurrent player instances on the same page.
+   *
+   * @param {HTMLScriptElement|Object} source - The launcher script or snippet element.
+   * @param {'playlist'|'karaoke'} mode - Desired startup mode.
+   * @returns {Promise<Object|undefined>} The player instance, or undefined if a player is already
+   *   running or base-player.js couldn't load. The instance may still be starting up: await
+   *   `instance.ready` before using it.
+   */
   FVP.startPlayer = async (source, mode) => {
     mode = mode === 'karaoke' ? 'karaoke' : 'playlist';
     if (running() || FVP.playerStarting) {
@@ -63,11 +86,20 @@
       FVP.playerStarting = false;
     }
   };
+
+  /** Launches a player in Playlist mode (see startPlayer). @param {Object} source @returns {Promise<Object|undefined>} Await `instance.ready` before using it. */
   FVP.startPlaylistPlayer = (source) => FVP.startPlayer(source, 'playlist');
+  /** Launches a player in Karaoke mode (see startPlayer). @param {Object} source @returns {Promise<Object|undefined>} Await `instance.ready` before using it. */
   FVP.startKaraokePlayer = (source) => FVP.startPlayer(source, 'karaoke');
 
-  // `mode` is the snippet's (or script tag's) default. A space admin's choice, saved in the space
-  // state, takes its place, and the player follows later changes to it (see Core.switchMode).
+  /**
+   * Internal routine setting up the specialized Player class extending BasePlayer.
+   *
+   * @param {Object} source - Script element or adapter.
+   * @param {'playlist'|'karaoke'} defaultMode - Default operating mode.
+   * @returns {Promise<Object|undefined>} The player, still starting up (await its `ready`), or
+   *   undefined if base-player.js couldn't load.
+   */
   const startPlayer = async (source, defaultMode) => {
     const origin = new URL(source.src).origin;
     await FVP.waitForBanter(defaultMode);

@@ -1,3 +1,15 @@
+/**
+ * @fileoverview Shared WebSocket command message keys and action constants.
+ * Used by both client (browser) and server (Node.js) to synchronize player actions,
+ * UI updates, playback commands, and instance state changes.
+ * @module public/commands
+ */
+
+/**
+ * Enumeration of all WebSocket command action constants.
+ * @readonly
+ * @enum {string}
+ */
 var Commands = {
   INSTANCE: 'instance',
   SEARCH: 'search',

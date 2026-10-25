@@ -1,16 +1,20 @@
-// This script acts as a loader for the main announcer script.
-// It reads configuration from its own attributes or URL parameters
-// and then injects the final script tag with the correct settings.
+/**
+ * @fileoverview Loader script for in-world TTS user name and event announcements.
+ * Parses configuration from script attributes or URL parameters and injects the announcer SDK.
+ * @module public/say-names
+ */
 
 const currentScript = document.currentScript;
 const urlParams = new URLSearchParams(window.location.search);
 const params = {};
 
 /**
- * Reads a parameter value from the script's own attributes, falling back to URL parameters,
+ * Reads a parameter value from the script's own DOM attributes, falling back to URL search params,
  * and finally to a default value.
- * @param {string} attr The name of the attribute/parameter.
- * @param {string} defaultValue The default value if not found elsewhere.
+ *
+ * @param {string} attr - The attribute or search query key.
+ * @param {string} defaultValue - Default fallback value if not specified.
+ * @returns {void}
  */
 function setOrDefault(attr, defaultValue) {
   const value = currentScript.getAttribute(attr);

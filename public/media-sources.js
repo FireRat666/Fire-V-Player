@@ -1,12 +1,34 @@
-// Works out what kind of link a playlist item is, so the server can describe it and the player
-// page knows which player to play it with. Shared by the server (require) and the player page.
+/**
+ * @fileoverview Media URL classifier and metadata extractor shared between browser and server.
+ * Identifies supported media types (YouTube, Twitch live/VOD/clip, Vimeo, VDO.Ninja, HLS, direct files)
+ * and enforces platform trust validation.
+ * @module public/media-sources
+ */
+
+/**
+ * @typedef {Object} DetectedMedia
+ * @property {'youtube'|'file'|'hls'|'twitch'|'twitchclip'|'vimeo'|'vdoninja'} type - The detected media stream/source type.
+ * @property {string} [channel] - Twitch channel name if applicable.
+ * @property {string} [video] - Twitch VOD ID if applicable.
+ * @property {string} [clip] - Twitch clip slug if applicable.
+ * @property {string} [id] - Vimeo video ID if applicable.
+ * @property {string} [hash] - Vimeo unlisted hash token if applicable.
+ * @property {string} [name] - VDO.Ninja stream/room identifier if applicable.
+ */
+
 var MediaSources = (() => {
-  // Direct links to a video or audio file, played by the page's own <video> element.
+  /** Regular expression matching supported direct media file extensions. */
   const FILE_EXT = /\.(mp4|webm|ogv|ogg|mov|m4v|mp3|m4a|wav|flac|aac|opus)$/i;
-  // twitch.tv/<these> are site pages, not channels.
+
+  /** Non-channel page segments for twitch.tv. */
   const TWITCH_PAGES = new Set(['videos', 'directory', 'p', 'downloads', 'jobs', 'settings', 'subscriptions',
     'inventory', 'wallet', 'search', 'friends', 'messages', 'drops', 'turbo', 'prime', 'store', 'login', 'signup']);
 
+  /**
+   * Safely parses a string into an HTTP/HTTPS URL instance.
+   * @param {string} link - Raw link to parse.
+   * @returns {URL|null} Parsed URL instance or null if invalid or unsupported protocol.
+   */
   function parseUrl(link) {
     try {
       const u = new URL(String(link || '').trim());
@@ -16,14 +38,12 @@ var MediaSources = (() => {
     }
   }
 
-  // Returns { type, ... } for a link the player can play, or null.
-  //   youtube                    - played by the YouTube player, as before
-  //   file                       - a video/audio file (.mp4, .webm, .mp3, ...)
-  //   hls                        - an HLS stream (.m3u8), live or recorded
-  //   twitch  { channel | video } - a live Twitch channel, or a recorded Twitch video (VOD)
-  //   twitchclip { clip, channel } - a Twitch clip (channel is '' for clips.twitch.tv links)
-  //   vimeo   { id, hash }        - a Vimeo video (hash is the key for unlisted videos)
-  //   vdoninja { name }           - a VDO.Ninja stream (a view or scene link), shown as its own page
+  /**
+   * Analyzes an input URL and detects the media provider and stream metadata.
+   *
+   * @param {string} link - The media URL to analyze.
+   * @returns {DetectedMedia|null} Metadata descriptor or null if unrecognized.
+   */
   function detect(link) {
     const u = parseUrl(link);
     if (!u) return null;
@@ -85,7 +105,12 @@ var MediaSources = (() => {
     return null;
   }
 
-  // A readable name for a link that has no title of its own (a file, a stream).
+  /**
+   * Generates a readable display title for a direct media file or stream URL when no title is provided.
+   *
+   * @param {string} link - Direct file or stream link.
+   * @returns {string} Clean human-readable fallback name.
+   */
   function nameFromLink(link) {
     const u = parseUrl(link);
     if (!u) return 'Video';
@@ -98,12 +123,20 @@ var MediaSources = (() => {
     return name.slice(0, 120);
   }
 
-  // YouTube, Twitch and Vimeo moderate what's on them. Files, streams and VDO.Ninja can come from
-  // anyone, so they only play where the snippet sets untrusted-links="true".
+  /** Set of media source types considered trusted by default. */
   const TRUSTED = new Set(['youtube', 'twitch', 'twitchclip', 'vimeo']);
+
+  /**
+   * Checks whether a detected media source is from an inherently trusted service.
+   *
+   * @param {DetectedMedia|null} media - The detected media object.
+   * @returns {boolean} True if media source is trusted without requiring untrusted-links override.
+   */
   function isTrusted(media) {
     return !!media && TRUSTED.has(media.type);
   }
+
+  /** Rejection message displayed when untrusted direct media links are queued in restricted rooms. */
   const UNTRUSTED_MESSAGE = 'This world only plays YouTube, Twitch and Vimeo links. Its owner can allow other links with the untrusted-links snippet setting.';
 
   return { detect, nameFromLink, parseUrl, isTrusted, UNTRUSTED_MESSAGE };

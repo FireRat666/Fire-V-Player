@@ -1,18 +1,78 @@
+/**
+ * @fileoverview YouTube scraper and search client built on Innertube (youtubei.js).
+ * Parses search results and individual video metadata into application structures.
+ * @module server/youtube/scraper
+ */
+
 const Util = require('./util.js');
 const { getInnertube } = require('./youtubeiService.js');
 
+/**
+ * @typedef {Object} ScrapedVideo
+ * @property {string} id - 11-character YouTube video ID.
+ * @property {string} title - Video title.
+ * @property {string} description - Video description snippet.
+ * @property {number} duration - Video duration in milliseconds.
+ * @property {string} duration_raw - Formatted duration text (e.g. "3:45").
+ * @property {string} uploaded - Upload timestamp or relative string.
+ * @property {number} views - Approximate view count.
+ * @property {string} link - Full YouTube watch URL.
+ * @property {string} shareLink - Shortened youtu.be URL.
+ * @property {string} thumbnail - URL of best available thumbnail.
+ * @property {Object} channel - Video author/channel details.
+ * @property {string} channel.name - Channel name.
+ * @property {string} [channel.link] - URL to channel page.
+ * @property {string} [channel.id] - Channel identifier.
+ * @property {boolean} [channel.verified] - Whether the channel has verified status.
+ */
+
+/**
+ * @typedef {Object} VideoLookup
+ * @property {string} id - 11-character YouTube video ID.
+ * @property {string} title - Video title ('Unknown Title' if none was found).
+ * @property {number} duration - Video duration in milliseconds (0 if unknown).
+ * @property {string} link - Full YouTube watch URL.
+ * @property {string} thumbnail - URL of best available thumbnail.
+ * @property {Object} channel - Video author/channel details.
+ * @property {string} channel.name - Channel name ('Unknown Channel' if none was found).
+ * @property {string} channel.id - Channel identifier (empty if unknown).
+ */
+
+/**
+ * @typedef {Object} ScrapedPlaylist
+ * @property {string} id - YouTube playlist ID.
+ * @property {string} link - Full YouTube playlist URL.
+ * @property {string} thumbnail - Thumbnail image URL.
+ * @property {string} title - Playlist title.
+ * @property {number} videoCount - Number of videos in the playlist.
+ */
+
+/**
+ * @typedef {Object} SearchResults
+ * @property {Array} channels - List of matched channels.
+ * @property {Array<ScrapedPlaylist>} playlists - List of matched playlists.
+ * @property {Array} streams - List of live streams.
+ * @property {Array<ScrapedVideo>} videos - List of matched videos.
+ */
+
+/**
+ * Scraper class for interacting with YouTube search and video metadata extraction.
+ */
 class Scraper {
   /**
-   * @param {string} [language = 'en'] An IANA Language Subtag
+   * Initializes a new Scraper instance with optional language setting.
+   * @param {string} [language = 'en'] - An IANA Language Subtag.
    */
   constructor(language = 'en') {
     this._lang = language;
   }
 
   /**
-   * Searches YouTube for videos and playlists.
-   * @param {string} query The string to search for on YouTube.
-   * @param {Object} [options = {}] Options for search.
+   * Searches YouTube for videos and playlists matching a query string.
+   *
+   * @param {string} query - The search terms.
+   * @param {Object} [options = {}] - Optional search configuration.
+   * @returns {Promise<SearchResults>} Parsed search results containing lists of videos and playlists.
    */
   async search(query, options = {}) {
     try {
@@ -137,8 +197,11 @@ class Scraper {
   }
 
   /**
-   * Fetches metadata for a single video.
-   * @param {string} url The full YouTube URL of the video.
+   * Fetches metadata for a single video by full URL or ID.
+   *
+   * @param {string} url - The full YouTube URL or watch link.
+   * @returns {Promise<VideoLookup>} The video's metadata.
+   * @throws {Error} If URL is invalid or video cannot be found/accessed.
    */
   async getVideoByUrl(url) {
     try {

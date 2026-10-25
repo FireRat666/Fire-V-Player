@@ -92,7 +92,7 @@ var Playlist = class {
         this.core.player = Object.assign(this.core.player || {}, json.data.video);
         // Estimate the clock skew whenever we get a full update with a playing track.
         // This ensures the UI's timer is aligned with the server's time.
-        if (this.core.player.lastStartTime && this.core.player.duration > 0) {
+        if (this.core.player.lastStartTime && Number.isFinite(Number(this.core.player.currentTime))) {
             const serverNow = this.core.player.lastStartTime + this.core.player.currentTime;
             const clientNow = Date.now() / 1000;
             this.clockSkew = clientNow - serverNow;
@@ -220,7 +220,7 @@ var Playlist = class {
           }
           const currentTimeText = document.querySelector('.currentTimeText');
           if (currentTimeText) {
-            currentTimeText.innerText = `${this.timeCode(this.core.player.currentTime)} / ${this.timeCode(this.core.player.duration)}`;
+            currentTimeText.innerText = `${this.timeCode(this.core.player.currentTime)} / ${this.durationCode(this.core.player.duration)}`;
           }
         }
         break;
@@ -284,7 +284,15 @@ var Playlist = class {
     let updateCount = 0;
     this.uiUpdateInterval = setInterval(() => {
       let { lastStartTime, duration } = this.core.player;
-      if (duration <= 0) return;
+      if (!(duration > 0)) {
+        // No known length (some files): just how far in it is.
+        const t = this.core.player.paused ? (this.core.player.currentTime || 0) : ((Date.now() / 1000) - this.clockSkew) - lastStartTime;
+        const text = document.querySelector('.currentTimeText');
+        if (text) text.innerText = `${this.timeCode(Math.max(0, t))} / ${this.durationCode(0)}`;
+        const bar = document.querySelector('.currentTime');
+        if (bar) bar.style.width = '0%';
+        return;
+      }
 
       // By subtracting the estimated clock skew, we align the client's 'now' with the server's 'now'.
       let calculatedTime = ((Date.now() / 1000) - this.clockSkew) - lastStartTime;
@@ -520,7 +528,7 @@ var Playlist = class {
         }, buttonContainer);
         
         currentTimeText.className = "currentTimeText";
-        currentTimeText.innerText = this.timeCode(player.currentTime) + " / " + this.timeCode(player.duration);
+        currentTimeText.innerText = this.timeCode(player.currentTime) + " / " + this.durationCode(player.duration);
       }
         
       // The 'clear: both' div is no longer needed with the flexbox layout.
@@ -536,7 +544,7 @@ var Playlist = class {
           background: 'red',
           transition: 'width 1s',
           transitionTimingFunction: 'linear',
-          width: ((player.currentTime / player.duration) * 100) + "%",
+          width: (player.duration > 0 ? (player.currentTime / player.duration) * 100 : 0) + "%",
         }, currentTime);
         
         currentTimeInner.className = "currentTime";
@@ -567,6 +575,10 @@ var Playlist = class {
   }
   timeCode(seconds) {
     return new Date(seconds * 1000).toISOString().substring(11, 19);
+  }
+  // A track's length, or --:-- when it isn't known (some files).
+  durationCode(seconds) {
+    return seconds > 0 ? this.timeCode(seconds) : '--:--';
   }
   loadVideos(videos) {
     this.videoSearchContainer.innerHTML = '';

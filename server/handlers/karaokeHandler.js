@@ -1,7 +1,24 @@
+/**
+ * @fileoverview WebSocket command handlers for Karaoke mode.
+ * Manages singer queues, track selection, queue reordering, track progression,
+ * and auto-advance settings.
+ * @module server/handlers/karaokeHandler
+ */
+
 const Commands = require('../../public/commands.js');
 const hostHandler = require('./hostHandler.js');
 const media = require('../media.js');
 
+/**
+ * Adds a user and their selected karaoke track to the instance singer queue.
+ * Validates link permissions, ensures no duplicate user queues, and broadcasts
+ * `SINGER_ADDED` to connected clients.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - Client WebSocket requesting to join the queue.
+ * @param {Object} video - Karaoke track data containing link, title, duration.
+ * @returns {Promise<void>}
+ */
 async function addToPlayers(app, ws, video) {
   const player = app.videoPlayers[ws.i];
   if (!player) return;
@@ -33,6 +50,15 @@ async function addToPlayers(app, ws, video) {
   await app.savePlayerState(ws.i);
 }
 
+/**
+ * Removes a user from the singer queue or stops playback if they are currently singing.
+ * Allowed for the host or the user themselves.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - Client WebSocket requesting removal.
+ * @param {string} uid - User ID to remove.
+ * @returns {Promise<void>}
+ */
 async function removeFromPlayers(app, ws, uid) {
   const player = app.videoPlayers[ws.i];
   if (!player) return;
@@ -73,6 +99,16 @@ async function removeFromPlayers(app, ws, uid) {
   }
 }
 
+/**
+ * Reorders a singer up or down in the karaoke queue. Host-only action.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - Client WebSocket requesting the move.
+ * @param {Object} params - Movement parameters.
+ * @param {string} params.userId - Target singer user ID.
+ * @param {'up'|'down'} params.direction - Direction to shift singer in queue.
+ * @returns {Promise<void>}
+ */
 async function moveSinger(app, ws, { userId, direction }) {
   app.onlyIfHost(ws, async () => {
       const player = app.videoPlayers[ws.i];
@@ -106,9 +142,13 @@ async function moveSinger(app, ws, { userId, direction }) {
 }
 
 /**
- * This is a helper function, so it doesn't need to be exported.
- * It was `_playNextKaraokeSong` in app.js.
- * It handles the logic of starting the next song in the karaoke queue.
+ * Transitions to the next song in the karaoke queue.
+ * Clears current playlist, promotes the next singer, resets timestamps,
+ * and notifies all clients via `TRACK_CHANGED` and `SINGER_REMOVED`.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {string} instanceId - Room/instance identifier.
+ * @returns {Promise<void>}
  */
 async function playNextKaraokeSong(app, instanceId) {
   const player = app.videoPlayers[instanceId];
@@ -159,6 +199,17 @@ async function playNextKaraokeSong(app, instanceId) {
   await app.savePlayerState(instanceId);
 }
 
+/**
+ * Initiates playback of a karaoke song.
+ * Can start the next singer at the top of the queue (by host or current singer)
+ * or jump to a specific queued singer (host only).
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - Client WebSocket requesting playback.
+ * @param {Object} [data] - Optional payload.
+ * @param {string} [data.userId] - Optional target singer user ID to play immediately.
+ * @returns {Promise<void>}
+ */
 async function playKaraokeTrack(app, ws, data) {
   const player = app.videoPlayers[ws.i];
   if (!player) return;
@@ -200,6 +251,14 @@ async function playKaraokeTrack(app, ws, data) {
   await playNextKaraokeSong(app, ws.i);
 }
 
+/**
+ * Restarts the currently playing karaoke track from time 0.
+ * Allowed for the host or the singer currently performing.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - Client WebSocket requesting restart.
+ * @returns {Promise<void>}
+ */
 async function restartSong(app, ws) {
   const player = app.videoPlayers[ws.i];
   if (!player || !player.playlist.length) return;
@@ -220,6 +279,14 @@ async function restartSong(app, ws) {
   }
 }
 
+/**
+ * Toggles the autoAdvance setting in karaoke mode.
+ * When enabled, the player automatically transitions to the next singer upon song end.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - Client WebSocket requesting the toggle (host-only).
+ * @returns {Promise<void>}
+ */
 async function toggleAutoAdvance(app, ws) {
   app.onlyIfHost(ws, async () => {
     const player = app.videoPlayers[ws.i];
@@ -232,6 +299,16 @@ async function toggleAutoAdvance(app, ws) {
     await app.savePlayerState(ws.i);
   });
 }
+
+module.exports = {
+    addToPlayers,
+    removeFromPlayers,
+    moveSinger,
+    playKaraokeTrack,
+    restartSong,
+    toggleAutoAdvance,
+    playNextKaraokeSong
+};
 
 module.exports = {
     addToPlayers,

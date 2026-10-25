@@ -1,3 +1,10 @@
+/**
+ * @fileoverview Main server entry point and application controller for Fire-V-Player.
+ * Orchestrates Express web server, WebSocket real-time synchronization, YouTube integration,
+ * room instances state tracking, debounced database persistence, and playback ticker loops.
+ * @module server/app
+ */
+
 const { WebSocketServer } = require('ws');
 const express = require('express');
 const http = require('http');
@@ -13,17 +20,38 @@ const { Op } = require('sequelize');
 const { initializeDatabase } = require('./db.js');
 const models = require('./models'); // Sequelize models
 
+/** Seek skip increment in seconds for standard playlist mode. */
 const SkipJumpTimePlaylist = 5;
-const SkipJumpTimeKaraoke = 0.25; // 250ms for karaoke, to allow for more precise timing.
+/** Seek skip increment in seconds for karaoke mode (250ms). */
+const SkipJumpTimeKaraoke = 0.25;
 
+/**
+ * Main application coordinator managing server lifecycle, active room instances,
+ * and client WebSocket communication.
+ */
 class App {
+  /**
+   * Initializes application state properties.
+   */
   constructor() {
+    /** @type {Record<string, Object>} Map of instanceId to active room player states. */
     this.videoPlayers = {};
+    /** @type {NodeJS.Timeout|null} Playback ticker interval handle. */
     this.mainLoop = null;
+    /** @type {NodeJS.Timeout|null} DB maintenance interval handle. */
     this.cleanupLoop = null;
+    /** @type {boolean} Flag indicating whether persistent database connection is active. */
     this.dbConnected = false;
   };
 
+  /**
+   * Executes the actual database write for an instance's state.
+   * Compresses the playlist and user data into a lean format for efficient storage.
+   *
+   * @param {string} instanceId - Room/instance identifier.
+   * @returns {Promise<void>}
+   * @private
+   */
   async _performSave(instanceId) {
     if (!this.dbConnected) return;
     const player = this.videoPlayers[instanceId];
@@ -85,6 +113,12 @@ class App {
     }
   }
 
+  /**
+   * Debounces saving player state to the database (1.5s delay).
+   *
+   * @param {string} instanceId - Room/instance identifier.
+   * @returns {Promise<void>}
+   */
   async savePlayerState(instanceId) {
     if (!this.dbConnected) return;
     const player = this.videoPlayers[instanceId];
@@ -104,6 +138,11 @@ class App {
     }, DEBOUNCE_DELAY_MS);
   }
 
+  /**
+   * Deletes database records for instances that have been inactive for more than 7 days.
+   *
+   * @returns {Promise<void>}
+   */
   async cleanupInactiveInstances() {
     if (!this.dbConnected) return;
     const cleanupThreshold = '7 days'; // The inactivity period before an instance is purged.
@@ -122,6 +161,11 @@ class App {
       console.error('Error during database cleanup of inactive instances:', err);
     }
   }
+
+  /**
+   * Initializes Express HTTP server, routes, static asset serving, and WebSocket upgrade handler.
+   * @returns {void}
+   */
   setupWebserver() {
     this.app = express();
     this.server = http.createServer(this.app);
@@ -134,6 +178,11 @@ class App {
 
     this.app.use(express.static(path.join(__dirname, '..', 'public')));
   }
+  /**
+   * Attaches WebSocket connection listeners, ping/pong health-checks,
+   * message parsing dispatchers, and close cleanup callbacks.
+   * @returns {void}
+   */
   attachWebsocketListeners() {
     // This logic is now separate and will be called only when the server is listening.
     this.wss.on('connection', async (ws, req) => {
@@ -179,6 +228,17 @@ class App {
       clearInterval(this.cleanupLoop);
     });
   }
+
+  /**
+   * Cleans up state when a client WebSocket disconnects.
+   * Handles host absence (initiates 42s takeover timer), clears user votes,
+   * and starts a 3-minute grace period before cleaning empty room instances.
+   *
+   * @param {Object} ws - Disconnecting WebSocket client.
+   * @param {number} code - WebSocket close status code.
+   * @param {Buffer|string} reason - Disconnect reason.
+   * @returns {void}
+   */
   handleClose(ws, code, reason) {
     // Convert the reason buffer to a string for readable logging, handling empty reasons.
     const reasonString = reason && reason.length > 0 ? reason.toString() : 'No reason given';
@@ -243,6 +303,15 @@ class App {
       }, 1000 * 60 * 3); // 3-minute grace period
     }
   }
+
+  /**
+   * Serializes and transmits a JSON command message to a client WebSocket.
+   *
+   * @param {Object} socket - Target WebSocket connection.
+   * @param {string} path - Command action path (e.g. from Commands constants).
+   * @param {any} [data] - Command payload data.
+   * @returns {void}
+   */
   send(socket, path, data) {
     const payload = JSON.stringify({ path, data });
     if (process.env.NODE_ENV !== 'production') {
@@ -250,6 +319,17 @@ class App {
     }
     socket.send(payload);
   }
+
+  /**
+   * Primary incoming command dispatcher for client WebSocket messages.
+   * Routes playback commands, playlist edits, karaoke requests, votes, and searches.
+   *
+   * @param {Object} msg - Parsed message object.
+   * @param {string} msg.path - Command route path.
+   * @param {any} [msg.data] - Command payload.
+   * @param {Object} ws - Originating client WebSocket.
+   * @returns {Promise<void>}
+   */
   async parseMessage(msg, ws) {
     if (process.env.NODE_ENV !== 'production') {
       console.log(`[RECV] user: ${ws.u ? ws.u.name : 'N/A'}, instance: ${ws.i || 'N/A'}, type: ${ws.type || 'N/A'}, path: ${msg.path}`);
@@ -411,6 +491,16 @@ class App {
         break;
     }
   }
+  /**
+   * Standardizes incoming video data into a consistent internal video object.
+   *
+   * @param {Object} videoData - Raw video metadata from scraper or playlist fetcher.
+   * @param {Object} userObject - User identity object who queued the item.
+   * @param {'ytfps'|'scraper'} source - Source parser type.
+   * @param {boolean} [isYoutubeWebsite=false] - Origin flag.
+   * @returns {Object} Standardized internal video item.
+   * @private
+   */
   _createVideoObject(videoData, userObject, source, isYoutubeWebsite = false) {
     // Standardizes video objects from different sources (ytfps, scraper)
     if (source === 'ytfps') {
@@ -441,6 +531,15 @@ class App {
     };
   }
 
+  /**
+   * Checks whether a video link is already in the player playlist.
+   * Compares 11-char YouTube IDs for YouTube links or direct URLs for others.
+   *
+   * @param {Object} player - Room player instance.
+   * @param {string} videoLink - URL to check.
+   * @returns {boolean} True if video is already present in the playlist.
+   * @private
+   */
   _isDuplicateVideo(player, videoLink) {
     const newVideoId = this.getYoutubeId(videoLink);
     // Other links (Twitch, Vimeo, files) are the same video when the link is the same.
@@ -448,6 +547,13 @@ class App {
     return player.playlist.some(existingVideo => this.getYoutubeId(existingVideo.link) === newVideoId);
   }
 
+  /**
+   * Extracts a YouTube playlist ID from a URL or raw ID string.
+   *
+   * @param {string} urlOrId - Full URL or bare playlist ID.
+   * @returns {string|null} The playlist ID starting with 'PL', or null if invalid.
+   * @private
+   */
   _getPlaylistId(urlOrId) {
     if (!urlOrId) {
       return null;
@@ -467,6 +573,14 @@ class App {
 
     return null;
   }
+
+  /**
+   * Relays a skip command from a client UI to that user's specific local player instance.
+   *
+   * @param {Object} ws - UI WebSocket.
+   * @param {boolean} isForward - True to skip forward, false for back.
+   * @returns {void}
+   */
   localSkip(ws, isForward) {
     // This function relays a skip command from a UI to that user's specific player instance.
     if (ws.user_video) {
@@ -474,11 +588,27 @@ class App {
       this.send(ws.user_video, command);
     }
   }
+
+  /**
+   * Updates auto-sync preferences on the user's connected video player socket.
+   *
+   * @param {boolean} autoSync - New auto-sync status.
+   * @param {Object} ws - Client WebSocket.
+   * @returns {void}
+   */
   setAutoSync(autoSync, ws) {
     if (ws.user_video) {
       this.send(ws.user_video, Commands.AUTO_SYNC, autoSync);
     }
   }
+
+  /**
+   * Relays browser click coordinates to non-video sockets of the same user.
+   *
+   * @param {Object} click - Click coordinate payload.
+   * @param {Object} video_ws - Video player WebSocket.
+   * @returns {void}
+   */
   sendBrowserClick(click, video_ws) {
     if (this.videoPlayers[video_ws.i]) {
       this.videoPlayers[video_ws.i].sockets.forEach(ws => {
@@ -488,6 +618,13 @@ class App {
       });
     }
   }
+
+  /**
+   * Finds and associates a newly connected user's video player socket.
+   *
+   * @param {Object} new_ws - Newly connected UI socket.
+   * @returns {void}
+   */
   getUserVideoPlayer(new_ws) {
     if (this.videoPlayers[new_ws.i]) {
       this.videoPlayers[new_ws.i].sockets.forEach(ws => {
@@ -497,6 +634,14 @@ class App {
       });
     }
   }
+
+  /**
+   * Stores the video player socket reference on all UI sockets matching the user.
+   *
+   * @param {Object} data - User identity data.
+   * @param {Object} user_video - Player WebSocket instance.
+   * @returns {void}
+   */
   setUserVideoPlayer(data, user_video) {
     if (this.videoPlayers[user_video.i]) {
       this.videoPlayers[user_video.i].sockets.forEach(ws => {
@@ -506,17 +651,40 @@ class App {
       });
     }
   }
+
+  /**
+   * Recalculates playlist ordering based on votes in the specified instance.
+   *
+   * @param {string} instanceId - Room/instance identifier.
+   * @returns {void}
+   */
   updateVotes(instanceId) {
     // This is now a proxy to the real logic inside the playlist handler.
     playlistHandler.updateVotes(this, instanceId);
   }
+
+  /**
+   * Clears the current instance's playlist array and resets track indices.
+   *
+   * @param {Object} ws - Client WebSocket.
+   * @returns {void}
+   */
   resetPlaylist(ws) {
     this.videoPlayers[ws.i].playlist.length = 0;
     this.videoPlayers[ws.i].currentTrack = 0;
     this.videoPlayers[ws.i].currentTime = 0;
   }
-  // Fills in the length of a non-YouTube video (a file, stream or Twitch video) once a player has
-  // loaded it, so the playlist moves on when it ends. Live streams never report one.
+
+  /**
+   * Populates the duration of non-YouTube media once first reported by a player.
+   * Broadcasts updated duration to all clients and persists state.
+   *
+   * @param {Object} ws - Client WebSocket reporting the duration.
+   * @param {Object} data - Payload containing media link and duration.
+   * @param {string} data.link - Media link.
+   * @param {number} data.duration - Reported duration in seconds.
+   * @returns {Promise<void>}
+   */
   async setMediaDuration(ws, data) {
     const player = this.videoPlayers[ws.i];
     const seconds = data && Number(data.duration);
@@ -532,6 +700,14 @@ class App {
     });
     await this.savePlayerState(ws.i);
   }
+  /**
+   * Searches for YouTube or external media items based on user search query or pasted link.
+   * Transmits `SEARCH_RESULTS` back to the requesting WebSocket client.
+   *
+   * @param {string} term - Search query string or media URL.
+   * @param {Object} ws - Client WebSocket requesting the search.
+   * @returns {Promise<void>}
+   */
   async search(term, ws) {
     // Twitch, Vimeo and direct video/stream links become a single result, as a YouTube link does.
     if (media.detect(term) && media.detect(term).type !== 'youtube') {
@@ -595,6 +771,14 @@ class App {
       }
     }
   }
+  /**
+   * Guards an action, executing callback only if client is the host or if instance is unlocked.
+   *
+   * @param {Object} ws - Client WebSocket attempting the action.
+   * @param {Function} callback - Action to run if permitted.
+   * @param {boolean} [locked] - Optional override for lock check.
+   * @returns {void}
+   */
   onlyIfHost(ws, callback, locked) {
     if (ws.u && ws.u.id && ws.i) {
       if (this.videoPlayers[ws.i]
@@ -605,6 +789,12 @@ class App {
       }
     }
   }
+  /**
+   * Main server ticker running every 1000ms across all active room instances.
+   * Advances track time, triggers periodic sync broadcasts, and advances or loops tracks when finished.
+   *
+   * @returns {Promise<void>}
+   */
   async tickAllInstances() {
     for (const instanceId in this.videoPlayers) {
       const player = this.videoPlayers[instanceId];
@@ -696,6 +886,13 @@ class App {
 
     }
   }
+  /**
+   * Signals connected 3D space clients to reset their embedded browser or load web pages.
+   *
+   * @param {Object} player - Room player instance.
+   * @param {number} index - Active track index.
+   * @returns {void}
+   */
   resetBrowserIfNeedBe(player, index) {
     const users = [...new Set(player.sockets.map(ws => ws.u.id))];
     users.forEach(uid => {
@@ -714,6 +911,15 @@ class App {
       });
     });
   }
+  /**
+   * Handles notification that a video failed or is unavailable for a user.
+   * Searches YouTube for alternatives and prompts the host to approve a replacement.
+   *
+   * @param {Object} data - Payload containing failed video link.
+   * @param {string} data.link - Unavailable video link.
+   * @param {Object} ws - Client WebSocket reporting unavailable video.
+   * @returns {Promise<void>}
+   */
   async handleVideoUnavailable(data, ws) {
     const player = this.videoPlayers[ws.i];
     if (!player) return;
@@ -744,6 +950,13 @@ class App {
       }
     }
   }
+  /**
+   * Applies host's confirmation to replace a blocked or unavailable video with an alternative.
+   *
+   * @param {Object} data - Replacement details with `originalLink` and `alternativeVideo`.
+   * @param {Object} ws - Host WebSocket.
+   * @returns {Promise<void>}
+   */
   async handleReplaceVideo(data, ws) {
     this.onlyIfHost(ws, async () => {
       const player = this.videoPlayers[ws.i];
@@ -780,6 +993,12 @@ class App {
       }
     });
   }
+  /**
+   * Extracts an 11-character YouTube video ID from a URL or bare string.
+   *
+   * @param {string} url - YouTube URL or string.
+   * @returns {string|false} 11-char ID or false if invalid.
+   */
   getYoutubeId(url) {
     if (!url) return false;
     url = url.trim();
@@ -790,6 +1009,16 @@ class App {
     const match = url.match(regExp);
     return (match && match[2].length === 11) ? match[2] : false;
   }
+  /**
+   * Initializes or reconnects to an instance room player.
+   * Loads persisted state from the database if present, rehydrates lean models,
+   * sets host status, attaches client socket, and sends initial sync payload.
+   *
+   * @param {string} instanceId - Room/instance identifier.
+   * @param {Object} user - Connecting user identity object.
+   * @param {Object} ws - Client WebSocket.
+   * @returns {Promise<void>}
+   */
   async createVideoPlayer(instanceId, user, ws) {
     if (!this.videoPlayers[instanceId]) {
       let existingState = null;
@@ -925,8 +1154,12 @@ class App {
       type: 'initial-sync'
     });
   }
-  // Sends a client the whole player state, as on joining. Clients ask for this to refresh a
-  // copy of the playlist that has fallen out of step.
+  /**
+   * Sends the full player state payload to a client WebSocket (used on room join or desync refresh).
+   *
+   * @param {Object} ws - Client WebSocket.
+   * @returns {void}
+   */
   sendFullState(ws) {
     if (!ws.i || !this.videoPlayers[ws.i]) return;
     this.syncWsTime(ws, ws.i);
@@ -935,6 +1168,16 @@ class App {
       type: 'initial-sync'
     });
   }
+
+  /**
+   * Compiles the client-facing video state object for an instance.
+   *
+   * @param {string} instanceId - Room/instance identifier.
+   * @param {Object} [options] - Inclusions config.
+   * @param {boolean} [options.includePlaylist=true] - Whether to include the full playlist array.
+   * @param {boolean} [options.includeSingers=false] - Whether to include formatted singers list.
+   * @returns {Object|undefined} Compiled video state object.
+   */
   getVideoObject(instanceId, { includePlaylist = true, includeSingers = false } = {}) {
     if (this.videoPlayers[instanceId]) {
       const player = this.videoPlayers[instanceId];
@@ -971,6 +1214,17 @@ class App {
       return videoObject;
     }
   }
+
+  /**
+   * Calculates on-demand precise playback time and transmits `SYNC_TIME` to player sockets.
+   *
+   * @param {Object} socket - Target player socket.
+   * @param {string} key - Room/instance identifier.
+   * @param {Object} [data] - Optional client timestamp data.
+   * @param {number} [data.clientTimestamp] - Client's roundtrip echo timestamp.
+   * @param {boolean} [data.native] - True if requested by native video element in 3D space.
+   * @returns {void}
+   */
   syncWsTime(socket, key, data = {}) {
     // This command is specifically for the video player element to correct its time.
     // The playlist/UI pages use the lastStartTime from PLAYBACK_UPDATE to calculate time.
@@ -994,9 +1248,15 @@ class App {
       });
     }
   }
-  // Switches a room between playlist and karaoke. Karaoke uses the main playlist for the song
-  // being sung (and clears it when a song stops), so the shared playlist is kept aside while the
-  // room is in karaoke mode, and comes back, from its saved track, when it returns to playlist mode.
+
+  /**
+   * Toggles the room between standard Playlist and Karaoke mode.
+   * Preserves and restores regular playlists across karaoke sessions.
+   *
+   * @param {string} instanceId - Room/instance identifier.
+   * @param {boolean} karaoke - True for karaoke mode, false for playlist mode.
+   * @returns {Promise<void>}
+   */
   async setInstanceMode(instanceId, karaoke) {
     const player = this.videoPlayers[instanceId];
     if (!player || !!player.isKaraoke === karaoke) return;
@@ -1032,6 +1292,15 @@ class App {
     }
     await this.savePlayerState(instanceId);
   }
+
+  /**
+   * Broadcasts a `PLAYBACK_UPDATE` command with updated state to all connected sockets in an instance.
+   *
+   * @param {string} instanceId - Room/instance identifier.
+   * @param {string} type - Update event type descriptor.
+   * @param {Object} [options={}] - Options passed to `getVideoObject`.
+   * @returns {void}
+   */
   updateClients(instanceId, type, options = {}) {
     if (this.videoPlayers[instanceId]) {
       const player = this.videoPlayers[instanceId];
@@ -1047,6 +1316,13 @@ class App {
       });
     }
   }
+
+  /**
+   * Broadcasts `SINGER_LIST_UPDATED` containing the active singer queue to all clients in an instance.
+   *
+   * @param {string} instanceId - Room/instance identifier.
+   * @returns {void}
+   */
   broadcastSingerList(instanceId) {
     const player = this.videoPlayers[instanceId];
     if (!player) return;
@@ -1066,6 +1342,11 @@ class App {
 
 const app = new App();
 
+/**
+ * Boots the application: connects database, initiates cleanup loops,
+ * starts ticker interval, and binds HTTP / WebSocket listeners.
+ * @returns {Promise<void>}
+ */
 async function start() {
   try {
     // Initialize the database connection, run migrations, and apply policies.

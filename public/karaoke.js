@@ -1,6 +1,9 @@
-// Karaoke mode entry point, added to a world page as a <script> tag.
-// See USAGE.md. For the SideQuest/Altspace Creator SDK, snippet.js (<bs-snippet> with
-// mode="karaoke") also works.
+/**
+ * @fileoverview Karaoke mode script tag entry point for in-world HTML pages.
+ * Captures script attributes and delegates startup to `FireVPlayer.startKaraokePlayer`.
+ * @module public/karaoke
+ */
+
 (() => {
   // Capture the current script element immediately, before any async work.
   const karaokePlayerScript = document.currentScript;

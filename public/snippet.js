@@ -88,6 +88,9 @@
     const screenPos = vec(attr('position'), [0, 0, 0]);
     const screenQ = qEuler(vec(attr('rotation'), [0, 0, 0]));
 
+    // A vector that isn't "0 0 0", or null.
+    const setVec = (name) => { const v = vec(attr(name), null); return v && v.some(n => n !== 0) ? v : null; };
+
     const relative = (name) => {
       if (name === 'playlist-panel-position') return null; // the panel's own offset mode handles it
       if (name === 'playlist-panel-offset') {
@@ -95,7 +98,8 @@
         return v ? convert(v, 'pos') : null;
       }
       if (name === 'button-position') {
-        const off = vec(attr(name), null);
+        // "0 0 0" counts as empty (see below), so the buttons go under the screen.
+        const off = setVec(name);
         if (!off) return null;
         const r = qRotate(screenQ, off);
         return convert(fmt(round([screenPos[0] + r[0], screenPos[1] + r[1], screenPos[2] + r[2]])), 'pos');
@@ -113,7 +117,6 @@
     // "0 0 0" counts as empty, like button-position: snippets default these to 0 0 0 so Unity
     // shows X, Y and Z fields (an empty value shows as a single text box).
     const SINGER_TILT = [30, -180, 0];
-    const setVec = (name) => { const v = vec(attr(name), null); return v && v.some(n => n !== 0) ? v : null; };
     const singer = (name) => {
       const pos = setVec('singer-button-position');
       if (!pos) return name === 'singer-button-space' ? null : setVec(name) ? undefined : null; // the default, from the buttons

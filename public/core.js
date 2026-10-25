@@ -216,8 +216,10 @@ var Core = class {
     return this.addComponent(go, this.bsComponent('BoxCollider', { isTrigger, center, size }, 'BoxCollider', [isTrigger, center, size]));
   }
   // Text, centred on its object. It reads from the object's -Z side, like the buttons.
-  async makeLabel(name, parent, position, text, fontSize) {
+  // made: an optional list the label's object is added to, for builds that clean up after themselves.
+  async makeLabel(name, parent, position, text, fontSize, made) {
     const go = await this.makeObject(name, { parent, position });
+    if (made) made.push(go);
     const center = 1; // BS.HorizontalAlignment.Center, BS.VerticalAlignment.Center
     const box = new BS.Vector2(2, 0.5);
     return this.addComponent(go, this.bsComponent('Text', {
@@ -505,10 +507,14 @@ var Core = class {
     await this.addComponent(button, this.bsComponent('GLTF', { url: glb, legacyRotate: true },
       'BanterGLTF', [glb, false, false, false, false, false, true]));
     await this.addColliderBox(button, new BS.Vector3(1, 0.3, 0.05), true);
-    button.On('click', () => this.openPlaylist());
+    // Like the hand's Playlist button, it brings the panel to itself (just above it).
+    button.On('click', () => this.openPlaylist('singer'));
     if (!alive()) return;
-    await this.makeLabel('FireVPlayer_SingerButtonText', button, new BS.Vector3(0, 0.01, -0.03), 'singers', 1);
+    // Tracked in `made` too: if the button is removed while the label is being made, the label
+    // can end up with no parent, loose in the world, so it has to be removed on its own.
+    await this.makeLabel('FireVPlayer_SingerButtonText', button, new BS.Vector3(0, 0.01, -0.03), 'singers', 1, made);
     if (!alive()) return;
+    this.watchSingerButton(button, token);
 
     const triggerEnter = p["box-trigger-enter-enabled"] === "true";
     const triggerExit = p["box-trigger-exit-enabled"] === "true";
@@ -581,8 +587,21 @@ var Core = class {
       }, 5000);
     });
   }
+  // Keeps this.singerPose = { position, rotation } (world space), for opening the panel by it.
+  async watchSingerButton(button, token) {
+    const PN = BS.PN || BS.PropertyName;
+    if (typeof button.WatchTransform !== 'function' || !PN) return;
+    try {
+      await button.WatchTransform([PN.position, PN.rotation], t => {
+        if (token === this.singerToken && t && t.position) this.singerPose = { position: t.position, rotation: t.rotation };
+      });
+    } catch (e) {
+      console.warn('[Core] Could not watch the Singers button:', e);
+    }
+  }
   removeJoinLeaveButton() {
     this.singerToken = null;
+    this.singerPose = null;
     (this.singerButtonElements || []).forEach(go => this.destroyObject(go));
     this.singerButtonElements = [];
   }
@@ -618,8 +637,9 @@ var Core = class {
     this.playlistButtonText = button.label;
   }
 
-  // inFront: the hand's Playlist button, which opens the panel in front of the player.
-  openPlaylist(inFront) {
+  // where: 'front' (the hand's Playlist button) opens the panel in front of the player, 'singer'
+  // (karaoke's Singers button) just above that button, and nothing beside the screen.
+  openPlaylist(where) {
     // Clicks can arrive twice in quick succession (pointer + trigger), so debounce.
     const now = Date.now();
     if (this._lastPlaylistToggle && now - this._lastPlaylistToggle < 600) return;
@@ -628,7 +648,7 @@ var Core = class {
 
     // In-world UI Toolkit panel (new SDK), when one was set up for this player.
     if (this.playlistPanel) {
-      this.playlistPanel.toggle(inFront === true);
+      this.playlistPanel.toggle(where);
       return;
     }
     this.openPlaylistPage();
@@ -1048,7 +1068,7 @@ var Core = class {
         ['VolumeUp', 0.4, 0.4, "data-vol-up-icon-url", () => this.volume(true)],
         ['SkipBack', -0.4, -0.1, "data-skip-backward-icon-url", () => this.sendBrowserMessage({path: Commands.SKIP_BACK})],
         ['SkipForward', 0, -0.1, "data-skip-forward-icon-url", () => this.sendBrowserMessage({path: Commands.SKIP_FORWARD})],
-        ['Playlist', 0.4, -0.1, "data-playlist-icon-url", () => this.openPlaylist(true)]
+        ['Playlist', 0.4, -0.1, "data-playlist-icon-url", () => this.openPlaylist('front')]
       ];
       for (const [name, x, y, icon, callback] of buttons) {
         if (root !== this.handControls) return; // removed meanwhile

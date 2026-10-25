@@ -299,7 +299,9 @@ var FirePlaylistPanel = class {
       moverRot
     };
     this.moverHidden = true;
-    this.placement = 'home'; // 'home' (by the screen) | 'front' (in front of the player) | 'moved' (carried)
+    // 'home' (by the screen) | 'front' (in front of the player) | 'singer' (above karaoke's Singers
+    // button) | 'moved' (carried)
+    this.placement = 'home';
     this.shownPos = new BS.Vector3(0, this.handleDrop, 0);
     this.hiddenPos = new BS.Vector3(0, -1000, 0);
     this.mover = await this.withTimeout(new BS.GameObject({
@@ -678,9 +680,10 @@ var FirePlaylistPanel = class {
 
   // ---------------------------------------------------------------- show / hide
 
-  // inFront: open (or bring over) in front of the player, as the hand's Playlist button does.
-  // Otherwise it opens by the screen. Pressing the same button again closes it.
-  async toggle(inFront) {
+  // where: 'front' opens (or brings it over) in front of the player, as the hand's Playlist button
+  // does; 'singer' just above karaoke's Singers button. Otherwise it opens by the screen. Pressing
+  // the same button again closes it.
+  async toggle(where) {
     if (!this.built && !this.failed) console.log('[PlaylistPanel] Still building, will open when ready.');
     await this.build();
     if (this.destroyed) return;
@@ -688,8 +691,10 @@ var FirePlaylistPanel = class {
       this.core.openPlaylistPage();
       return;
     }
-    const want = inFront && this.frontPose(true) ? 'front' : 'home';
-    if (this.visible && this.placement === want && want === 'home') return this.close();
+    let want = 'home';
+    if (where === 'front' && this.frontPose(true)) want = 'front';
+    else if (where === 'singer' && this.singerPose()) want = 'singer';
+    if (this.visible && this.placement === want && want !== 'front') return this.close();
     // In front, a press while it's open in front closes it only when the player hasn't turned
     // away from it; otherwise it comes round to where they're looking.
     if (this.visible && want === 'front' && this.placement === 'front' && !this.lookedAway()) return this.close();
@@ -749,6 +754,22 @@ var FirePlaylistPanel = class {
     return diff > 45;
   }
 
+  // Where the panel goes for karaoke's Singers button: just above it, upright, turned the way the
+  // button faces (only around the vertical, so a tilted button doesn't tilt the panel). Null until
+  // the button's position is known.
+  singerPose() {
+    const s = this.core.singerPose;
+    if (!s || !s.position) return null;
+    const q = s.rotation;
+    let yaw = 0;
+    if (q) {
+      // The button's forward (+Z) flattened onto the floor.
+      const fx = 2 * (q.x * q.z + q.w * q.y), fz = 1 - 2 * (q.x * q.x + q.y * q.y);
+      if (Math.abs(fx) + Math.abs(fz) > 1e-6) yaw = Math.atan2(fx, fz) * 180 / Math.PI;
+    }
+    return { yaw, position: new BS.Vector3(s.position.x, s.position.y, s.position.z) };
+  }
+
   async place(where, fromHand) {
     const root = this.root, mover = this.mover;
     if (!root || !mover) return;
@@ -765,6 +786,12 @@ var FirePlaylistPanel = class {
       // The panel is seen from -Z, so facing the same way as the player turns its front to them.
       await this.setLocal(root, pose.position, new BS.Vector3(0, pose.yaw, 0));
       await this.setLocal(mover, new BS.Vector3(0, -this.handleDrop, 0), new BS.Vector3(0, 0, 0));
+    } else if (where === 'singer') {
+      const pose = this.singerPose();
+      if (!pose) return;
+      // The grab handle sits just above the button, and the panel above the handle.
+      await this.setLocal(root, pose.position, new BS.Vector3(0, pose.yaw, 0));
+      await this.setLocal(mover, new BS.Vector3(0, 0.3, 0), new BS.Vector3(0, 0, 0));
     } else {
       const h = this.home;
       await this.setLocal(root, h.rootLocalPos, h.rootLocalRot);
@@ -810,6 +837,7 @@ var FirePlaylistPanel = class {
     this.render();
     // Closed, or just built (as after a mode change): it needs a place first.
     if (this.moverHidden && this.placement === 'front') await this.place('front', false);
+    if (this.moverHidden && this.placement === 'singer') await this.place('singer', false);
     if (this.moverHidden) await this.place('home', false); // also when the head isn't known
     await this.moveTo(this.shownPos);
     clearInterval(this.tickTimer);

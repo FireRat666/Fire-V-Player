@@ -13,7 +13,10 @@ var FireNativeScreen = (() => {
   // The browser screen's size before the snippet's scale (Core keeps it 1 x 0.5625 m at any
   // resolution). The native-screen-size setting ("width height") changes it.
   const DEFAULT_SIZE = [1, 0.5625];
-  const POLL_MS = 250;
+  // How often to ask Unity for the player's state. Unity sends the time only once a second, so
+  // asking more often gains nothing and costs frames on Quest.
+  const POLL_MS = 1000;
+  const DURATION_TRIES = 15;        // polls after loading to wait for a length before giving up
   const SYNC_EVERY_MS = 5000;
   const MAX_DRIFT_S = 1.0;          // jump when further out than this (time reports come once a second)
   const TOGGLE_COOLDOWN_MS = 1500;  // isPlaying takes a moment to catch up after PlayToggle
@@ -62,9 +65,12 @@ var FireNativeScreen = (() => {
         'BanterVideoPlayer', [settings.url, settings.volume, settings.loop, settings.playOnAwake, settings.skipOnDrop, settings.waitForFirstFrame]));
       if (this.destroyed) return;
       this.vp = vp;
-      // time only reaches the page when asked for; the rest are watched too, to be sure they do.
-      const P = BS.PropertyName;
-      try { vp.WatchProperties([P.time, P.duration, P.isPlaying, P.isPrepared]); } catch (e) {}
+      // time only reaches the page when watched. The other read-only values (isPrepared,
+      // isPlaying, duration) keep their first value unless asked for with GetProperty, which
+      // poll() does (see readState).
+      const P = BS.PN || BS.PropertyName;
+      try { vp.WatchProperties([P.time]); } catch (e) {}
+      this.state = { isPrepared: false, isPlaying: false, duration: 0 };
       this.lastRaw = vp.time;
       this.startedAt = performance.now();
       this.pollTimer = setInterval(() => this.poll(), POLL_MS);
@@ -73,7 +79,44 @@ var FireNativeScreen = (() => {
     }
 
     // ------------------------------------------------------------------ state from Unity
-    poll() {
+    // Asks Unity for isPrepared, isPlaying and duration. Some files never report a length
+    // (duration stays 0), which is fine: the controls work without it, and the playlist waits
+    // for someone to skip instead of moving on at the end.
+    async readState() {
+      const vp = this.vp;
+      const P = BS.PN || BS.PropertyName;
+      if (!vp || !P) return;
+      const get = async (name) => {
+        if (typeof vp.GetProperty !== 'function') return vp[name];
+        try { return await vp.GetProperty(P[name]); } catch (e) { return vp[name]; }
+      };
+      const names = ['isPlaying'];
+      if (!this.state.isPrepared) names.push('isPrepared');
+      // A file that hasn't given its length a while after loading won't, so stop asking.
+      if (!(this.state.duration > 0) && (this.durationTries || 0) < DURATION_TRIES) {
+        names.push('duration');
+        if (this.prepared) this.durationTries = (this.durationTries || 0) + 1;
+      }
+      const values = await Promise.all(names.map(get));
+      if (this.destroyed || vp !== this.vp) return;
+      const wasPlaying = this.state.isPlaying;
+      names.forEach((n, i) => {
+        const v = values[i];
+        if (n === 'duration') { const d = Number(v); this.state.duration = Number.isFinite(d) && d > 0 ? d : 0; }
+        else if (v !== undefined && v !== null) this.state[n] = v === true || v === 'true' || v === 1;
+      });
+      // Stopped by itself while it should be playing: the file has ended. Without a length that's
+      // the only way to tell, and playing again would start it over, so it stays stopped until
+      // someone seeks, skips or changes track.
+      if (wasPlaying && !this.state.isPlaying && !this.wantPaused
+          && performance.now() - this.lastToggleAt > TOGGLE_COOLDOWN_MS) {
+        this.endedAt = this.localTimeAt(true);
+      }
+    }
+    async poll() {
+      if (!this.vp || this.destroyed || this.polling) return;
+      this.polling = true;
+      try { await this.readState(); } finally { this.polling = false; }
       const vp = this.vp;
       if (!vp || this.destroyed) return;
       const now = performance.now();
@@ -83,7 +126,8 @@ var FireNativeScreen = (() => {
         this.baseTime = Number(vp.time) || 0;
         this.baseAt = now;
       }
-      if (!this.prepared && (vp.isPrepared || vp.duration > 0)) {
+      // Loaded once Unity says so, or once the time starts moving (in case it never does).
+      if (!this.prepared && (this.state.isPrepared || this.state.duration > 0 || Number(vp.time) > 0)) {
         this.prepared = true;
         this.reportDuration();
         this.requestSync(true); // start where everyone else is
@@ -94,15 +138,17 @@ var FireNativeScreen = (() => {
         this.core.showToast("This file won't load on the world's video player. The link may be wrong, or the format unsupported.", 8000);
       }
       if (this.prepared) {
-        if (!this.durationReported) this.reportDuration();
+        if (!this.durationReported) this.reportDuration(); // the length may come later than the first frame
         this.applyPaused();
       }
     }
 
-    duration() { return this.vp && Number(this.vp.duration) > 0 ? Number(this.vp.duration) : 0; }
-    playing() { return !!(this.vp && this.vp.isPlaying); }
-    localTime() {
-      const t = this.baseTime + (this.playing() ? (performance.now() - this.baseAt) / 1000 : 0);
+    duration() { return this.state && this.state.duration > 0 ? this.state.duration : 0; }
+    playing() { return !!(this.vp && this.state && this.state.isPlaying); }
+    localTime() { return this.localTimeAt(this.playing()); }
+    localTimeAt(playing) {
+      if (this.endedAt != null) return this.endedAt;
+      const t = this.baseTime + (playing ? (performance.now() - this.baseAt) / 1000 : 0);
       const d = this.duration();
       return d ? Math.min(t, d) : t;
     }
@@ -140,14 +186,20 @@ var FireNativeScreen = (() => {
       if (this.playing() === !this.wantPaused) return;
       // At the end, playing again would start the file over. The server moves on instead.
       const d = this.duration();
-      if (!this.wantPaused && d && this.localTime() >= d - 0.5) return;
+      if (!this.wantPaused && (this.endedAt != null || (d && this.localTime() >= d - 0.5))) return;
       this.lastToggleAt = now;
       vp.PlayToggle();
+      this.state.isPlaying = !this.state.isPlaying; // until the next readState confirms it
     }
     seek(t) {
       if (!this.vp) return;
       const d = this.duration();
       t = Math.max(0, d ? Math.min(t, d - 0.25) : t);
+      // Seeking back from the end plays again; seeking to or past it stays at the end.
+      if (this.endedAt != null) {
+        if (t >= this.endedAt - 0.5) return;
+        this.endedAt = null;
+      }
       this.vp.time = t;
       this.lastRaw = this.vp.time; // the setter keeps the new value until Unity sends its own
       this.baseTime = t;
@@ -178,6 +230,9 @@ var FireNativeScreen = (() => {
       if (!Number.isFinite(serverTime)) return;
       const d = this.duration();
       if (d && serverTime >= d - 0.5) return; // about to end; the server moves on
+      // Ended with no known length: the server keeps counting until someone skips, so only a
+      // host seek or track change (hard) moves it.
+      if (this.endedAt != null && !hard) return;
       const drift = serverTime - this.localTime();
       if (hard || (this.autoSync && Math.abs(drift) > MAX_DRIFT_S)) {
         if (!hard) console.log(`[NativeScreen] ${drift > 0 ? 'Behind' : 'Ahead'} by ${Math.abs(drift).toFixed(2)}s, jumping.`);

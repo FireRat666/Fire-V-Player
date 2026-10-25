@@ -878,8 +878,9 @@ var FirePlaylistPanel = class {
   seekBy(delta) {
     if (!this.isHost()) { this.setStatus('Only the host can seek.'); return; }
     const p = this.core.player;
-    if (!p || !p.duration) return;
-    const t = Math.max(0, Math.min(p.duration, this.currentPlaybackTime() + delta));
+    if (!p || !p.playlist || !p.playlist.length) return;
+    // A file may have no known length; then only the start limits it.
+    const t = Math.max(0, p.duration > 0 ? Math.min(p.duration, this.currentPlaybackTime() + delta) : this.currentPlaybackTime() + delta);
     this.send(Commands.SET_TIME, t);
   }
 
@@ -1043,12 +1044,19 @@ var FirePlaylistPanel = class {
   updateTime() {
     if (!this.built) return;
     const p = this.core.player;
-    if (!p || !p.playlist || !p.playlist.length || !p.duration) {
+    if (!p || !p.playlist || !p.playlist.length) {
       this.setText(this.timeLabel, '');
       this.setStyle(this.progInner, 'width', '0%');
       return;
     }
     const duration = p.duration;
+    if (!(duration > 0)) {
+      // No known length (some files): just how far in it is.
+      const t = Math.max(0, p.paused ? (p.currentTime || 0) : ((Date.now() / 1000 - this.clockSkew) - (p.lastStartTime || 0)));
+      this.setText(this.timeLabel, `${this.timeCode(t)} / --:--`);
+      this.setStyle(this.progInner, 'width', '0%');
+      return;
+    }
     let t = p.paused ? (p.currentTime || 0) : ((Date.now() / 1000 - this.clockSkew) - (p.lastStartTime || 0));
     t = Math.max(0, Math.min(t, duration));
     this.setText(this.timeLabel, `${this.timeCode(t)} / ${this.timeCode(duration)}`);

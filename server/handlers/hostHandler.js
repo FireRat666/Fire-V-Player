@@ -147,8 +147,10 @@ async function setVideoTime(app, ws, time) {
     if (!player.playlist.length) return;
 
     const trackDuration = (player.playlist[player.currentTrack].duration || 0) / 1000;
-    // Clamp the time to be within the video's duration
-    const newTime = Math.max(0, Math.min(time, trackDuration));
+    // Clamp the time to be within the video's duration (when it's known: a file may not have one)
+    const t = Number(time);
+    if (!Number.isFinite(t)) return;
+    const newTime = Math.max(0, trackDuration > 0 ? Math.min(t, trackDuration) : t);
 
     player.lastStartTime = (new Date().getTime() / 1000) - newTime;
     player.currentTime = newTime;

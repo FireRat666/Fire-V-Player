@@ -284,7 +284,15 @@ var Playlist = class {
     let updateCount = 0;
     this.uiUpdateInterval = setInterval(() => {
       let { lastStartTime, duration } = this.core.player;
-      if (duration <= 0) return;
+      if (!(duration > 0)) {
+        // No known length (some files): just how far in it is.
+        const t = this.core.player.paused ? (this.core.player.currentTime || 0) : ((Date.now() / 1000) - this.clockSkew) - lastStartTime;
+        const text = document.querySelector('.currentTimeText');
+        if (text) text.innerText = `${this.timeCode(Math.max(0, t))} / --:--`;
+        const bar = document.querySelector('.currentTime');
+        if (bar) bar.style.width = '0%';
+        return;
+      }
 
       // By subtracting the estimated clock skew, we align the client's 'now' with the server's 'now'.
       let calculatedTime = ((Date.now() / 1000) - this.clockSkew) - lastStartTime;

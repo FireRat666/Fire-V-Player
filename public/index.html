@@ -1,10 +1,18 @@
+<!DOCTYPE html>
 <html>
   <head>
+    <meta charset="utf-8">
+    <!-- Without this, Quest's browser lays the page out wider than the screen and zooms in, so
+         the video is cropped and the page scrolls. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Roboto&display=swap" rel="stylesheet">
     <style>
-      html, body{margin: 0; padding: 0;background: black}
+      html, body{margin: 0; padding: 0; background: black; width: 100%; height: 100%; overflow: hidden; overscroll-behavior: none; touch-action: none}
+      /* The YouTube player (YT.Player swaps this div for its iframe, which keeps the id) always
+         fills the screen, whatever size the page had when it loaded. */
+      #player{position: fixed; top: 0; left: 0; width: 100% !important; height: 100% !important; border: 0}
       #status{
         position: absolute;
         top: 50px;
@@ -12,6 +20,7 @@
         background: white;
         padding: 7 7;
         display: none;
+        z-index: 10;
       }
 /*       #player{
         margin-top: 1px;

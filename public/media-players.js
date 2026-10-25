@@ -418,8 +418,9 @@ class MediaSwitch {
     if (!this.container) {
       this.container = document.createElement('div');
       this.container.id = 'media-other';
-      Object.assign(this.container.style, { position: 'fixed', inset: '0', background: '#000', display: 'none', zIndex: '5' });
-      document.body.appendChild(this.container);
+      Object.assign(this.container.style, { position: 'absolute', inset: '0', background: '#000', display: 'none', zIndex: '5' });
+      // On the stage with the YouTube player (see fit-screen.js), or the page without one.
+      (document.getElementById('stage') || document.body).appendChild(this.container);
     }
   }
 

@@ -2,12 +2,28 @@
 var MODE_STATE_KEY = 'fire-v-player-mode';
 var MODE_WRITE_TIMEOUT_MS = 6000;
 var CAPTIONS_PREF_KEY = 'fire-v-player-captions';
+// SDK layers: clicks only reach colliders on UI (5). UserLayer9 (13) is ignored by teleport, the
+// grapple and the ground, but players still touch it, which is what a trigger zone needs.
+var LAYER_UI = 5;
+var LAYER_TRIGGER = 13;
+// The browser screen. Its page is `resolution` pixels wide and 16:9. The SDK draws pages at 1300
+// pixels per metre, so the screen object is scaled to keep it SCREEN_WIDTH_M wide (before the
+// snippet's scale) whatever the resolution.
+var SCREEN_PIXELS_PER_M = 1300;
+var SCREEN_WIDTH_M = 1;
+var SCREEN_MIN_RESOLUTION = 640;
+var SCREEN_MAX_RESOLUTION = 3840;
+// The choices in the panel's More view, as page widths.
+var SCREEN_RESOLUTIONS = [1280, 1600, 1920];
+var RESOLUTION_PREF_KEY = 'fire-v-player-resolution';
 
 var Core = class {
     constructor() {
         this.urlParams = new URLSearchParams(window.location.search);
         this.isKaraoke = false;
         this.createdElements = [];
+        // GameObjects made in the world, destroyed again by destroy().
+        this.worldObjects = [];
     }
 
     getProtocol() {
@@ -44,11 +60,11 @@ var Core = class {
       // this.setupSayNamesScript();
     }
     if(window.isBanter) {
-      // Populate window.user from the BanterScene's localUser identity.
+      // Populate window.user from the scene's localUser identity.
       // This is the reliable source after unity-loaded, whereas window.user
       // may not be populated yet by the SDK on all platforms (e.g. Quest 3).
       try {
-        const banterScene = BS.BanterScene.GetInstance();
+        const banterScene = this.banterScene();
         if (banterScene && banterScene.localUser) {
           window.user = {
             id: banterScene.localUser.uid,
@@ -56,46 +72,17 @@ var Core = class {
           };
         }
       } catch (e) {
-        console.warn('[Core] Could not get user from BanterScene:', e);
+        console.warn('[Core] Could not get user from the scene:', e);
       }
 
-      let lastSendTime = Date.now();
-      const positionOfBrowser = this.params.position.split(" ");
-      window.userPoseCallback = async pose => {
-        if(this.params.spatial === 'true') {
-          const minDistance = Number(this.params["spatial-min-distance"]);
-          const maxDistance = Number(this.params["spatial-max-distance"]);
-          const a = userinputs.head.position.x - positionOfBrowser[0];
-          const b = userinputs.head.position.y - positionOfBrowser[1];
-          const c = userinputs.head.position.z - positionOfBrowser[2];
-          const distance = Math.sqrt(a * a + b * b + c * c);
-          let volume = ((maxDistance - (distance - minDistance)) / maxDistance);
-          if(volume > 1) {
-            volume = 1;
-          }else if(volume < 0) {
-            volume = 0;
-          }
-          const now = Date.now();
-          if(now - lastSendTime > 500) {
-            lastSendTime = now;
-            const roundedVolume = Math.round(this.params.volume * volume);
-            if(this.tempVolume != roundedVolume) {
-              // Add a .catch() to handle cases where the browser isn't ready yet.
-              // This prevents an "Uncaught (in promise)" error when the pose callback
-              // fires before the browser element has been initialized. The rejection is
-              // expected in this scenario, so we can safely ignore it.
-              this.sendBrowserMessage({path: Commands.SET_VOLUME, data: roundedVolume, type: 'spatial'})
-                .catch(() => { /* Browser not ready, ignore rejection */ });
-            }
-            this.tempVolume = roundedVolume; 
-          }
-        }
-      }
+      this.setupSpatial();
+      this.trackHead();
+      this.setupHeadMarker().catch(e => console.warn('[Core] Could not follow the head:', e));
       // By the time this runs, window.user is already set by the entry-point script
       // (playlist.js / karaoke.js) which waited for bs-loaded + unity-loaded before
       // loading anything. No further waiting is needed here.
-      if(this.params["hand-controls"] === 'true') { 
-        this.setupHandControls();
+      if(this.params["hand-controls"] === 'true') {
+        this.setupHandControls().catch(e => console.error('[Core] Could not set up the hand controls:', e));
       }
     }else{
       try{
@@ -115,11 +102,10 @@ var Core = class {
       }
     }
   }
-  setupBrowserElement(url) {
+  async setupBrowserElement(url) {
     this.initialUrl = url;
-    const scene = document.querySelector("a-scene");
-    if (!scene) {
-      console.log("No <a-scene> tag found. Creating a fallback 2D player.");
+    if (!this.inWorld()) {
+      console.log("Not in a world with the BS SDK. Creating a fallback 2D player.");
       const iframe = document.createElement('iframe');
       iframe.src = url;
       iframe.style.width = "80vw";
@@ -137,59 +123,329 @@ var Core = class {
       console.log(`Player is in 2D mode. Open the playlist controls here: ${playlistUrl}`);
       return;
     }
-    const browser = document.createElement('a-entity');
-    browser.setAttribute("position", this.params.position);
-    browser.setAttribute("rotation", this.params.rotation);
-    browser.setAttribute("scale", this.params.scale);
-    console.log({"mipMaps": this.params['mip-maps'], "pixelsPerUnit": Number(this.params.resolution), "mode": "local"});
-    // console.log("setupBrowserElement", url);
-    browser.setAttribute("sq-browser", {"mipMaps": this.params['mip-maps'], "pixelsPerUnit": Number(this.params.resolution), "mode": "local", "url": url});
-    if(this.params.geometry && this.params.geometry !== "false") {
-      const shape = document.createElement('a-entity');
-      // if(this.params.is3d === true || this.params.is3d === 'true') {
-        // shape.setAttribute("sq-custommaterial", "shaderName: Banter/StereoscopicUnlit;");
-      // }
-      shape.setAttribute("geometry", this.params.geometry);
-      shape.setAttribute("material", "color: white");
-      browser.appendChild(shape);
-    }else if(this.params.is3d === true || this.params.is3d === 'true') {
-      // browser.setAttribute("sq-custommaterial", "shaderName: Banter/StereoscopicUnlit;");
+    try {
+      await this.setupBrowserUi();
+    } catch (e) {
+      console.error('[Core] Could not create the in-world buttons:', e);
     }
-    scene.appendChild(browser);
-    this.browser = browser;
-    this.createdElements.push(browser);
-    this.browser.addEventListener('browsermessage', (e) => {
-      // console.log("got a browser message");
-      // console.log(e);
-    });
-    this.setupBrowserUi();
+    if (this.destroyed) return; // cleaned up while the buttons were being made
+    // The screen itself: the browser, or the world's video player when a file is playing.
+    this.screenReady = true;
+    this.updateScreen();
   }
-  clickBrowser(x,y) {
-    this.browser.components['sq-browser'].runActions([{actionType: "click2d", numParam1: x, numParam2: y}])
+
+  // ---------------------------------------------------------------- world objects (BS SDK)
+  //
+  // Everything in the world is a BS SDK GameObject. Script-tag positions and rotations use
+  // A-Frame's axes, where Z is mirrored from Unity's (the player once ran on the A-Frame bridge,
+  // and existing worlds still use those values), so they're converted here.
+
+  inWorld() {
+    return !!(window.isBanter && window.BS && BS.GameObject && this.banterScene());
   }
-  setupBrowserUi() {
-    const scene = document.querySelector("a-scene");
-    if(!scene) {
-      console.log("No a-scene tag found, is this an AFRAME scene ?");
+  vec3(str, def) {
+    const p = String(str || '').trim().split(/[\s,]+/).filter(Boolean).map(Number);
+    if (p.length === 1 && !isNaN(p[0])) return [p[0], p[0], p[0]];
+    return (p.length >= 3 && !p.slice(0, 3).some(isNaN)) ? p.slice(0, 3) : def;
+  }
+  toUnityPos([x, y, z]) { return new BS.Vector3(x, y, -z); }
+  toUnityEuler([x, y, z]) { return new BS.Vector3(-x, -y, z); }
+  toVector3([x, y, z]) { return new BS.Vector3(x, y, z); }
+  // The screen's world position, rotation and scale, in Unity values.
+  screenTransform() {
+    return {
+      position: this.toUnityPos(this.vec3(this.params.position, [0, 0, 0])),
+      rotation: this.toUnityEuler(this.vec3(this.params.rotation, [0, 0, 0])),
+      scale: this.toVector3(this.vec3(this.params.scale, [1, 1, 1]))
+    };
+  }
+
+  // The SDK's components take a settings object (BS.Browser, BS.Plane, ...). Clients from before
+  // it only have the Banter* versions, which take the same settings in order.
+  modernSdk() {
+    return !!BS.Scene && typeof BS.Browser === 'function';
+  }
+  bsComponent(name, settings, oldName, oldArgs) {
+    if (this.modernSdk() && typeof BS[name] === 'function') return new BS[name](settings);
+    if (typeof BS[oldName] === 'function') return new BS[oldName](...(oldArgs || []));
+    throw new Error(`This client has neither BS.${name} nor BS.${oldName}.`);
+  }
+  async addComponent(go, component) {
+    return (await go.AddComponent(component)) || component;
+  }
+
+  async makeObject(name, opts = {}) {
+    const config = { name };
+    if (opts.parent) config.parent = opts.parent;
+    if (opts.position) config.localPosition = opts.position;
+    if (opts.rotation) config.localEulerAngles = opts.rotation;
+    if (opts.quaternion) config.localRotation = opts.quaternion;
+    if (opts.scale) config.localScale = opts.scale;
+    if (opts.layer !== undefined) config.layer = opts.layer;
+    const go = await new BS.GameObject(config).Async();
+    // Cleaned up while this was being made: don't leave it in the world, and stop the build.
+    if (this.destroyed) {
+      try { go.Destroy(); } catch (e) {}
+      throw new Error('The player was removed.');
+    }
+    this.worldObjects.push(go);
+    return go;
+  }
+  // Destroying an object destroys everything under it too.
+  destroyObject(go) {
+    if (!go) return;
+    this.worldObjects = this.worldObjects.filter(o => o !== go);
+    if (go.destroyed) return;
+    try { go.Destroy(); } catch (e) { console.warn(`[Core] Could not destroy ${go.name}:`, e); }
+  }
+
+  white() { return new BS.Vector4(1, 1, 1, 1); }
+  // A picture you click: a plane with the icon on it, and a thin collider on the UI layer.
+  async makeIconButton(name, parent, position, size, iconUrl, callback, rotation) {
+    const go = await this.makeObject(name, { parent, position, rotation, layer: LAYER_UI });
+    const shader = 'Unlit/DiffuseTransparent';
+    await this.addComponent(go, this.bsComponent('Plane', { width: size, height: size }, 'BanterPlane', [size, size]));
+    await this.addComponent(go, this.bsComponent('Material', { shaderName: shader, texture: iconUrl, color: this.white() },
+      'BanterMaterial', [shader, iconUrl, this.white(), 0, true]));
+    await this.addColliderBox(go, new BS.Vector3(size, size, 0.01), true);
+    go.On('click', () => callback());
+    return go;
+  }
+  addColliderBox(go, size, isTrigger) {
+    const center = new BS.Vector3(0, 0, 0);
+    return this.addComponent(go, this.bsComponent('BoxCollider', { isTrigger, center, size }, 'BoxCollider', [isTrigger, center, size]));
+  }
+  // Text, centred on its object. It reads from the object's -Z side, like the buttons.
+  async makeLabel(name, parent, position, text, fontSize) {
+    const go = await this.makeObject(name, { parent, position });
+    const center = 1; // BS.HorizontalAlignment.Center, BS.VerticalAlignment.Center
+    const box = new BS.Vector2(2, 0.5);
+    return this.addComponent(go, this.bsComponent('Text', {
+      text, color: this.white(), fontSize, horizontalAlignment: center, verticalAlignment: center,
+      richText: false, enableWordWrapping: false, rectTransformSizeDelta: box
+    }, 'BanterText', [text, this.white(), center, center, fontSize, false, false, box]));
+  }
+  // --------------------------------------------------------------- screen (browser or native)
+  // Video and audio files play on the world's own video player (native-video.js), which plays
+  // links from hosts that won't let a web page load them. Only one of it and the browser exists at
+  // a time: the other is destroyed, so it isn't running in the background.
+  wantsNativeScreen(link) {
+    if (!link || !window.isBanter || typeof FireNativeScreen === 'undefined' || !window.MediaSources) return false;
+    if (!this.inWorld() || !(BS.VideoPlayer || BS.BanterVideoPlayer)) return false;
+    // Files come from anywhere, so only where the world's owner allows them (as in the browser).
+    const media = MediaSources.detect(link);
+    return !!media && media.type === 'file' && this.allowUntrusted === true;
+  }
+  currentLink() {
+    const p = this.player;
+    const track = p && Array.isArray(p.playlist) && p.playlist.length ? p.playlist[p.currentTrack] : null;
+    return track && track.link ? track.link : '';
+  }
+  // The browser page's address, with the mode, captions, mute and volume as they are now.
+  browserUrl() {
+    const volume = this.params.spatial === 'true' ? this.tempVolume : this.params.volume;
+    return String(this.initialUrl || '')
+      .replace(/([?&]mode=)[^&]*/, `$1${this.getMode()}`)
+      .replace(/([?&]captions=)[^&]*/, `$1${this.captions !== false}`)
+      .replace(/([?&]mute=)[^&]*/, `$1${this.params.mute}`)
+      .replace(/([?&]volume=)[^&]*/, `$1${volume}`);
+  }
+  // Puts up whichever screen the current track needs. `json` is the message that changed things.
+  updateScreen(json) {
+    if (!this.screenReady) return;
+    const link = this.currentLink();
+    const path = json && json.path;
+    if (this.wantsNativeScreen(link)) {
+      if (this.nativeScreen && this.nativeScreen.link === link) {
+        // The same file again (a restart, a one-song playlist), or the host moved it.
+        if (path === Commands.TRACK_CHANGED || path === Commands.HOST_SEEK) this.nativeScreen.resync();
+        return;
+      }
+      this.removeBrowser();
+      if (this.nativeScreen) this.nativeScreen.destroy();
+      console.log('[Core] A file is playing, so the world\'s video player takes the browser\'s place.');
+      this.nativeScreen = new FireNativeScreen(this, link);
       return;
     }
-    
-     //this.readCustomIconUrls();
-    
-    const yScale = Number(this.params.scale.split(" ")[1]);
-    const position = Number(this.params.position.split(" ")[0]) + " " + (Number(this.params.position.split(" ")[1]) - (yScale*0.335)) + " " + Number(this.params.position.split(" ")[2]);
-    this.playlistContainer = document.createElement('a-entity');
-    this.playlistContainer.setAttribute('position', this.params["button-position"] === "0 0 0" ? position : this.params["button-position"]);
-    this.playlistContainer.setAttribute('rotation', this.params["button-rotation"] === "0 0 0" ? this.params.rotation : this.params["button-rotation"]);
-    this.playlistContainer.setAttribute('scale', this.params["button-scale"]);
-    this.setupPlaylistButton(scene, this.playlistContainer);
-    this.setupVolButton(scene, true, this.playlistContainer);
-    this.setupVolButton(scene, false, this.playlistContainer);
-    this.setupMuteButton(scene, this.playlistContainer);
-    this.setupSkipButton(scene, true, this.playlistContainer);
-    this.setupSkipButton(scene, false, this.playlistContainer);
-    this.createdElements.push(this.playlistContainer);
-    scene.appendChild(this.playlistContainer);
+    if (this.nativeScreen) {
+      console.log('[Core] Back to the browser screen.');
+      this.nativeScreen.destroy();
+      this.nativeScreen = null;
+    }
+    if (!this.browser) this.createBrowser(this.browserUrl());
+  }
+  removeBrowser() {
+    const browser = this.browser;
+    if (!browser) return;
+    // A screen still being built destroys itself when it sees this.
+    browser.removed = true;
+    this.destroyObject(browser.go);
+    this.browser = null;
+    // Messages still waiting for the old page will never be answered.
+    this.browserAcks = {};
+  }
+  // The screen: a BS Browser showing the player page. It's built in the background; actions sent
+  // before it's ready wait in `queue`.
+  createBrowser(url) {
+    const browser = this.browser = { url, go: null, component: null, queue: [], removed: false };
+    browser.ready = this.buildBrowser(browser).catch(e => {
+      console.error('[Core] Could not create the browser screen:', e);
+      this.showToast("Couldn't create the screen.", 6000);
+    });
+  }
+  async buildBrowser(browser) {
+    const p = this.params;
+    const t = this.screenTransform();
+    const go = browser.go = await this.makeObject('FireVPlayer_Screen', { position: t.position, rotation: t.rotation, scale: this.browserScale(), layer: LAYER_UI });
+    if (browser.removed) { this.destroyObject(go); return; }
+    go.On('browser-message', e => this.onBrowserMessage(e));
+    const url = browser.url;
+    const [w, h] = browser.size = this.screenPageSize();
+    // pixelsPerUnit only matters to clients from before the SDK, which honour it.
+    const ppu = SCREEN_PIXELS_PER_M;
+    const component = await this.addComponent(go, this.bsComponent('Browser',
+      { url, pageWidth: w, pageHeight: h, mipMaps: p['mip-maps'], pixelsPerUnit: ppu },
+      'BanterBrowser', [url, p['mip-maps'], ppu, w, h, null]));
+    if (browser.removed) { this.destroyObject(go); return; }
+    browser.component = component;
+    if (typeof component.ToggleInteraction === 'function') component.ToggleInteraction(true);
+    // The sound plays from the screen at the same volume everywhere (the SDK's Flat fade); the
+    // `spatial` setting does its own fade. A BS Browser has no 2D sound: on PC it's always heard
+    // from the screen's direction, and on Quest the page plays its own sound, which isn't placed.
+    if ('rolloffMode' in component || this.modernSdk()) component.rolloffMode = 0;
+    // A size picked meanwhile in the panel.
+    if (this.screenPageSize()[0] !== w) this.applyScreenResolution();
+    // The address may have changed while the screen was being made.
+    if (browser.url !== url) component.url = browser.url;
+    browser.queue.splice(0).forEach(json => component.RunActions(json));
+    if (p.geometry && p.geometry !== "false") await this.addScreenShape(go);
+  }
+  // The optional `geometry` setting: a white shape at the screen, in A-Frame's geometry syntax
+  // ("primitive: box; width: 1.1; height: 0.6; depth: 0.05").
+  async addScreenShape(parent) {
+    const g = {};
+    String(this.params.geometry).split(';').forEach(part => {
+      const i = part.indexOf(':');
+      if (i > 0) g[part.slice(0, i).trim().toLowerCase()] = part.slice(i + 1).trim();
+    });
+    const n = (key, def) => Number.isFinite(parseFloat(g[key])) ? parseFloat(g[key]) : def;
+    const shapes = {
+      box: ['Box', { width: n('width', 1), height: n('height', 1), depth: n('depth', 1) }],
+      plane: ['Plane', { width: n('width', 1), height: n('height', 1) }],
+      sphere: ['Sphere', { radius: n('radius', 1) }],
+      cylinder: ['Cylinder', { radiusTop: n('radius', 1), radiusBottom: n('radius', 1), height: n('height', 1) }]
+    };
+    const shape = shapes[String(g.primitive || 'box').toLowerCase()];
+    if (!shape || !this.modernSdk() || typeof BS[shape[0]] !== 'function') {
+      console.warn(`[Core] Can't make the geometry "${this.params.geometry}" in this client.`);
+      return;
+    }
+    const go = await this.makeObject('FireVPlayer_ScreenShape', { parent });
+    await this.addComponent(go, new BS[shape[0]](shape[1]));
+    await this.addComponent(go, new BS.Material({ shaderName: 'Unlit/Diffuse', color: this.white() }));
+  }
+  // Runs BS Browser actions on the screen. False when there is no browser screen.
+  runBrowserActions(actions) {
+    const browser = this.browser;
+    if (!browser) return false;
+    const json = JSON.stringify({ actions });
+    if (browser.component) browser.component.RunActions(json);
+    else browser.queue.push(json);
+    return true;
+  }
+  // Loads an address on the screen. Setting the same address again reloads the page.
+  setBrowserUrl(url) {
+    const browser = this.browser;
+    if (!browser) return;
+    browser.url = url;
+    if (browser.component) browser.component.url = url;
+  }
+  // Messages from the screen's page (window.O.sendMessage), such as the answer to a volume change.
+  onBrowserMessage(e) {
+    let msg = e && e.detail;
+    if (typeof msg === 'string') {
+      try { msg = JSON.parse(msg); } catch { return; }
+    }
+    if (msg && typeof msg === 'object') this.recieveBrowserMessage(msg);
+  }
+  // `fx`/`fy` place the click as a fraction of the page (0.5 = the middle), as the page doesn't know
+  // its size in the browser's pixels; `x`/`y` are page pixels.
+  clickBrowser(x, y, fx, fy) {
+    const browser = this.browser;
+    if (!browser) return; // the world's video player is up instead
+    const [w, h] = browser.size || this.screenPageSize();
+    if (Number.isFinite(fx) && Number.isFinite(fy)) { x = Math.round(w * fx); y = Math.round(h * fy); }
+    this.runBrowserActions([{actionType: "click2d", numParam1: x, numParam2: y}]);
+  }
+
+  // ---------------------------------------------------------------- screen resolution
+  // `resolution` is the page's width in pixels (16:9). Each viewer can pick another in the panel,
+  // remembered on their device, as their screen is their own browser.
+  clampResolution(value) {
+    const w = Math.round(Number(value));
+    if (!Number.isFinite(w) || w <= 0) return null;
+    return Math.max(SCREEN_MIN_RESOLUTION, Math.min(SCREEN_MAX_RESOLUTION, w));
+  }
+  defaultResolution() { return this.clampResolution(this.params.resolution) || 1600; }
+  screenResolution() { return this.viewerResolution || this.defaultResolution(); }
+  screenPageSize() {
+    const w = this.screenResolution();
+    return [w, Math.round(w * 9 / 16)];
+  }
+  // The screen object's scale: the snippet's, times what keeps the page SCREEN_WIDTH_M wide.
+  browserScale() {
+    const k = SCREEN_WIDTH_M * SCREEN_PIXELS_PER_M / this.screenPageSize()[0];
+    const [x, y, z] = this.vec3(this.params.scale, [1, 1, 1]);
+    return new BS.Vector3(x * k, y * k, z);
+  }
+  loadResolutionPref() {
+    try {
+      const saved = this.clampResolution(localStorage.getItem(RESOLUTION_PREF_KEY));
+      if (saved) this.viewerResolution = saved;
+    } catch (e) {}
+    return this.screenResolution();
+  }
+  // null goes back to the snippet's resolution.
+  setScreenResolution(width) {
+    const w = this.clampResolution(width);
+    this.viewerResolution = w && w !== this.defaultResolution() ? w : null;
+    try {
+      if (this.viewerResolution) localStorage.setItem(RESOLUTION_PREF_KEY, String(this.viewerResolution));
+      else localStorage.removeItem(RESOLUTION_PREF_KEY);
+    } catch (e) {}
+    this.applyScreenResolution();
+    const [pw, ph] = this.screenPageSize();
+    this.showToast(`Screen resolution ${pw} x ${ph}`);
+  }
+  // Resizes the page and rescales the screen, so it stays the same size in the world.
+  applyScreenResolution() {
+    const browser = this.browser;
+    if (!browser || !browser.component) return;
+    const [w, h] = browser.size = this.screenPageSize();
+    browser.component.pageWidth = w;
+    browser.component.pageHeight = h;
+    if (browser.go && typeof browser.go.SetLocalScale === 'function') browser.go.SetLocalScale(this.browserScale());
+    console.log(`[Core] Screen page is now ${w} x ${h}.`);
+  }
+  // The row of buttons under the screen: Playlist (Singers), skip back/forward, mute, volume.
+  async setupBrowserUi() {
+    const p = this.params;
+    const screenPos = this.vec3(p.position, [0, 0, 0]);
+    const yScale = this.vec3(p.scale, [1, 1, 1])[1];
+    const under = [screenPos[0], screenPos[1] - yScale * 0.335, screenPos[2]];
+    const position = p["button-position"] === "0 0 0" ? under : this.vec3(p["button-position"], under);
+    const rotation = this.vec3(p["button-rotation"] === "0 0 0" ? p.rotation : p["button-rotation"], [0, 0, 0]);
+    this.playlistContainer = await this.makeObject('FireVPlayer_Buttons', {
+      position: this.toUnityPos(position),
+      rotation: this.toUnityEuler(rotation),
+      scale: this.toVector3(this.vec3(p["button-scale"], [1, 1, 1]))
+    });
+    await this.setupPlaylistButton(this.playlistContainer);
+    await this.setupVolButton(true, this.playlistContainer);
+    await this.setupVolButton(false, this.playlistContainer);
+    await this.setupMuteButton(this.playlistContainer);
+    await this.setupSkipButton(true, this.playlistContainer);
+    await this.setupSkipButton(false, this.playlistContainer);
   }
   setVolume(isUp, amount) {
     if(isUp) {
@@ -224,84 +480,110 @@ var Core = class {
   }
   // Karaoke's Singers button and optional box trigger. Removed again by removeJoinLeaveButton()
   // when the player switches to playlist mode.
-  setupJoinLeaveButton() {
-    const scene = document.querySelector("a-scene");
-    if(!scene) {
-      console.log("No a-scene tag found, is this an AFRAME scene ?");
-      return;
-    }
-    if (!this.playlistContainer) return;
+  async setupJoinLeaveButton() {
+    if (!this.playlistContainer || !this.inWorld()) return;
     this.removeJoinLeaveButton();
-    this.singerButtonElements = [];
-    const playlistButton = document.createElement('a-entity');
-    playlistButton.setAttribute('sq-boxcollider', 'size: 1 0.3 0.05');
-    playlistButton.setAttribute('sq-interactable', '');
-    const buttonGlb = document.createElement('a-entity');
-    buttonGlb.setAttribute('gltf-model',`${this.getProtocol()}://${this.hostUrl}/assets/ButtonL.glb`);
-    playlistButton.appendChild(buttonGlb);
-    playlistButton.setAttribute('position', this.params["singer-button-position"]);
-    playlistButton.setAttribute('rotation', this.params["singer-button-rotation"]);
-    playlistButton.setAttribute('opacity', '0.3');
-    playlistButton.setAttribute('transparent', 'true');
-    if (this.params["singer-button-space"] === 'world') scene.appendChild(playlistButton);
-    else this.playlistContainer.appendChild(playlistButton);
-    this.singerButtonElements.push(playlistButton);
-    const playlistButtonText = document.createElement('a-text');
-    playlistButtonText.setAttribute('value', "singers");
-    playlistButtonText.setAttribute('position', '0 0.01 0.03');
-    playlistButtonText.setAttribute('align', 'center');
-    playlistButtonText.setAttribute('scale', '0.8 0.8 0.8');
-    playlistButton.appendChild(playlistButtonText);
-    playlistButton.addEventListener('click', () => this.openPlaylist());
-    const triggerEnter = this.params["box-trigger-enter-enabled"] === "true";
-    const triggerExit = this.params["box-trigger-exit-enabled"] === "true"
-    if(triggerEnter || triggerExit) {
-      const boxTrigger = document.createElement('a-entity');
-      boxTrigger.setAttribute('sq-boxcollider', '');
-      boxTrigger.setAttribute('sq-triggercollider', '');
-      boxTrigger.setAttribute('position', this.params["box-trigger-position"]);
-      boxTrigger.setAttribute('rotation', this.params["box-trigger-rotation"]);
-      boxTrigger.setAttribute('scale', this.params["box-trigger-scale"]);
-      let hasStarted = false;
-      let hasStartedTimeout;
-      boxTrigger.addEventListener('trigger-enter', e => {
-        if(e.detail.isLocalPlayer) {
-          clearTimeout(hasStartedTimeout);
-          if(triggerEnter && this.player && this.player.players.length && this.player.players[0].id === window.user.id && !hasStarted) {
-            if(this.player.locked) {
-              this.showToast("Player is locked! The host needs to unlock it first!");
-            }else{
-              // this.sendMessage({path: Commands.CLEAR_PLAYLIST, skipUpdate: true});
-              this.sendMessage({path: Commands.ADD_TO_PLAYLIST, data: this.player.players[0].v, isYoutubeWebsite: false, skipUpdate: true });
-              this.sendMessage({path: Commands.SET_TRACK, data: 0});
-              hasStarted = true;
-            }
-          }
-        }
+    // removeJoinLeaveButton() during the build replaces the token, and the build then cleans up.
+    const token = this.singerToken = {};
+    const made = this.singerButtonElements = [];
+    const alive = () => {
+      if (token === this.singerToken) return true;
+      made.forEach(go => this.destroyObject(go));
+      return false;
+    };
+    const p = this.params;
+    const button = await this.makeObject('FireVPlayer_SingerButton', {
+      parent: p["singer-button-space"] === 'world' ? null : this.playlistContainer,
+      position: this.toUnityPos(this.vec3(p["singer-button-position"], [0, 0, 0])),
+      rotation: this.toUnityEuler(this.vec3(p["singer-button-rotation"], [0, 0, 0])),
+      layer: LAYER_UI
+    });
+    made.push(button);
+    if (!alive()) return;
+    const glb = `${this.getProtocol()}://${this.hostUrl}/assets/ButtonL.glb`;
+    // legacyRotate: the model was made for the A-Frame bridge, which faced models the other way.
+    await this.addComponent(button, this.bsComponent('GLTF', { url: glb, legacyRotate: true },
+      'BanterGLTF', [glb, false, false, false, false, false, true]));
+    await this.addColliderBox(button, new BS.Vector3(1, 0.3, 0.05), true);
+    button.On('click', () => this.openPlaylist());
+    if (!alive()) return;
+    await this.makeLabel('FireVPlayer_SingerButtonText', button, new BS.Vector3(0, 0.01, -0.03), 'singers', 1);
+    if (!alive()) return;
+
+    const triggerEnter = p["box-trigger-enter-enabled"] === "true";
+    const triggerExit = p["box-trigger-exit-enabled"] === "true";
+    if (triggerEnter || triggerExit) {
+      const boxTrigger = await this.makeObject('FireVPlayer_BoxTrigger', {
+        parent: this.playlistContainer,
+        position: this.toUnityPos(this.vec3(p["box-trigger-position"], [0, 0, 0])),
+        rotation: this.toUnityEuler(this.vec3(p["box-trigger-rotation"], [0, 0, 0])),
+        scale: this.toVector3(this.vec3(p["box-trigger-scale"], [1, 1, 1])),
+        layer: LAYER_TRIGGER
       });
-      boxTrigger.addEventListener('trigger-exit', e => {
-        if(e.detail.isLocalPlayer) {
-          clearTimeout(hasStartedTimeout);
-          hasStartedTimeout = setTimeout(() => {
-            if(triggerExit && this.player && this.player.players.length && hasStarted) {
-              const player = this.player.players[0];
-              console.log(player.id, window.user.id, this.player);
-              if(player.id === window.user.id) {
-                  this.sendMessage({path: Commands.REMOVE_FROM_PLAYERS, data: player.id });
-                  // this.sendMessage({path: Commands.CLEAR_PLAYLIST, skipUpdate: true});
-                  this.sendMessage({path: Commands.STOP});
-                  hasStarted = false;
-              }
-            }
-          }, 5000);
-        }
-      });
-      this.playlistContainer.appendChild(boxTrigger);
-      this.singerButtonElements.push(boxTrigger);
+      made.push(boxTrigger);
+      if (!alive()) return;
+      await this.addColliderBox(boxTrigger, new BS.Vector3(1, 1, 1), true);
+      // ColliderEvents sends the trigger's contacts to the page.
+      if (this.modernSdk() && typeof BS.ColliderEvents === 'function') await this.addComponent(boxTrigger, new BS.ColliderEvents());
+      else if (typeof BS.BanterColliderEvents === 'function') await this.addComponent(boxTrigger, new BS.BanterColliderEvents());
+      if (!alive()) return;
+      this.watchBoxTrigger(boxTrigger, triggerEnter, triggerExit);
     }
   }
+  // The local player's body, head, hands and feet each enter and leave the trigger, so they count
+  // as inside until the last part has left.
+  watchBoxTrigger(boxTrigger, triggerEnter, triggerExit) {
+    const inside = new Set();
+    const isLocal = d => {
+      const user = d && d.user;
+      if (!user) return false;
+      const scene = this.banterScene();
+      return user.isLocal === true || !!(scene && scene.localUser && user.uid === scene.localUser.uid);
+    };
+    const part = d => {
+      const c = d.collider;
+      return String(c && typeof c === 'object' ? (c.id || c.name) : (c != null ? c : d.name));
+    };
+    let hasStarted = false;
+    let hasStartedTimeout;
+    boxTrigger.On('trigger-enter', e => {
+      const d = e && e.detail;
+      if (!isLocal(d)) return;
+      const wasOutside = inside.size === 0;
+      inside.add(part(d));
+      if (!wasOutside) return;
+      clearTimeout(hasStartedTimeout);
+      if(triggerEnter && this.player && this.player.players && this.player.players.length && this.player.players[0].id === window.user.id && !hasStarted) {
+        if(this.player.locked) {
+          this.showToast("Player is locked! The host needs to unlock it first!");
+        }else{
+          this.sendMessage({path: Commands.ADD_TO_PLAYLIST, data: this.player.players[0].v, isYoutubeWebsite: false, skipUpdate: true });
+          this.sendMessage({path: Commands.SET_TRACK, data: 0});
+          hasStarted = true;
+        }
+      }
+    });
+    boxTrigger.On('trigger-exit', e => {
+      const d = e && e.detail;
+      if (!isLocal(d)) return;
+      inside.delete(part(d));
+      if (inside.size > 0) return;
+      clearTimeout(hasStartedTimeout);
+      hasStartedTimeout = setTimeout(() => {
+        if(triggerExit && this.player && this.player.players && this.player.players.length && hasStarted) {
+          const player = this.player.players[0];
+          if(player.id === window.user.id) {
+              this.sendMessage({path: Commands.REMOVE_FROM_PLAYERS, data: player.id });
+              this.sendMessage({path: Commands.STOP});
+              hasStarted = false;
+          }
+        }
+      }, 5000);
+    });
+  }
   removeJoinLeaveButton() {
-    (this.singerButtonElements || []).forEach(el => { if (el.parentNode) el.parentNode.removeChild(el); });
+    this.singerToken = null;
+    (this.singerButtonElements || []).forEach(go => this.destroyObject(go));
     this.singerButtonElements = [];
   }
   showToast(text, duration = 3000) {
@@ -327,16 +609,17 @@ var Core = class {
       }).showToast();
     }
   }
-  setupPlaylistButton(scene, playlistContainer) {
+  async setupPlaylistButton(playlistContainer) {
     const playlistIconUrl = this.params["data-playlist-icon-url"];
     // Use the isKaraoke flag to provide a context-specific text label
     const buttonText = this.isKaraoke ? 'Singers' : 'Playlist';
-    const icon = this.setupButton(scene, playlistContainer, '-0.633', playlistIconUrl, () => this.openPlaylist(), buttonText);
+    const button = await this.setupButton(playlistContainer, 'Playlist', -0.633, playlistIconUrl, () => this.openPlaylist(), buttonText);
     // Kept so the label can follow a mode change.
-    this.playlistButtonText = icon && icon.parentNode ? icon.parentNode.querySelector('a-text') : null;
+    this.playlistButtonText = button.label;
   }
 
-  openPlaylist() {
+  // inFront: the hand's Playlist button, which opens the panel in front of the player.
+  openPlaylist(inFront) {
     // Clicks can arrive twice in quick succession (pointer + trigger), so debounce.
     const now = Date.now();
     if (this._lastPlaylistToggle && now - this._lastPlaylistToggle < 600) return;
@@ -345,7 +628,7 @@ var Core = class {
 
     // In-world UI Toolkit panel (new SDK), when one was set up for this player.
     if (this.playlistPanel) {
-      this.playlistPanel.toggle();
+      this.playlistPanel.toggle(inFront === true);
       return;
     }
     this.openPlaylistPage();
@@ -369,16 +652,14 @@ var Core = class {
     return this.openPage(this.getPlaylistPageUrl());
   }
 
-  // Old Banter exposed a global window.openPage. The new SideQuest/Altspace SDK only has
-  // window.banter.openPage (legacy A-Frame bridge) and BanterScene.OpenPage().
+  // Old Banter exposed a global window.openPage. Some clients have window.banter.openPage or the
+  // scene's OpenPage() instead.
   openPage(url) {
     try {
       if (typeof window.openPage === 'function') { console.log('[Core] Opening page with window.openPage:', url); window.openPage(url); return true; }
       if (window.banter && typeof window.banter.openPage === 'function') { console.log('[Core] Opening page with banter.openPage:', url); window.banter.openPage(url); return true; }
-      if (window.BS && BS.BanterScene) {
-        const scene = BS.BanterScene.GetInstance();
-        if (scene && typeof scene.OpenPage === 'function') { console.log('[Core] Opening page with BanterScene.OpenPage:', url); scene.OpenPage(url); return true; }
-      }
+      const scene = this.banterScene();
+      if (scene && typeof scene.OpenPage === 'function') { console.log('[Core] Opening page with the scene\'s OpenPage:', url); scene.OpenPage(url); return true; }
     } catch (e) {
       console.error('[Core] Failed to open page:', e);
       return false;
@@ -426,7 +707,11 @@ var Core = class {
   getMode() { return this.isKaraoke ? 'karaoke' : 'playlist'; }
 
   banterScene() {
-    try { return (window.BS && BS.BanterScene) ? BS.BanterScene.GetInstance() : null; } catch (e) { return null; }
+    // BS.Scene in the current SDK, BS.BanterScene in older clients.
+    try {
+      const Scene = window.BS && (BS.Scene || BS.BanterScene);
+      return Scene ? Scene.GetInstance() : null;
+    } catch (e) { return null; }
   }
 
   // Informational only (it can read false for a real admin); the server decides who may write.
@@ -545,8 +830,8 @@ var Core = class {
     this.sendMessage({ path: Commands.SET_INSTANCE_MODE, data: mode });
     // The video page only uses the mode for its skip times, and every message to it carries the
     // mode (see sendBrowserMessage), so it needs no message of its own.
-    if (this.playlistButtonText) this.playlistButtonText.setAttribute('value', karaoke ? 'Singers' : 'Playlist');
-    if (karaoke) this.setupJoinLeaveButton();
+    if (this.playlistButtonText) this.playlistButtonText.text = karaoke ? 'Singers' : 'Playlist';
+    if (karaoke) this.setupJoinLeaveButton().catch(e => console.error('[Core] Could not create the Singers button:', e));
     else this.removeJoinLeaveButton();
     if (this.playlistPanel) {
       // The panel's layout depends on the mode, so build a new one, open on the same view.
@@ -572,14 +857,14 @@ var Core = class {
   removeMessageListener(fn) {
     if (this.messageListeners) this.messageListeners = this.messageListeners.filter(f => f !== fn);
   }
-  setupVolButton(scene, isUp, playlistContainer) {
-  const volIconUrl = isUp ? this.params["data-vol-up-icon-url"] : this.params["data-vol-down-icon-url"];
-  this.setupButton(scene, playlistContainer, isUp ? 0.693 : 0.471, volIconUrl, () => this.volume(isUp));
-}
-setupSkipButton(scene, isBack, playlistContainer) {
-  const skipIconUrl = isBack ? this.params["data-skip-backward-icon-url"] : this.params["data-skip-forward-icon-url"];
-  this.setupButton(scene, playlistContainer, isBack ? -0.332 : -0.081, skipIconUrl, () => (isBack ? this.back() : this.forward()));
-}
+  setupVolButton(isUp, playlistContainer) {
+    const volIconUrl = isUp ? this.params["data-vol-up-icon-url"] : this.params["data-vol-down-icon-url"];
+    return this.setupButton(playlistContainer, isUp ? 'VolumeUp' : 'VolumeDown', isUp ? 0.693 : 0.471, volIconUrl, () => this.volume(isUp));
+  }
+  setupSkipButton(isBack, playlistContainer) {
+    const skipIconUrl = isBack ? this.params["data-skip-backward-icon-url"] : this.params["data-skip-forward-icon-url"];
+    return this.setupButton(playlistContainer, isBack ? 'SkipBack' : 'SkipForward', isBack ? -0.332 : -0.081, skipIconUrl, () => (isBack ? this.back() : this.forward()));
+  }
   volume(isUp) {
     this.setVolume(isUp);
     if(isUp && this.params.mute == 'true') {
@@ -593,100 +878,212 @@ setupSkipButton(scene, isBack, playlistContainer) {
      this.params.mute = this.params.mute == 'true' ? 'false' : 'true';
     this.sendBrowserMessage({path: Commands.MUTE, data: this.params.mute});
   }
-  setupMuteButton(scene, playlistContainer) {
-  const muteIconUrl = this.params["data-mute-icon-url"]; // URL for the mute button icon
-  this.setupButton(scene, playlistContainer, '0.23', muteIconUrl, () => this.mute());
-}
+  setupMuteButton(playlistContainer) {
+    const muteIconUrl = this.params["data-mute-icon-url"]; // URL for the mute button icon
+    return this.setupButton(playlistContainer, 'Mute', 0.23, muteIconUrl, () => this.mute());
+  }
 
-  setupHandControls() {
-    if (!window.user || !window.user.id) {
-      console.warn('[Core] setupHandControls called but window.user is not set. Skipping.');
+  // ---------------------------------------------------------------- spatial volume
+  // With `spatial` on, the volume fades with the local player's distance from the screen. The
+  // SDK sends the head's world position as pose-update, only while the player moves.
+  // Keeps the local player's latest head pose (world space), for opening the panel in front of them.
+  trackHead() {
+    const scene = this.banterScene();
+    if (!scene || this.onHeadPose) return;
+    this.onHeadPose = e => {
+      const head = e && e.detail && e.detail.head;
+      if (head && head.position && head.rotation) this.lastHead = head;
+    };
+    scene.On('pose-update', this.onHeadPose);
+  }
+  // An empty object on the local player's head. Unity reports where it is in the world, which is
+  // more dependable than pose-update (whose values didn't match the world on Quest: the panel
+  // opened behind the player and low).
+  // The SDK drops attachments when the player leaves, so the marker is removed then and made
+  // again when they come back, as the hand controls are.
+  async setupHeadMarker() {
+    const scene = this.banterScene();
+    if (this.headMarker || this.destroyed || !scene || !this.inWorld()) return;
+    if (!this.onHeadUserLeft) {
+      this.onHeadUserLeft = e => { if (e && e.detail && e.detail.isLocal) this.removeHeadMarker(); };
+      this.onHeadUserJoined = e => {
+        if (!(e && e.detail && e.detail.isLocal) || this.headMarker) return;
+        // A moment after joining, as for the hand controls, so the SDK is ready.
+        clearTimeout(this.headRejoinTimer);
+        this.headRejoinTimer = setTimeout(() => this.setupHeadMarker().catch(err => console.warn('[Core] Could not follow the head:', err)), 5000);
+      };
+      scene.On('user-left', this.onHeadUserLeft);
+      scene.On('user-joined', this.onHeadUserJoined);
+    }
+    const uid = (scene.localUser && scene.localUser.uid) || (window.user && window.user.id);
+    if (!uid) return;
+    const go = await this.makeObject('FireVPlayer_HeadMarker');
+    if (this.headMarker || this.destroyed) { this.destroyObject(go); return; }
+    this.headMarker = go;
+    if (typeof BS.AttachedObject === 'function') {
+      const head = BS.AvatarBoneName ? BS.AvatarBoneName.HEAD : 0;
+      const attached = await this.addComponent(go, new BS.AttachedObject({ uid, avatarAttachmentPoint: head }));
+      if (this.headMarker !== go) return; // removed meanwhile
+      await attached.Attach(uid);
+    } else if (typeof scene.LegacyAttachObject === 'function' && BS.LegacyAttachmentPosition && BS.LegacyAttachmentPosition.HEAD !== undefined) {
+      await scene.LegacyAttachObject(go, uid, BS.LegacyAttachmentPosition.HEAD);
+    } else {
+      console.log('[Core] No way to attach to the head here, so the panel uses pose-update.');
       return;
     }
-    // This was a great innovation by HBR, who wanted Skizot to also get credit for the original idea. 
-    const handControlsContainer = document.createElement("a-entity");
-    handControlsContainer.setAttribute("scale", "0.08 0.08 0.08");
-    handControlsContainer.setAttribute("position", "0.05 0.006 -0.010");
-    handControlsContainer.setAttribute("sq-lefthand", "whoToShow: " + window.user.id);
-    [
-      {
-        image: this.params["data-playlist-icon-url"],
-        position: "-1 -0.2 0.4", 
-        callback: () => this.openPlaylist()
-      },
-      {
-        image: this.params["data-skip-backward-icon-url"],
-        position: "-1 -0.2 0", 
-        callback: () => this.sendBrowserMessage({path: Commands.SKIP_BACK})
-      },
-      {
-        image: this.params["data-skip-forward-icon-url"],
-        position: "-1 -0.2 -0.4", 
-        callback: () => this.sendBrowserMessage({path: Commands.SKIP_FORWARD})
-      },
-      {
-        image: this.params["data-mute-icon-url"],
-        position: "-1 0.2 0.4", 
-        callback: () => this.mute()
-      },
-      {
-        image:this.params["data-vol-down-icon-url"],
-        position: "-1 0.2 0", 
-        callback: () => this.volume(false)
-      },
-      {
-        image: this.params["data-vol-up-icon-url"],
-        position: "-1 0.2 -0.4", 
-        callback: () => this.volume(true)
+    if (this.headMarker !== go) return;
+    const PN = BS.PN || BS.PropertyName;
+    if (typeof go.WatchTransform !== 'function' || !PN) return;
+    try {
+      await go.WatchTransform([PN.position, PN.rotation], t => {
+        if (this.headMarker === go && t && t.position) this.headMarkerPose = { position: t.position, rotation: t.rotation };
+      });
+    } catch (e) {
+      console.warn('[Core] Could not watch the head marker:', e);
+      return;
+    }
+    console.log('[Core] Following the head.');
+  }
+  removeHeadMarker() {
+    clearTimeout(this.headRejoinTimer);
+    if (this.headMarker) this.destroyObject(this.headMarker);
+    this.headMarker = null;
+    this.headMarkerPose = null; // so headPose() uses pose-update until the new marker reports
+  }
+  // Keeps this[key] = { position, rotation } in world space as Unity moves the object.
+  async watchWorldPose(go, key) {
+    const PN = BS.PN || BS.PropertyName;
+    if (!go || typeof go.WatchTransform !== 'function' || !PN) return;
+    try {
+      await go.WatchTransform([PN.position, PN.rotation], t => {
+        if (t && t.position) this[key] = { position: t.position, rotation: t.rotation };
+      });
+    } catch (e) {
+      console.warn(`[Core] Could not watch ${go.name}:`, e);
+    }
+  }
+  // The local player's head in world space: from the head marker when it reports, else pose-update.
+  headPose() {
+    const m = this.headMarkerPose;
+    if (m && m.position) return Object.assign({ source: 'marker' }, m);
+    return this.lastHead ? Object.assign({ source: 'pose-update' }, this.lastHead) : null;
+  }
+  setupSpatial() {
+    const scene = this.banterScene();
+    if (!scene || this.params.spatial !== 'true' || this.onPoseUpdate) return;
+    const p = this.vec3(this.params.position, [0, 0, 0]);
+    const screen = { x: p[0], y: p[1], z: -p[2] }; // in Unity's axes, like the head
+    let lastSendTime = Date.now();
+    this.onPoseUpdate = e => {
+      const head = e && e.detail && e.detail.head;
+      if (!head || !head.position) return;
+      const now = Date.now();
+      if (now - lastSendTime <= 500) return;
+      lastSendTime = now;
+      const minDistance = Number(this.params["spatial-min-distance"]);
+      const maxDistance = Number(this.params["spatial-max-distance"]);
+      const a = head.position.x - screen.x;
+      const b = head.position.y - screen.y;
+      const c = head.position.z - screen.z;
+      const distance = Math.sqrt(a * a + b * b + c * c);
+      const volume = Math.max(0, Math.min(1, (maxDistance - (distance - minDistance)) / maxDistance));
+      const roundedVolume = Math.round(this.params.volume * volume);
+      if(this.tempVolume != roundedVolume) {
+        // Rejected while there's no screen yet, which is fine: the next pose tries again.
+        Promise.resolve(this.sendBrowserMessage({path: Commands.SET_VOLUME, data: roundedVolume, type: 'spatial'}))
+          .catch(() => {});
       }
-    ].forEach(item => {
-      const button = document.createElement("a-plane");
-      button.setAttribute("sq-interactable", "");
-      button.setAttribute("sq-collider", "");
-      button.setAttribute("scale", "0.4 0.4 0.4");
-      button.setAttribute("rotation", "0 -90 180");
-      button.setAttribute("src", item.image);
-      button.setAttribute("transparent", true);
-      button.setAttribute("position", item.position);
-      button.addEventListener("click", () => item.callback());
-      handControlsContainer.appendChild(button);
-    })
-    this.handControlsContainer = handControlsContainer;
-    this.createdElements.push(handControlsContainer);
-    const scene = document.querySelector("a-scene");
-    if (!scene) {
-      console.warn('[Core] No <a-scene> found, skipping hand controls. Add <a-scene></a-scene> to the world page.');
+      this.tempVolume = roundedVolume;
+    };
+    scene.On('pose-update', this.onPoseUpdate);
+  }
+
+  // ---------------------------------------------------------------- hand controls
+  // A small panel of buttons on the local player's left hand, laid out as in FireScreen v2.
+  // This was a great innovation by HBR, who wanted Skizot to also get credit for the original idea.
+  // The SDK drops attachments when the player leaves, so they're made again when they come back.
+  async setupHandControls() {
+    if (this.destroyed) return;
+    const scene = this.banterScene();
+    if (!scene || !this.inWorld()) {
+      console.warn('[Core] Not in a world with the BS SDK, so no hand controls.');
       return;
     }
-    scene.appendChild(handControlsContainer);
+    if (!this.watchingHandUser) {
+      this.watchingHandUser = true;
+      this.onHandUserLeft = e => { if (e && e.detail && e.detail.isLocal) this.removeHandControls(); };
+      // user-joined also fires for the local player on arrival, when the controls already exist.
+      this.onHandUserJoined = e => {
+        if (!(e && e.detail && e.detail.isLocal) || this.handControls || this.handControlsBuilding) return;
+        // Wait a moment after joining before attaching, which avoids a race on Quest.
+        clearTimeout(this.handRejoinTimer);
+    clearTimeout(this.headRejoinTimer);
+        this.handRejoinTimer = setTimeout(() => this.setupHandControls().catch(err => console.error('[Core] Could not set up the hand controls:', err)), 5000);
+      };
+      scene.On('user-left', this.onHandUserLeft);
+      scene.On('user-joined', this.onHandUserJoined);
+    }
+    if (this.handControls || this.handControlsBuilding) return;
+    const uid = (scene.localUser && scene.localUser.uid) || (window.user && window.user.id);
+    if (!uid || typeof scene.LegacyAttachObject !== 'function') {
+      console.warn('[Core] The local player or LegacyAttachObject is missing, so no hand controls.');
+      return;
+    }
+    this.handControlsBuilding = true;
+    try {
+      const root = await this.makeObject('FireVPlayer_HandControls');
+      this.handControls = root;
+      // The buttons lie flat on the back of the wrist, facing out of it. These are in the hand's
+      // own Unity axes, with no A-Frame conversion. The hand-controls-position and
+      // hand-controls-rotation settings change them.
+      const wrapper = await this.makeObject('FireVPlayer_HandWrapper', {
+        parent: root,
+        position: this.toVector3(this.vec3(this.params['hand-controls-position'], [0, 0.046, 0.07])),
+        rotation: this.toVector3(this.vec3(this.params['hand-controls-rotation'], [0, 90, 180])),
+        scale: new BS.Vector3(0.1, 0.1, 0.1)
+      });
+      const buttons = [
+        ['Mute', -0.4, 0.4, "data-mute-icon-url", () => this.mute()],
+        ['VolumeDown', 0, 0.4, "data-vol-down-icon-url", () => this.volume(false)],
+        ['VolumeUp', 0.4, 0.4, "data-vol-up-icon-url", () => this.volume(true)],
+        ['SkipBack', -0.4, -0.1, "data-skip-backward-icon-url", () => this.sendBrowserMessage({path: Commands.SKIP_BACK})],
+        ['SkipForward', 0, -0.1, "data-skip-forward-icon-url", () => this.sendBrowserMessage({path: Commands.SKIP_FORWARD})],
+        ['Playlist', 0.4, -0.1, "data-playlist-icon-url", () => this.openPlaylist(true)]
+      ];
+      for (const [name, x, y, icon, callback] of buttons) {
+        if (root !== this.handControls) return; // removed meanwhile
+        // Just off the wrist, toward -Z: the side a button is seen from.
+        await this.makeIconButton(`FireVPlayer_Hand${name}`, wrapper, new BS.Vector3(x, y, -0.3), 0.4, this.params[icon], () => {
+          Promise.resolve(callback()).catch(() => {});
+        });
+      }
+      if (root !== this.handControls) return; // removed meanwhile
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      if (root !== this.handControls) return;
+      const leftHand = BS.LegacyAttachmentPosition ? BS.LegacyAttachmentPosition.LEFT_HAND : 1;
+      await scene.LegacyAttachObject(root, uid, leftHand);
+      console.log('[Core] Hand controls attached to the left hand.');
+      // Where the left hand is, for opening the panel the way the player is looking.
+      this.watchWorldPose(root, 'handPose');
+    } finally {
+      this.handControlsBuilding = false;
+    }
+  }
+  removeHandControls() {
+    if (!this.handControls) return;
+    console.log('[Core] Removing the hand controls.');
+    this.destroyObject(this.handControls);
+    this.handControls = null;
   }
 
-setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
-  const buttonContainer = document.createElement('a-entity');
-  buttonContainer.setAttribute('position', `${xOffset} 0 0`);
-
-  const buttonIcon = document.createElement('a-plane');
-  buttonIcon.setAttribute('sq-boxcollider', 'size: 1 1 0.05');
-  buttonIcon.setAttribute('sq-interactable', '');
-  buttonIcon.setAttribute('src', iconUrl);
-  buttonIcon.setAttribute('transparent', 'true');
-  buttonIcon.setAttribute('scale', '0.2 0.2 0.2');
-  buttonContainer.appendChild(buttonIcon);
-
-  if (text) {
-    const buttonText = document.createElement('a-text');
-    buttonText.setAttribute('value', text);
-    buttonText.setAttribute('align', 'center');
-    buttonText.setAttribute('position', '0 -0.15 0'); // Position text below the icon
-    buttonText.setAttribute('scale', '0.2 0.2 0.2');
-    buttonContainer.appendChild(buttonText);
+  // One of the buttons under the screen, with an optional label below it.
+  async setupButton(playlistContainer, name, xOffset, iconUrl, callback, text) {
+    const holder = await this.makeObject(`FireVPlayer_Button${name}`, { parent: playlistContainer, position: new BS.Vector3(xOffset, 0, 0) });
+    await this.makeIconButton(`FireVPlayer_Button${name}Icon`, holder, new BS.Vector3(0, 0, 0), 0.2, iconUrl, callback);
+    // Just in front of the icon (toward -Z, the side it's seen from), below it.
+    const label = text ? await this.makeLabel(`FireVPlayer_Button${name}Text`, holder, new BS.Vector3(0, -0.15, -0.005), text, 0.35) : null;
+    return { holder, label };
   }
-
-  playlistContainer.appendChild(buttonContainer);
-  buttonIcon.addEventListener('click', callback);
-
-  return buttonIcon;
-}
 
   generateGuestUser() {
     const id = this.getUniquId();
@@ -720,17 +1117,26 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
     this.setOrDefault("box-trigger-rotation", '0 0 0');
     this.setOrDefault("box-trigger-scale", '1 1 1');
     this.setOrDefault("resolution", '1600');
+    // The world video player's size for files (native-video.js); empty matches the browser.
+    this.setOrDefault("native-screen-size", '');
     this.setOrDefault("one-for-each-instance", "false");
     this.setOrDefault("instance", location.href);
     this.setOrDefault("playlist", "");
     this.setOrDefault("volume", '40');
     this.setOrDefault("mute", 'false');
     this.setOrDefault("captions", 'true');
+    // Shows the screen page's size, zoom and pixel ratio on the screen, for checking its fit.
+    this.setOrDefault("screen-debug", 'false');
     this.setOrDefault("untrusted-links", 'false');
     this.setOrDefault("is3d", 'false');
     this.setOrDefault("announce", 'true');
     this.setOrDefault("announce-four-twenty", 'false');
     this.setOrDefault("hand-controls", 'false');
+    // Fine-tunes where the hand buttons sit on the left hand, in the hand's own Unity axes:
+    // "x y z" metres and "x y z" degrees. Empty uses the built-in layout.
+    this.setOrDefault("hand-controls-position", '');
+    this.setOrDefault("hand-controls-rotation", '');
+    this.setOrDefault("playlist-panel-front-height", '1.4');
     this.setOrDefault("mip-maps", '1');
     this.setOrDefault("spatial", 'true');
     this.setOrDefault("geometry", "false");
@@ -817,7 +1223,7 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
     }
   }
   recieveBrowserMessage(msg) {
-    if(msg.id && this.browserAcks[msg.id]) {
+    if(msg.id && this.browserAcks && this.browserAcks[msg.id]) {
       this.browserAcks[msg.id]();
       this.browserAcks[msg.id] = null;
     }else{
@@ -851,10 +1257,15 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
     msg.id = this.getUniquId();
     msg.km = !!this.isKaraoke; // the current mode, which can change in world
     msg.cc = this.captions !== false; // this viewer's closed captions setting
+    // While a file plays on the world's video player there is no browser page: it takes these.
+    if (this.nativeScreen) {
+      this.nativeScreen.handle(msg);
+      return Promise.resolve();
+    }
     return new Promise((resolve, reject) => {
       if(this.browser) {
         this.browserAcks[msg.id] = resolve;
-        this.browser.components['sq-browser'].runActions([{actionType: "postmessage", strParam1: JSON.stringify(msg)}]);
+        this.runBrowserActions([{actionType: "postmessage", strParam1: JSON.stringify(msg)}]);
       }else{
         reject(new Error("Browser element not initialized. Cannot send message."));
       }
@@ -878,8 +1289,7 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
         if(window.isBanter && this.browser) {
           // console.log("RESET_BROWSER", {"url": this.initialUrl});
           // The mode may have changed in world since the page first loaded.
-          const url = String(this.initialUrl || '').replace(/([?&]mode=)[^&]*/, `$1${this.getMode()}`).replace(/([?&]captions=)[^&]*/, `$1${this.captions !== false}`);
-          this.browser.setAttribute("sq-browser", {"url": url});
+          this.setBrowserUrl(this.browserUrl());
         }
         break;
       case Commands.ITEM_REMOVED:
@@ -969,12 +1379,12 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
       case Commands.SET_BROWSER_URL:
         if(window.isBanter && this.browser) {
           // console.log("SET_BROWSER_URL", {"url": json.data.link});
-          this.browser.setAttribute("sq-browser", {"url": json.data.link});
+          this.setBrowserUrl(json.data.link);
         }
         break;
       case Commands.CLICK_BROWSER:
         if(window.isBanter) {
-          this.clickBrowser(json.data.x,json.data.y);
+          this.clickBrowser(json.data.x, json.data.y, json.data.fx, json.data.fy);
         }
         break;
       case Commands.SHOW_REPLACE_PROMPT:
@@ -1041,6 +1451,12 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
         }
         break;
     }
+    // A file track needs the world's video player in place of the browser, and back again after.
+    try { this.updateScreen(json); } catch (e) { console.error('[Core] Could not switch screens:', e); }
+    this.notifyListeners(json);
+  }
+  // Passes a message to the panel and the other listeners, as if it came from the server.
+  notifyListeners(json) {
     if (this.messageListeners) {
       this.messageListeners.forEach(fn => {
         try { fn(json); } catch (e) { console.error('[Core] Message listener error:', e); }
@@ -1180,6 +1596,10 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
   }
   destroy() { // To Use : window.cleanupVideoPlayer();
     console.log("Cleaning up Fire-V-Player instance...");
+    // Builds still running (buttons, screen, hand controls) stop when they see this.
+    this.destroyed = true;
+    clearTimeout(this.handRejoinTimer);
+    clearTimeout(this.headRejoinTimer);
     this.removeJoinLeaveButton();
 
     if (this.playlistPanel) {
@@ -1201,10 +1621,34 @@ setupButton(scene, playlistContainer, xOffset, iconUrl, callback, text) {
     this.createdElements = [];
     console.log("Removed created DOM elements.");
 
+    if (this.nativeScreen) {
+      this.nativeScreen.destroy();
+      this.nativeScreen = null;
+    }
+    this.screenReady = false;
+
+    // The world's objects: the screen, buttons, hand controls and anything else made here.
+    this.removeBrowser();
+    this.removeHandControls();
+    this.worldObjects.slice().forEach(go => this.destroyObject(go));
+    this.worldObjects = [];
+    const scene = this.banterScene();
+    if (scene && typeof scene.Off === 'function') {
+      if (this.onPoseUpdate) scene.Off('pose-update', this.onPoseUpdate);
+      if (this.onHeadPose) scene.Off('pose-update', this.onHeadPose);
+      if (this.onHandUserLeft) scene.Off('user-left', this.onHandUserLeft);
+      if (this.onHandUserJoined) scene.Off('user-joined', this.onHandUserJoined);
+      if (this.onHeadUserLeft) scene.Off('user-left', this.onHeadUserLeft);
+      if (this.onHeadUserJoined) scene.Off('user-joined', this.onHeadUserJoined);
+    }
+    this.onPoseUpdate = this.onHeadPose = this.onHandUserLeft = this.onHandUserJoined = this.onHeadUserLeft = this.onHeadUserJoined = null;
+    this.watchingHandUser = false;
+    console.log("Removed the world's objects.");
+
     // Remove any global references to this instance
     this.browser = null;
     this.playlistContainer = null;
-    this.handControlsContainer = null;
+    this.playlistButtonText = null;
     this.ws = null;
     if (window.playlistPlayerInstance) {
       window.playlistPlayerInstance = null;

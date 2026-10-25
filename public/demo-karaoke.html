@@ -3,17 +3,26 @@
   <head>
   </head>
   <body>
-    <a-scene>
-      
-      <a-box sq-collider color="olive" scale="300 0.1 300"></a-box>
-      
-      <script src="karaoke.js" instance="demo-karaoke" 
-              position="0 2.5 -50" rotation="0 0 0" scale="4 4 4" volume="10"
-              is3d="false" announce="true" spatial="true" youtube="https://www.youtube.com/watch?v=GiwStUzx8fg"
-              box-trigger-exit-enabled="true" box-trigger-enter-enabled="true" box-trigger-scale="5 5 5"></script>
-      
-      <a-entity sq-mirror position="-0.021 2.9 -47.781" rotation="0 180 0" scale="-1 1 1"></a-entity>
-      
-    </a-scene>
+    <script>
+      // A floor to stand on, made with the BS SDK.
+      window.addEventListener("bs-loaded", () => {
+        const scene = (BS.Scene || BS.BanterScene).GetInstance();
+        scene.On("unity-loaded", async () => {
+          const floor = await new BS.GameObject({ name: "Floor", localScale: new BS.Vector3(300, 0.1, 300) }).Async();
+          await floor.AddComponent(new BS.Box({ width: 1, height: 1, depth: 1 }));
+          await floor.AddComponent(new BS.Material({ shaderName: "Unlit/Diffuse", color: new BS.Vector4(0.5, 0.5, 0, 1) }));
+          await floor.AddComponent(new BS.BoxCollider({ isTrigger: false, size: new BS.Vector3(1, 1, 1) }));
+          // A mirror just in front of the screen, facing it, for whoever is singing.
+          const mirror = await new BS.GameObject({ name: "Mirror", localPosition: new BS.Vector3(-0.021, 2.9, 47.781),
+            localEulerAngles: new BS.Vector3(0, 180, 0), localScale: new BS.Vector3(-1, 1, 1) }).Async();
+          await mirror.AddComponent(new BS.Mirror({}));
+        });
+      });
+    </script>
+
+    <script src="karaoke.js" instance="demo-karaoke" 
+            position="0 2.5 -50" rotation="0 0 0" scale="4 4 4" volume="10"
+            is3d="false" announce="true" spatial="true" youtube="https://www.youtube.com/watch?v=GiwStUzx8fg"
+            box-trigger-exit-enabled="true" box-trigger-enter-enabled="true" box-trigger-scale="5 5 5"></script>
   </body>
 </html>

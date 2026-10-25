@@ -11,7 +11,9 @@
 //
 // Each user gets their own local panel. It sits beside the screen and is shown/hidden by the
 // playlist button. It hides by moving out of view, because deactivating a UI Toolkit document
-// can drop the elements created at runtime.
+// can drop the elements created at runtime. The hand's Playlist button puts it in
+// front of the player, and the pill under it can be grabbed to carry it.
+var PAGE_JUMP = 5; // pages the << and >> buttons move
 var FirePlaylistPanel = class {
   constructor(core) {
     this.core = core;
@@ -52,7 +54,7 @@ var FirePlaylistPanel = class {
     if (p.length === 1 && !isNaN(p[0])) return [p[0], p[0], p[0]];
     return (p.length >= 3 && !p.slice(0, 3).some(isNaN)) ? p.slice(0, 3) : def;
   }
-  // The legacy A-Frame bridge mirrors Z, so convert A-Frame values the same way it does.
+  // Script-tag values use A-Frame's axes, where Z is mirrored from Unity's (see Core.toUnityPos).
   toUnityPos([x, y, z]) { return new BS.Vector3(x, y, -z); }
   toUnityEuler([x, y, z]) { return new BS.Vector3(-x, -y, z); }
 
@@ -124,6 +126,15 @@ var FirePlaylistPanel = class {
     const msg = { path };
     if (data !== undefined) msg.data = data;
     this.core.sendMessage(msg);
+  }
+
+  // A control for this viewer's player only. The server passes these on to their browser page,
+  // which isn't there while a file plays on the world's video player, so then they go to it here.
+  sendMine(serverPath, playerPath, data) {
+    if (!this.core.nativeScreen) return this.send(serverPath, data);
+    const msg = { path: playerPath };
+    if (data !== undefined) msg.data = data;
+    this.core.sendBrowserMessage(msg);
   }
 
   setStatus(text, ms = 4000) {
@@ -257,7 +268,7 @@ var FirePlaylistPanel = class {
     const screenRot = this.vec3(p.rotation, [0, 0, 0]);
     const screenScale = this.vec3(p.scale, [1, 1, 1]);
     const panelScale = parseFloat(p['playlist-panel-scale']) || 1;
-    const panelWidthM = 1.4 * panelScale;
+    const panelWidthM = this.panelWidthM = 1.4 * panelScale;
     // Either a world position (and world rotation, default the screen's), or an offset from the
     // screen. The screen is 1 unit wide at scale 1, so the default offset is just past its right edge.
     const worldPos = this.vec3(p['playlist-panel-position'], null);
@@ -272,14 +283,37 @@ var FirePlaylistPanel = class {
     }).Async(), 15000, 'Creating the panel root object');
     this.checkAlive();
 
-    this.shownPos = this.toUnityPos(offset);
-    this.hiddenPos = new BS.Vector3(this.shownPos.x, this.shownPos.y - 1000, this.shownPos.z);
+    // root (the screen, or the world) > mover (the grab handle: a pill just under the
+    // panel's bottom edge, which players pick up to carry it) > panel (the UI, above the pill).
+    // Closing sends the mover and the panel out of sight; opening puts them back.
+    const panelHeightM = panelWidthM * this.H / this.W;
+    this.handleDrop = panelHeightM / 2 + 0.08; // from the panel's middle down to the handle
+    // Where it sits by the screen, to go back to after being opened in front of a player.
+    const moverRot = this.toUnityEuler(rot);
+    const centre = this.toUnityPos(offset);
+    const down = this.qRotate(this.qEuler(moverRot), [0, -this.handleDrop, 0]);
+    this.home = {
+      rootLocalPos: worldPos ? new BS.Vector3(0, 0, 0) : this.toUnityPos(screenPos),
+      rootLocalRot: worldPos ? new BS.Vector3(0, 0, 0) : this.toUnityEuler(screenRot),
+      moverPos: new BS.Vector3(centre.x + down[0], centre.y + down[1], centre.z + down[2]),
+      moverRot
+    };
+    this.moverHidden = true;
+    this.placement = 'home'; // 'home' (by the screen) | 'front' (in front of the player) | 'moved' (carried)
+    this.shownPos = new BS.Vector3(0, this.handleDrop, 0);
+    this.hiddenPos = new BS.Vector3(0, -1000, 0);
+    this.mover = await this.withTimeout(new BS.GameObject({
+      name: 'FireVPlayer_PlaylistMover',
+      parent: this.root,
+      localPosition: new BS.Vector3(0, -1000, 0), // out of sight until opened (moverHidden)
+      localEulerAngles: this.home.moverRot
+    }).Async(), 15000, 'Creating the panel mover object');
+    this.checkAlive();
     const s = panelWidthM / (this.W / 100); // a panel is 100 pixels per metre
     this.panelObj = await this.withTimeout(new BS.GameObject({
       name: 'FireVPlayer_PlaylistPanel',
-      parent: this.root,
+      parent: this.mover,
       localPosition: this.hiddenPos,
-      localEulerAngles: this.toUnityEuler(rot),
       localScale: new BS.Vector3(s, s, s)
     }).Async(), 15000, 'Creating the panel object');
     this.checkAlive();
@@ -307,7 +341,7 @@ var FirePlaylistPanel = class {
     await this.label(header, this.karaoke ? 'Karaoke' : 'Fire-V-Player', { fontSize: '30px', fontWeight: 'bold', flexGrow: 1 });
     this.hostLabel = await this.label(header, '', { fontSize: '20px', color: '#bbbbbb', marginRight: '12px' });
     await this.button(header, 'Refresh', () => this.refresh(true), { backgroundColor: GREY });
-    this.moreBtn = await this.button(header, 'More...', () => this.setView(this.view === 'more' ? 'main' : 'more'), { backgroundColor: GREY });
+    this.moreBtn = await this.button(header, 'More...', () => this.setView(this.view === 'more' ? 'main' : 'more'), { backgroundColor: '#2e7d32' });
     await this.button(header, 'Close', () => this.close(), { backgroundColor: GREY });
 
     // Now playing
@@ -354,9 +388,15 @@ var FirePlaylistPanel = class {
     this.tabPlaylistBtn = await this.button(tabs, this.karaoke ? 'Singers' : 'Playlist', () => this.setTab('playlist'));
     this.tabSearchBtn = await this.button(tabs, 'Search', () => this.setTab('search'));
     await this.div(tabs, { flexGrow: 1 });
-    await this.button(tabs, '<', () => this.changePage(-1), { backgroundColor: GREY });
+    // Page buttons: first, back 5, back 1, forward 1, forward 5, last.
+    const pageBtn = { backgroundColor: GREY, paddingLeft: '12px', paddingRight: '12px' };
+    this.firstPageBtn = await this.button(tabs, '|<', () => this.changePage(-Infinity), pageBtn);
+    this.back5Btn = await this.button(tabs, '<<', () => this.changePage(-PAGE_JUMP), pageBtn);
+    await this.button(tabs, '<', () => this.changePage(-1), pageBtn);
     this.pageLabel = await this.label(tabs, '1 / 1', { fontSize: '20px', width: '100px', textAlign: 'center' });
-    await this.button(tabs, '>', () => this.changePage(1), { backgroundColor: GREY });
+    await this.button(tabs, '>', () => this.changePage(1), pageBtn);
+    this.fwd5Btn = await this.button(tabs, '>>', () => this.changePage(PAGE_JUMP), pageBtn);
+    this.lastPageBtn = await this.button(tabs, '>|', () => this.changePage(Infinity), pageBtn);
 
     this.searchRow = await row(this.mainView, { marginTop: '4px' });
     const searchHint = this.karaoke ? 'Search for a song to sing, or paste a video link' : 'Search YouTube, or paste a YouTube / Twitch / Vimeo / video link';
@@ -465,17 +505,25 @@ var FirePlaylistPanel = class {
     // Your own player
     const mineSection = await section('Your player only');
     const mineRow = await row(mineSection, { flexWrap: 'wrap' });
-    await this.button(mineRow, '<< Skip', () => this.send(Commands.LOCAL_SKIP_BACK));
-    await this.button(mineRow, 'Skip >>', () => this.send(Commands.LOCAL_SKIP_FORWARD));
+    await this.button(mineRow, '<< Skip', () => this.sendMine(Commands.LOCAL_SKIP_BACK, Commands.SKIP_BACK));
+    await this.button(mineRow, 'Skip >>', () => this.sendMine(Commands.LOCAL_SKIP_FORWARD, Commands.SKIP_FORWARD));
     this.autoSyncBtn = await this.button(mineRow, 'Auto Sync: Off', () => {
       this.autoSync = !this.autoSync;
-      this.send(Commands.AUTO_SYNC, this.autoSync);
+      this.sendMine(Commands.AUTO_SYNC, Commands.AUTO_SYNC, this.autoSync);
       this.render();
     });
     this.captionsBtn = await this.button(mineRow, 'Captions: On', () => {
       this.core.setCaptions(this.core.captions === false);
       this.render();
     });
+    // Steps through the screen resolutions (page widths), then back to the snippet's.
+    this.resolutionBtn = await this.button(mineRow, 'Resolution', () => {
+      const choices = SCREEN_RESOLUTIONS.filter(w => w !== this.core.defaultResolution());
+      const now = this.core.viewerResolution;
+      const next = now ? choices[choices.indexOf(now) + 1] : choices[0];
+      this.core.setScreenResolution(next || null);
+      this.render();
+    }, { backgroundColor: '#00838f' });
     await this.label(mineRow, 'These change only your own screen.', { fontSize: '16px', color: '#999999', marginLeft: '8px', flexShrink: 1 });
 
     // Add by link (in karaoke mode, pasting a link into Search does this)
@@ -505,9 +553,99 @@ var FirePlaylistPanel = class {
     this.statusLabel = await this.label(footer, '', { fontSize: '20px', color: '#ffcc66', flexGrow: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' });
 
     this.checkAlive();
+    try {
+      await this.addGrabHandle();
+    } catch (e) {
+      if (this.destroyed) throw e;
+      console.warn('[PlaylistPanel] Could not make the panel grabbable, so it stays where it opens:', e);
+      this.body = null;
+    }
+    this.checkAlive();
     this.built = true;
     this.render();
     console.log('[PlaylistPanel] Ready.');
+  }
+
+  // Makes the mover the handle players pick up to carry the panel, as in the SDK docs: a shape,
+  // a collider, a Rigidbody, then Grababble (which adds the grab handle, a WorldObject and
+  // HeldEvents, and puts it on the Grabbable layer). The panel is the handle's child, so Unity
+  // carries it along. Without the Rigidbody and WorldObject the grab held on to the world like a
+  // climbing hold and pulled the player instead.
+  async addGrabHandle() {
+    if (!BS.Rigidbody || !(BS.Grababble || BS.GrabHandle) || !BS.BoxCollider) {
+      console.log('[PlaylistPanel] This client has no Rigidbody / Grababble, so the panel is not grabbable.');
+      return;
+    }
+    const T = 15000;
+    const handle = this.mover;
+    // Looks like a pill lying along the panel's bottom edge, like the one under the menu. A
+    // capsule stands along its Y axis, so it's on a child turned on its side; the collider stays
+    // on the handle itself, at scale 1, sized to the pill.
+    const length = 0.3, thick = 0.05;
+    const pill = await this.withTimeout(new BS.GameObject({
+      name: 'FireVPlayer_PlaylistHandlePill',
+      parent: handle,
+      localPosition: new BS.Vector3(0, 0, 0),
+      localEulerAngles: new BS.Vector3(0, 0, 90)
+    }).Async(), T, 'Creating the handle pill');
+    if (BS.Capsule) await this.withTimeout(pill.AddComponent(new BS.Capsule({ radius: thick, height: length, radialSegments: 24, heightSegments: 8 })), T, 'Adding the handle shape');
+    else if (BS.Box) await this.withTimeout(pill.AddComponent(new BS.Box({ width: thick, height: length, depth: thick })), T, 'Adding the handle shape');
+    if (BS.Material) await this.withTimeout(pill.AddComponent(new BS.Material({ shaderName: 'Unlit/Diffuse', color: new BS.Vector4(0.85, 0.87, 0.9, 1) })), T, 'Adding the handle material');
+    await this.withTimeout(handle.AddComponent(new BS.BoxCollider({ isTrigger: false, size: new BS.Vector3(length, thick + 0.02, thick + 0.02) })), T, 'Adding the handle collider');
+    this.checkAlive();
+    // No gravity, and it only turns around the vertical, so the panel stays upright.
+    this.body = await this.withTimeout(handle.AddComponent(new BS.Rigidbody({
+      mass: 1, drag: 2, angularDrag: 10, useGravity: false, isKinematic: false,
+      freezeRotationX: true, freezeRotationZ: true
+    })), T, 'Adding the handle Rigidbody');
+    this.checkAlive();
+    // Each player's panel is their own, so its network id is too: no one else's handle matches it.
+    const uid = (this.core.banterScene && this.core.banterScene() && this.core.banterScene().localUser && this.core.banterScene().localUser.uid) || (window.user && window.user.id) || Math.random().toString(36).slice(2);
+    if (typeof handle.SetNetworkId === 'function') {
+      try { await this.withTimeout(handle.SetNetworkId(`FireVPlayer_PlaylistHandle_${uid}`), T, 'Naming the handle'); } catch (e) {}
+    }
+    const soft = BS.BSGrabType && BS.BSGrabType.Soft !== undefined ? BS.BSGrabType.Soft : 3;
+    if (BS.Grababble) {
+      await this.withTimeout(handle.AddComponent(new BS.Grababble({ grabType: soft, grabRadius: 0.01 })), T, 'Making the handle grabbable');
+    } else {
+      if (typeof handle.SetLayer === 'function') await this.withTimeout(handle.SetLayer((BS.L && BS.L.Grabbable) || 20), T, 'Moving the handle to the Grabbable layer');
+      await this.withTimeout(handle.AddComponent(new BS.GrabHandle({ grabType: soft, grabRadius: 0.01 })), T, 'Adding the grab handle');
+    }
+    this.checkAlive();
+    // Once carried, the screen's Playlist button brings it back beside the screen.
+    handle.On('grab', () => { this.held = true; this.placement = 'moved'; });
+    handle.On('drop', () => { this.held = false; this.stopDrift(); });
+    console.log('[PlaylistPanel] The pill under the panel can be grabbed to carry it.');
+  }
+
+  // Rotations in Unity's convention: Euler degrees applied Z, then X, then Y.
+  qMul(a, b) {
+    return [
+      a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+      a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+      a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+      a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2]
+    ];
+  }
+  qEuler(e) {
+    const D = Math.PI / 360;
+    const ax = (i, deg) => { const q = [0, 0, 0, Math.cos(deg * D)]; q[i] = Math.sin(deg * D); return q; };
+    const v = Array.isArray(e) ? e : [e.x, e.y, e.z];
+    return this.qMul(this.qMul(ax(1, v[1]), ax(0, v[0])), ax(2, v[2]));
+  }
+  qRotate(q, v) {
+    const p = this.qMul(this.qMul(q, [v[0], v[1], v[2], 0]), [-q[0], -q[1], -q[2], q[3]]);
+    return [p[0], p[1], p[2]];
+  }
+
+  // Stops the panel sliding on after it's let go or moved by script.
+  stopDrift() {
+    const b = this.body;
+    if (!b) return;
+    try {
+      b.velocity = new BS.Vector3(0, 0, 0);
+      b.angularVelocity = new BS.Vector3(0, 0, 0);
+    } catch (e) {}
   }
 
   // Stops a build that is still running when the panel is destroyed.
@@ -531,7 +669,7 @@ var FirePlaylistPanel = class {
       } catch (e) {
         console.warn('[PlaylistPanel] Could not remove the panel objects:', e);
       }
-      this.root = this.panelObj = this.ui = null;
+      this.root = this.mover = this.panelObj = this.ui = this.body = null;
     };
     if (this.buildPromise) this.buildPromise.then(removeObjects, removeObjects);
     else removeObjects();
@@ -540,7 +678,9 @@ var FirePlaylistPanel = class {
 
   // ---------------------------------------------------------------- show / hide
 
-  async toggle() {
+  // inFront: open (or bring over) in front of the player, as the hand's Playlist button does.
+  // Otherwise it opens by the screen. Pressing the same button again closes it.
+  async toggle(inFront) {
     if (!this.built && !this.failed) console.log('[PlaylistPanel] Still building, will open when ready.');
     await this.build();
     if (this.destroyed) return;
@@ -548,15 +688,104 @@ var FirePlaylistPanel = class {
       this.core.openPlaylistPage();
       return;
     }
-    if (this.visible) await this.close();
-    else await this.open();
+    const want = inFront && this.frontPose(true) ? 'front' : 'home';
+    if (this.visible && this.placement === want && want === 'home') return this.close();
+    // In front, a press while it's open in front closes it only when the player hasn't turned
+    // away from it; otherwise it comes round to where they're looking.
+    if (this.visible && want === 'front' && this.placement === 'front' && !this.lookedAway()) return this.close();
+    await this.place(want, true);
+    if (!this.visible) await this.open();
   }
 
+  // Shows (shownPos) or hides (hiddenPos) the panel above its handle.
   async moveTo(pos) {
     const o = this.panelObj;
     if (!o) return;
-    if (typeof o.SetLocalPosition === 'function') await o.SetLocalPosition(pos);
-    else if (o.transform) o.transform.localPosition = pos;
+    await this.setLocal(o, pos, null);
+  }
+
+  // ---------------------------------------------------------------- placement
+
+  // Where the panel goes in front of the player: 0.9 m ahead of their head, at about chest
+  // height, turned to face them (only around the vertical, so it stays upright). Null until the
+  // head's position is known.
+  // fromHand (the hand's Playlist button): the player is looking at their left wrist, so the way
+  // from their head to that hand is the way they face. That needs only positions, which Unity
+  // reports reliably. Otherwise, the head's own rotation gives the way.
+  frontPose(fromHand) {
+    const head = this.core.headPose();
+    if (!head || !head.position) return null;
+    const p = head.position;
+    let yaw = null;
+    const hand = this.core.handPose;
+    if (fromHand && hand && hand.position) {
+      const dx = hand.position.x - p.x, dz = hand.position.z - p.z;
+      if (Math.hypot(dx, dz) > 0.05) yaw = Math.atan2(dx, dz);
+    }
+    const q = head.rotation;
+    if (yaw === null && q) {
+      // The head's forward (+Z) flattened onto the floor.
+      const fx = 2 * (q.x * q.z + q.w * q.y), fz = 1 - 2 * (q.x * q.x + q.y * q.y);
+      if (Math.abs(fx) + Math.abs(fz) > 1e-6) yaw = Math.atan2(fx, fz);
+    }
+    if (yaw === null) return null;
+    const d = 0.9;
+    // pose-update's height on Quest is about the floor under the player, not their eyes, so the
+    // panel goes at standing chest height above it (playlist-panel-front-height).
+    const frontHeight = parseFloat(this.core.params['playlist-panel-front-height']);
+    const lift = head.source === 'pose-update' ? (Number.isFinite(frontHeight) ? frontHeight : 1.4) : -0.1;
+    return {
+      yaw: yaw * 180 / Math.PI,
+      source: head.source,
+      position: new BS.Vector3(p.x + Math.sin(yaw) * d, p.y + lift, p.z + Math.cos(yaw) * d)
+    };
+  }
+
+  // Whether the player now faces more than 45 degrees away from where the panel was put.
+  lookedAway() {
+    const now = this.frontPose(true);
+    if (!now || this.frontYaw === undefined) return false;
+    const diff = Math.abs(((now.yaw - this.frontYaw) % 360 + 540) % 360 - 180);
+    return diff > 45;
+  }
+
+  async place(where, fromHand) {
+    const root = this.root, mover = this.mover;
+    if (!root || !mover) return;
+    if (where === 'front') {
+      const pose = this.frontPose(fromHand);
+      if (!pose) return;
+      this.frontYaw = pose.yaw;
+      const f = n => Number(n).toFixed(2);
+      const head = this.core.headPose();
+      console.log(`[PlaylistPanel] In front: head (${head.source}) ${f(head.position.x)} ${f(head.position.y)} ${f(head.position.z)}, facing ${Math.round(pose.yaw)} degrees${fromHand ? ' (toward the left hand)' : ''}.`);
+      if (this.core.params['screen-debug'] === 'true') {
+        this.setStatus(`Head (${head.source}) ${f(head.position.x)} ${f(head.position.y)} ${f(head.position.z)}, facing ${Math.round(pose.yaw)}°`, 15000);
+      }
+      // The panel is seen from -Z, so facing the same way as the player turns its front to them.
+      await this.setLocal(root, pose.position, new BS.Vector3(0, pose.yaw, 0));
+      await this.setLocal(mover, new BS.Vector3(0, -this.handleDrop, 0), new BS.Vector3(0, 0, 0));
+    } else {
+      const h = this.home;
+      await this.setLocal(root, h.rootLocalPos, h.rootLocalRot);
+      await this.setLocal(mover, h.moverPos, h.moverRot);
+    }
+    this.stopDrift();
+    this.moverHidden = false;
+    this.placement = where;
+    await this.moveTo(this.visible ? this.shownPos : this.hiddenPos);
+  }
+
+  // The root has no parent, so its local position and rotation are world ones.
+  async setLocal(o, pos, euler) {
+    if (pos) {
+      if (typeof o.SetLocalPosition === 'function') await o.SetLocalPosition(pos);
+      else if (o.transform) o.transform.localPosition = pos;
+    }
+    if (euler) {
+      if (typeof o.SetLocalEulerAngles === 'function') await o.SetLocalEulerAngles(euler);
+      else if (o.transform) o.transform.localEulerAngles = euler;
+    }
   }
 
   // Fetches the whole state from the server, in case the panel's list is out of date.
@@ -579,16 +808,29 @@ var FirePlaylistPanel = class {
       this.page = Math.floor(player.currentTrack / this.rowsPerPage);
     }
     this.render();
+    // Closed, or just built (as after a mode change): it needs a place first.
+    if (this.moverHidden && this.placement === 'front') await this.place('front', false);
+    if (this.moverHidden) await this.place('home', false); // also when the head isn't known
     await this.moveTo(this.shownPos);
     clearInterval(this.tickTimer);
     this.tickTimer = setInterval(() => this.updateTime(), 1000);
   }
 
   async close() {
+    if (this.held && this.mover && typeof this.mover.ReleaseGrab === 'function') {
+      try { await this.mover.ReleaseGrab(); } catch (e) {}
+    }
+    this.held = false;
     this.visible = false;
     clearInterval(this.tickTimer);
     this.tickTimer = null;
     await this.moveTo(this.hiddenPos);
+    // The handle goes too; opening always places it again first.
+    if (this.mover) {
+      await this.setLocal(this.mover, new BS.Vector3(0, -1000, 0), null);
+      this.moverHidden = true;
+      this.stopDrift();
+    }
   }
 
   // ---------------------------------------------------------------- actions
@@ -871,6 +1113,8 @@ var FirePlaylistPanel = class {
     const captions = this.core.captions !== false;
     this.setText(this.captionsBtn, captions ? 'Captions: On' : 'Captions: Off');
     this.setStyle(this.captionsBtn, 'backgroundColor', captions ? '#2e7d32' : '#00838f');
+    const [resW, resH] = this.core.screenPageSize();
+    this.setText(this.resolutionBtn, `Resolution: ${resW} x ${resH}${this.core.viewerResolution ? '' : ' (default)'}`);
     this.display(this.seekSection, host);
     if (this.loadPlaylistBtn) this.display(this.loadPlaylistBtn, host);
     this.setText(this.notHostLabel, host ? '' : (player.canTakeOver ? 'The host allows take over.' : 'Only the host can use these.'));
@@ -928,6 +1172,11 @@ var FirePlaylistPanel = class {
     else this.page = Math.min(this.page, pages - 1);
     const page = onSearch ? this.searchPage : this.page;
     this.setText(this.pageLabel, `${page + 1} / ${pages}`);
+    // First and last are worth showing from 3 pages, the jumps of 5 only past that.
+    this.display(this.firstPageBtn, pages > 2);
+    this.display(this.lastPageBtn, pages > 2);
+    this.display(this.back5Btn, pages > PAGE_JUMP);
+    this.display(this.fwd5Btn, pages > PAGE_JUMP);
 
     // Rows
     for (let k = 0; k < this.rows.length; k++) {

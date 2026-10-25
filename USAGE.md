@@ -73,15 +73,15 @@ In a Creator SDK world (`Assets/WebRoot/index.html`), add the player as a snippe
   button-rotation=""
   button-scale="1"
   playlist-ui="auto"
-  playlist-panel-position="1.8 1.5 1.85"
-  playlist-panel-rotation="0 20 0"
+  playlist-panel-position="-1.8 1.5 1.85"
+  playlist-panel-rotation="0 -20 0"
   playlist-panel-scale="1"
   singer-button-position="0 0 0"
   singer-button-rotation="0 0 0">
   <bs-gizmo type="position" attribute="position"/>
   <bs-gizmo type="plane" attribute="position" size="2 1.125" rotation="0 180 0"/>
   <bs-gizmo type="position" attribute="playlist-panel-position"/>
-  <bs-gizmo type="plane" attribute="playlist-panel-position" size="1.4 1.2" rotation="0 200 0"/>
+  <bs-gizmo type="plane" attribute="playlist-panel-position" size="1.4 1.2" rotation="0 160 0"/>
   <bs-gizmo type="position" attribute="button-position"/>
   <bs-gizmo type="position" attribute="singer-button-position"/>
 </bs-snippet>
@@ -91,23 +91,23 @@ In a Creator SDK world (`Assets/WebRoot/index.html`), add the player as a snippe
 Settings are the same as the script attributes below, except:
 
 - `position` and `rotation` are **Unity world values**, as for every snippet, so the Scene-view gizmo shows where the screen will be. (Script-tag values use A-Frame axes, where Z is flipped: script `position="0 1.5 -2"` is snippet `position="0 1.5 2"`.)
-- `scale` can be a single number. The screen is 1 m wide and 0.5625 m tall at scale 1, so the gizmo's `size` should be `scale × 1` by `scale × 0.5625`.
+- `scale` can be a single number. The screen is 1 m wide and 0.5625 m tall at scale 1, at any `resolution`, so the gizmo's `size` should be `scale × 1` by `scale × 0.5625`.
 - `karaoke` is a checkbox: ticked (`true`) is karaoke mode, unticked or empty is playlist mode. A hand-written `mode="karaoke"` works too. Both modes use the same settings; `playlist` (the default YouTube playlist) only matters in playlist mode.
 - `singer-button-position` and `singer-button-rotation` (karaoke) place the Singers button, a Unity world position and rotation like `button-position`, with its own drag handle. `0 0 0` (or empty) means the default: for the position, below and in front of the in-world buttons, placed from them; for the rotation, tilted back 30° and turned with the screen. With `controls-follow-screen="true"` they're offsets from the screen instead. They default to `0 0 0` rather than empty because Unity picks each setting's field from its value: an empty one shows as a single text box instead of X, Y and Z. The `box-trigger-*` settings from the parameter reference work too.
 - The room ID is `room`, not `instance`: Unity's BSSnippet component writes its own `instance` attribute. Without `room`, the space URL is used, so each space has its own room.
 - `playlist-panel-position` and `playlist-panel-rotation` place the in-world panel in the world (Unity values), and it has its own drag handle in the Scene view. Clear `playlist-panel-position` to put the panel beside the screen instead; `playlist-panel-rotation` is then relative to the screen.
-- `button-position` is where the in-world buttons go (Unity world position), with its own drag handle. Empty puts them just under the screen; an empty `button-rotation` uses the screen's.
+- `button-position` is where the in-world buttons go (Unity world position), with its own drag handle. Empty (or `0 0 0`) puts them just under the screen; an empty or `0 0 0` `button-rotation` uses the screen's.
 - `controls-follow-screen="true"` makes `button-position`, `playlist-panel-position`, `singer-button-position` and their rotations offsets from the screen (in the screen's own axes) instead of world values, so the buttons and panel move and turn with the screen. Their drag handles then don't show where they'll be, as a gizmo can only show a setting's own value. For example `button-position="0 -0.67 0"` puts the buttons 0.67 m below the screen's centre.
 - An empty `youtube` uses the default silent video.
 - The section between the two comments is read as XML by Unity: quote every attribute, close every element, and write `&` as `&amp;`.
 
-The player uses the SDK's legacy A-Frame bridge, so `snippet.js` adds an `<a-scene>` if the page has none. With the plain script tag, add `<a-scene></a-scene>` to the page yourself.
+The player builds everything in the world with the BS SDK (`BS.GameObject` and components such as `BS.Browser`), so the page needs no `<a-scene>`; one left over from older versions does no harm. Script-tag positions and rotations still use A-Frame axes (Z flipped from Unity's), as before, so existing script tags keep working.
 
-In these worlds the Playlist button opens an **in-world panel** beside the screen. The main view has playback and volume controls, the playlist (play, reorder, remove, vote) and YouTube search. Under the search box are your last five searches (kept on your device; click one to search again, **Clear** forgets them) and, in karaoke mode, **+ karaoke**, **+ lyrics** and **+ zoom karaoke**, which add that word to the search. Search also accepts a video link, or a playlist link (host only), which replaces the playlist. **Refresh** fetches the latest playlist from the server; the panel also does this each time it opens. **More...** opens a second view with:
+In these worlds the Playlist button opens an **in-world panel** beside the screen. The main view has playback and volume controls, the playlist (play, reorder, remove, vote) and YouTube search. Under the search box are your last five searches (kept on your device; click one to search again, **Clear** forgets them) and, in karaoke mode, **+ karaoke**, **+ lyrics** and **+ zoom karaoke**, which add that word to the search. Search also accepts a video link, or a playlist link (host only), which replaces the playlist. Beside the page number, **<** and **>** turn one page, **<<** and **>>** five (shown once there are more than five pages), and **|<** and **>|** go to the first and last page. To move the panel, grab the pill under it in VR and carry it; the panel comes with it, stays upright and stays where you let go. The hand's Playlist button opens it in front of you, and the Playlist button by the screen puts it back beside the screen. Only your own panel moves. **Refresh** fetches the latest playlist from the server; the panel also does this each time it opens. **More...** opens a second view with:
 
 - host controls: lock, take over, voting, clear, load the default playlist
 - seek to a time (host)
-- your player only: skip back/forward, Auto Sync and Captions (closed captions on or off for you, remembered on your device)
+- your player only: skip back/forward, Auto Sync, Captions (closed captions on or off for you, remembered on your device) and Resolution (steps your screen's page through 1280 x 720, 1600 x 900 and 1920 x 1080, then back to the snippet's `resolution`; remembered on your device)
 - add by link: a video (YouTube, Twitch, Vimeo or a direct link, see [Links from other sites](#links-from-other-sites)), or a YouTube playlist (host)
 - mode: switch between playlist and karaoke, for space admins (see [Switching mode in world](#switching-mode-in-world))
 
@@ -141,11 +141,13 @@ These only work with `untrusted-links="true"` in the snippet, as they can come f
 
 | Link | Example | Notes |
 |---|---|---|
-| Video or audio file | `https://.../movie.mp4` (also .webm, .mov, .m4v, .mp3, .m4a, .ogg) | Stays in sync. |
+| Video or audio file | `https://.../movie.mp4` (also .webm, .mov, .m4v, .mp3, .m4a, .ogg) | Plays on the world's own video player, which takes the browser screen's place while it plays (see below). Stays in sync to within about a second. |
 | HLS stream | `https://.../index.m3u8` | Live streams play until someone skips; recorded ones stay in sync. The server must allow other sites to load it (CORS). |
 | VDO.Ninja | `https://vdo.ninja/?view=<stream id>`, or `?room=<room>&scene` for a whole room | Shown as VDO.Ninja's own page and plays until someone skips. Volume and mute work; there's no pause or seek. Its video controls (picture-in-picture, fullscreen) are hidden, as fullscreen would blank the screen. Links that would join a room or send video (`?push=`, `?room=` without `scene`) aren't accepted. |
 
 Without it, the server won't add them, and a player whose world doesn't allow them shows a notice instead of playing one. If a browser won't start a file with sound, it starts muted and the sound comes on at the first click on the screen.
+
+**Files play on the world's video player.** Many file hosts (Hostforever, for one) won't let a web page on another site load their files, so in a world a file plays on the SDK's own video player (Unity's) instead of in the browser. While it plays, the browser screen is removed and the video player is put in its place, and when the playlist moves on to YouTube or anything else, the video player is removed and the browser comes back, so only one runs at a time. Volume, mute, `spatial`, skips, pause and the host's controls work as usual. Unity's player can't change speed, so instead of easing back into step it jumps when it is more than a second out. Which formats play depends on the device (MP4 with H.264 video is the safest, especially on Quest). The video player is sized like the browser screen; set `native-screen-size` if it doesn't match yours. Outside a world (the 2D page) files still play in the browser.
 
 Files, streams and Twitch videos show no length until the first player loads them; after that the playlist moves on when they end. Captions and the "unavailable in your region" check only apply to YouTube. Pages that need a login can't be played. Dailymotion isn't supported, because its player now needs a player ID from a Dailymotion account.
 
@@ -180,7 +182,9 @@ All parameters are optional unless marked as **(Required)**.
 | `mute` | Whether the player should start muted. | `false` |
 | `untrusted-links` | Whether links from any site (video files, `.m3u8` streams, VDO.Ninja) can be played, as well as YouTube, Twitch and Vimeo. Off by default, as those links aren't moderated. Each viewer's own world must allow them for them to play on their screen. See [Links from other sites](#links-from-other-sites). | `false` |
 | `captions` | Whether closed captions start on. Each viewer can turn them on or off in the panel's More view, and their choice is remembered on their device. | `true` |
-| `resolution` | The resolution (width in pixels) of the browser surface. Higher values are crisper but use more resources. | `1600` |
+| `resolution` | The width in pixels of the screen's page, which is 16:9 (`1600` is 1600 x 900). Higher is sharper, and YouTube and Twitch lay out as for a bigger window, but each frame costs more to draw, especially on Quest. The screen stays the same size in the world whatever the resolution. Each viewer can pick another for their own screen in the panel's More view. From 640 to 3840. | `1600` |
+| `native-screen-size` | The size (`"width height"`, before `scale`) of the world video player that video and audio files play on. Empty matches the browser screen. | `""` (1 x 0.5625) |
+| `screen-debug` | Set to `true` to show, in a corner of the screen, the page's size, zoom and pixel ratio as the screen's browser reports them. For checking how the page fits the screen on a headset. | `false` |
 
 ### 3D Environment Parameters
 
@@ -189,24 +193,27 @@ All parameters are optional unless marked as **(Required)**.
 | `position` | The `x y z` position of the player screen in the 3D scene. | `0 0 0` |
 | `rotation` | The `x y z` rotation of the player screen. | `0 0 0` |
 | `scale` | The `x y z` scale of the player screen. | `1 1 1` |
-| `spatial` | Set to `true` to make the volume fade as you move away from the screen. It only changes the volume: Banter always plays the screen's sound in 3D, coming from the screen, and has no setting for 2D sound. | `true` |
+| `spatial` | Set to `true` to make the volume fade as you move away from the screen. Turned off, the volume is the same wherever you stand. Either way it only changes the volume: on PC the SDK always plays the screen's sound from the screen's direction (its browser has no 2D sound setting), and on Quest the page plays its own sound, which isn't placed in the world, so it's effectively 2D. | `true` |
 | `spatial-min-distance` | With `spatial` on, the distance at which the volume starts to fade. | `5` |
 | `spatial-max-distance` | With `spatial` on, how far past `spatial-min-distance` the volume reaches zero. | `40` |
-| `mip-maps` | The number of mip-map levels for the browser texture. Affects visual quality at sharp angles. | `1` |
+| `mip-maps` | The number of mip-map levels for the browser texture, in older Banter clients. The Creator SDK ignores it. | `1` |
 
 ### UI & Control Parameters
 
 | Attribute | Description | Default Value |
 | :--- | :--- | :--- |
-| `hand-controls` | Set to `true` to enable a small UI attached to the user's left hand in VR. | `false` |
+| `hand-controls` | Set to `true` to put six buttons on your left hand in VR: mute, volume down and up, skip back and forward (your player only), and the Playlist / Singers panel, which opens in front of you. They lie flat on the back of the wrist, and come back if you leave and rejoin the space. | `false` |
+| `hand-controls-position` | Moves the hand buttons: `x y z` in metres, in the hand's own Unity axes (not converted, in a snippet or a script tag). Empty uses the built-in layout. `z` slides them along the hand, away from the wrist toward the fingers (bigger) or toward the wrist (smaller); `x` lifts them off the back of the hand (more negative). | `0 0.046 0.07` |
+| `hand-controls-rotation` | Turns the hand buttons: `x y z` in degrees, in the hand's own Unity axes. For example add `180` to `y` if they face into the wrist, add `180` to `z` if they're upside down, or change `z` by `90` to turn them on the wrist. | `0 90 180` |
 | `button-position` | The `x y z` position of the in-world UI buttons, relative to the player screen. | `0 0 0` |
-| `button-rotation` | The `x y z` rotation of the in-world UI buttons. | `0 0 0` |
+| `button-rotation` | The `x y z` rotation of the in-world UI buttons. `0 0 0` (or empty) means "the same as the screen's rotation", not zero, so for a true zero on a turned screen use something like `0.001 0 0`. | `0 0 0` |
 | `button-scale` | The `x y z` scale of the in-world UI buttons. | `1 1 1` |
 | `playlist-ui` | What the Playlist (or, in karaoke mode, Singers) button opens. `panel`: an in-world panel (UI Toolkit) with controls, the playlist or singer queue, and search. `page`: the 2D playlist page in the client's menu browser. `auto`: `panel` whenever the client has the UI system (the SideQuest/Altspace Creator SDK), otherwise `page`. | `auto` |
 | `playlist-panel-position` | Where the in-world panel sits in the world, in the same units as `position`. When set, `playlist-panel-rotation` is a world rotation too (empty = the screen's rotation), and `playlist-panel-offset` is ignored. | (beside the screen) |
 | `playlist-panel-offset` | Where the in-world panel sits, relative to the screen, in metres: `x` right, `y` up, `z` toward the viewer. Empty puts it just right of the screen. | (beside the screen) |
 | `playlist-panel-rotation` | The in-world panel's rotation: relative to the screen, or a world rotation when `playlist-panel-position` is set. Empty: relative `0 -20 0` (turned slightly toward the screen's centre), or the screen's rotation. | (see description) |
 | `playlist-panel-scale` | Size of the in-world panel. `1` is 1.4 m wide. | `1` |
+| `playlist-panel-front-height` | When the hand's Playlist button opens the panel in front of you, how high above the floor you stand on its middle goes, in metres. | `1.4` |
 | `data-playlist-icon-url` | URL for a custom "Playlist/Singers" button icon. | Default icon |
 | `data-vol-up-icon-url` | URL for a custom "Volume Up" button icon. | Default icon |
 | `data-vol-down-icon-url` | URL for a custom "Volume Down" button icon. | Default icon |
@@ -221,10 +228,10 @@ All parameters are optional unless marked as **(Required)**.
 | `singer-button-position` | The `x y z` position of the "Join/Leave Queue" button. | `0 ${-yScale*0.335} 3` |
 | `singer-button-rotation` | The `x y z` rotation of the "Join/Leave Queue" button. | `-30 180 0` |
 | `box-trigger-enter-enabled` | Set to `true` to automatically start the next singer's song when they enter a trigger volume. | `false` |
-| `box-trigger-exit-enabled` | Set to `true` to automatically stop the song and remove the singer when they leave a trigger volume. | `false` |
-| `box-trigger-position` | The `x y z` position of the trigger volume. | `0 0 0` |
+| `box-trigger-exit-enabled` | Set to `true` to automatically stop the song and remove the singer when they leave a trigger volume (5 seconds after the last of their body, head and hands is out). | `false` |
+| `box-trigger-position` | The `x y z` position of the trigger volume, relative to the in-world buttons. | `0 0 0` |
 | `box-trigger-rotation` | The `x y z` rotation of the trigger volume. | `0 0 0` |
-| `box-trigger-scale` | The `x y z` scale of the trigger volume. | `1 1 1` |
+| `box-trigger-scale` | The `x y z` size of the trigger volume, in metres (it's a 1 m box before scaling). | `1 1 1` |
 
 ### Miscellaneous Parameters
 

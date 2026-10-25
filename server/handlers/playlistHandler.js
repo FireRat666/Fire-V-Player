@@ -1,3 +1,10 @@
+/**
+ * @fileoverview WebSocket command handlers for Playlist management.
+ * Handles adding, moving, removing items, bulk importing from YouTube playlists,
+ * queuing tracks immediately, and crowd voting with dynamic reordering.
+ * @module server/handlers/playlistHandler
+ */
+
 const Commands = require('../../public/commands.js');
 const { getInnertube, getLibrary } = require('../youtube/youtubeiService.js');
 const Scraper = require('../youtube/scraper.js');
@@ -5,7 +12,13 @@ const scraper = new Scraper();
 const media = require('../media.js');
 
 /**
- * Resolves a raw URL/ID or incomplete video object into a fully populated video object.
+ * Resolves a raw URL/ID or partial video metadata object into a standardized, fully populated video object.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - Client WebSocket requesting resolution.
+ * @param {string|Object} v - URL string, YouTube ID, or partially populated video object.
+ * @returns {Promise<Object>} The resolved video object with title, duration, link, and thumbnail.
+ * @throws {Error} If video resolution fails or link is untrusted/invalid.
  */
 async function resolveVideoData(app, ws, v) {
   if (typeof v === 'string') {
@@ -43,8 +56,16 @@ async function resolveVideoData(app, ws, v) {
   return v;
 }
 
-// The original call in app.js was (v, skipUpdate, isYoutubeWebsite, ws).
-// We'll pass `app` (this) and `ws` first for consistency.
+/**
+ * Adds a video to the end of the playlist for the client's room.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - Client WebSocket requesting the addition.
+ * @param {string|Object} v - Video URL or partial object to add.
+ * @param {boolean} [skipUpdate] - If true, skips broadcasting ITEM_APPENDED to clients.
+ * @param {boolean} [isYoutubeWebsite] - Whether the request originated from the web search.
+ * @returns {Promise<void>}
+ */
 async function addToPlaylist(app, ws, v, skipUpdate, isYoutubeWebsite) {
   const player = app.videoPlayers[ws.i];
   if (player) {
@@ -78,6 +99,17 @@ async function addToPlaylist(app, ws, v, skipUpdate, isYoutubeWebsite) {
   }
 }
 
+/**
+ * Reorders a playlist item to a new position.
+ * Preserves the currently playing track's identity across the move.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - Client WebSocket requesting the move.
+ * @param {Object} params - Movement parameters.
+ * @param {string} params.url - URL link of the item to move.
+ * @param {number} params.index - Destination index in the playlist.
+ * @returns {Promise<void>}
+ */
 async function movePlaylistItem(app, ws, { url, index }) {
   if (app.videoPlayers[ws.i]) {
     app.onlyIfHost(ws, async () => {
@@ -101,6 +133,15 @@ async function movePlaylistItem(app, ws, { url, index }) {
   }
 }
 
+/**
+ * Removes an item from the playlist at the specified index.
+ * Adjusts `currentTrack` if the removed track came before it.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - Client WebSocket requesting removal.
+ * @param {number} index - Index of the item to remove.
+ * @returns {Promise<void>}
+ */
 async function removePlaylistItem(app, ws, index) {
   if (app.videoPlayers[ws.i]) {
     app.onlyIfHost(ws, async () => {
@@ -120,6 +161,17 @@ async function removePlaylistItem(app, ws, index) {
   }
 }
 
+/**
+ * Loads and appends up to 100 tracks from an external YouTube playlist.
+ * Filters out duplicate items and updates client player state.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - Client WebSocket requesting playlist import.
+ * @param {Object} data - Playlist import configuration.
+ * @param {string} data.id - YouTube playlist URL or ID.
+ * @param {boolean} [data.shouldClear] - Whether to clear the existing playlist before import.
+ * @returns {Promise<void>}
+ */
 async function fromPlaylist(app, ws, data) {
   const playlistId = app._getPlaylistId(data.id);
   if (!playlistId) {
@@ -239,6 +291,15 @@ async function fromPlaylist(app, ws, data) {
     }
   });
 }
+
+/**
+ * Clears all items from the current instance's playlist.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - Client WebSocket requesting the clear.
+ * @param {boolean} [skipUpdate] - If true, skips broadcasting the PLAYLIST_UPDATED command.
+ * @returns {Promise<void>}
+ */
 async function clearPlaylist(app, ws, skipUpdate) {
   if (app.videoPlayers[ws.i]) {
     app.onlyIfHost(ws, async () => {
@@ -253,6 +314,15 @@ async function clearPlaylist(app, ws, skipUpdate) {
     }, app.videoPlayers[ws.i].locked);
   }
 }
+
+/**
+ * Appends a video to the playlist and immediately switches playback to it.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - Client WebSocket requesting immediate playback.
+ * @param {string|Object} v - Video link or object.
+ * @returns {Promise<void>}
+ */
 async function addAndPlay(app, ws, v) {
   if (app.videoPlayers[ws.i]) {
     app.onlyIfHost(ws, async () => {
@@ -286,6 +356,15 @@ async function addAndPlay(app, ws, v) {
     }, app.videoPlayers[ws.i].locked);
   }
 }
+
+/**
+ * Inserts a video immediately following the current track (up next).
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - Client WebSocket requesting play next.
+ * @param {string|Object} v - Video link or object.
+ * @returns {Promise<void>}
+ */
 async function addAndPlayNext(app, ws, v) {
   if (app.videoPlayers[ws.i]) {
     app.onlyIfHost(ws, async () => {
@@ -314,6 +393,16 @@ async function addAndPlayNext(app, ws, v) {
   }
 }
 
+/**
+ * Records an upvote or downvote on a playlist item by a connected user.
+ * Cannot vote on the currently playing track. Triggers re-sorting if voting mode is active.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - Client WebSocket casting the vote.
+ * @param {string} link - URL link of the target video.
+ * @param {boolean} isDown - True for downvote, false for upvote.
+ * @returns {Promise<void>}
+ */
 async function setVote(app, ws, link, isDown) {
   const player = app.videoPlayers[ws.i];
   const videoObject = player ? player.playlist.find(v => v.link === link) : null;
@@ -334,6 +423,14 @@ async function setVote(app, ws, link, isDown) {
   }
 }
 
+/**
+ * Recalculates vote tallies for all upcoming tracks and sorts the playlist in descending order of votes.
+ * Preserves the current active track at index 0.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {string} instanceId - Room/instance identifier.
+ * @returns {void}
+ */
 function updateVotes(app, instanceId) {
   const player = app.videoPlayers[instanceId];
   // Only sort if voting is on and there's something to sort.
@@ -358,6 +455,18 @@ function updateVotes(app, instanceId) {
     player.currentTrack = 0;
   }
 }
+
+module.exports = {
+  addToPlaylist,
+  movePlaylistItem,
+  removePlaylistItem,
+  fromPlaylist,
+  clearPlaylist,
+  addAndPlay,
+  addAndPlayNext,
+  setVote,
+  updateVotes
+};
 
 module.exports = {
   addToPlaylist,

@@ -1,35 +1,25 @@
-// Fire-V-Player as a SideQuest/Altspace Creator SDK snippet.
-//
-//   <bs-snippet name="fire-v-player" title="Fire-V-Player" single="true"
-//     script="https://vidya.firer.at/snippet.js"
-//     room="my-room" position="0 1.5 2" rotation="0 0 0" scale="2" ...></bs-snippet>
-//
-// karaoke="false" (the default) runs a shared playlist, karaoke="true" a singer queue, as with
-// playlist.js / karaoke.js. It's true/false so Unity's Inspector shows it as a checkbox.
-// mode="karaoke" works too. Both open an in-world panel from the Playlist / Singers button.
-//
-// Settings are the same as playlist.js's and karaoke.js's script attributes (see USAGE.md), except:
-// - position / rotation are Unity world values, like every snippet, so the Scene-view gizmo
-//   shows where the screen will be. They are converted to the script tag's units here (A-Frame
-//   axes, from when the player ran on the A-Frame bridge), which the player turns back into Unity's.
-// - scale may be a single number.
-// - playlist-panel-position / -rotation, button-position / -rotation and (karaoke)
-//   singer-button-position / -rotation are world values too, so they get their own gizmos. With
-//   controls-follow-screen="true" they are offsets from the screen instead, and move with it.
-//   An empty singer-button-position keeps the script tag's default: placed from the buttons.
-// - the room id is "room", because Unity's BSSnippet component writes its own "instance"
-//   attribute. Without "room" the player uses the space URL, so each space has its own room.
-//
-// The player builds everything with the BS SDK (BS.GameObject and its components), so the page
-// needs no <a-scene>.
+/**
+ * @fileoverview Creator SDK / Banter snippet entry point for Fire-V-Player (`<bs-snippet>`).
+ * Adapts Unity Inspector coordinate systems, transforms Euler rotations, handles
+ * control-follow-screen offsets, and launches the player instance.
+ * @module public/snippet
+ */
+
 (() => {
   const SNIPPET_NAME = 'fire-v-player';
   const thisScript = document.currentScript;
 
+  /** Parses whitespace/comma delimited numbers into an array. @param {string} str @returns {number[]} */
   const parse = (str) => String(str || '').trim().split(/[\s,]+/).filter(Boolean).map(Number);
+  /** Formats an array of numbers into a space-separated string. @param {number[]} arr @returns {string} */
   const fmt = (arr) => arr.map(n => (Object.is(n, -0) ? 0 : n)).join(' ');
 
-  // Unity <-> script-tag (A-Frame) axes: Z is mirrored, i.e. position (x, y, -z), rotation (-x, -y, z).
+  /**
+   * Converts Unity coordinates to script-tag / A-Frame convention (mirrors Z axis).
+   * @param {string} value - Space separated numeric string.
+   * @param {'pos'|'rot'|'scale'} kind - Transform attribute kind.
+   * @returns {string} Converted coordinate string.
+   */
   const convert = (value, kind) => {
     const p = parse(value);
     if (kind === 'scale') {
@@ -52,14 +42,18 @@
   // Rotations in Unity's convention (Euler degrees applied Z, then X, then Y), for placing the
   // buttons relative to the screen.
   const D = Math.PI / 180;
+  /** Multiplies two quaternions [x, y, z, w]. */
   const qMul = (a, b) => [
     a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
     a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
     a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
     a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2]
   ];
+  /** Creates axis-angle quaternion. */
   const qAxis = (axis, deg) => { const q = [0, 0, 0, Math.cos(deg * D / 2)]; q[axis] = Math.sin(deg * D / 2); return q; };
+  /** Converts Euler angles [x, y, z] to quaternion. */
   const qEuler = ([x, y, z]) => qMul(qMul(qAxis(1, y), qAxis(0, x)), qAxis(2, z));
+  /** Converts quaternion to Euler angles [x, y, z]. */
   const qToEuler = ([x, y, z, w]) => {
     const r = (v) => Math.round(((v / D) % 360 + 360) % 360 * 1000) / 1000;
     return [
@@ -68,14 +62,21 @@
       r(Math.atan2(2 * (w * z + x * y), 1 - 2 * (x * x + z * z)))
     ];
   };
+  /** Rotates a 3D vector by a quaternion. */
   const qRotate = (q, v) => {
     const p = qMul(qMul(q, [v[0], v[1], v[2], 0]), [-q[0], -q[1], -q[2], q[3]]);
     return [p[0], p[1], p[2]];
   };
+  /** Parses a 3-element numeric vector from string or falls back to default. */
   const vec = (str, def) => { const p = parse(str); return p.length >= 3 && !p.slice(0, 3).some(isNaN) ? p.slice(0, 3) : def; };
   const round = (v) => v.map(n => Math.round(n * 1000) / 1000);
 
-  // Makes a <bs-snippet> element look like the <script> tag the player expects.
+  /**
+   * Adapts a `<bs-snippet>` DOM element to provide the interface expected by `BasePlayer` / `playlist-player.js`.
+   *
+   * @param {HTMLElement} el - The `<bs-snippet>` DOM element.
+   * @returns {Object} Adapted source descriptor.
+   */
   const adapter = (el) => {
     const scriptUrl = new URL(el.getAttribute('script') || (thisScript && thisScript.src) || 'https://vidya.firer.at/snippet.js', location.href);
     const attr = (name) => (el.getAttribute(name) || '').trim();
@@ -151,6 +152,7 @@
     };
   };
 
+  /** Dynamically loads external script. @param {string} src @returns {Promise<boolean>} */
   const loadScript = (src) => new Promise(resolve => {
     const s = document.createElement('script');
     s.setAttribute('src', src);
@@ -159,6 +161,7 @@
     document.body.appendChild(s);
   });
 
+  /** Finds snippet elements, constructs adapted source, and launches player. */
   const run = async () => {
     const els = document.querySelectorAll(`bs-snippet[name="${SNIPPET_NAME}"]`);
     if (!els.length) {

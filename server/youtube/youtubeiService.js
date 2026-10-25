@@ -1,7 +1,21 @@
+/**
+ * @fileoverview Dynamic loader and singleton manager for the Innertube (`youtubei.js`) library.
+ * Configures YouTube authentication cookies, custom AST runtime parsers, playlist continuation patches,
+ * and initialization timeouts with retry support.
+ * @module server/youtube/youtubeiService
+ */
+
 let innertubePromise = null;
 const INIT_TIMEOUT_MS = 20000;
 let libraryPromise = null;
 
+/**
+ * Dynamically imports the `youtubei.js` ESM package, memoizing the import promise.
+ * Resets the cache on error to allow subsequent callers to retry.
+ *
+ * @returns {Promise<any>} The imported `youtubei.js` module.
+ * @throws {Error} If importing the package fails.
+ */
 async function getLibrary() {
   if (!libraryPromise) {
     libraryPromise = import('youtubei.js').catch(err => {
@@ -13,6 +27,14 @@ async function getLibrary() {
   return libraryPromise;
 }
 
+/**
+ * Initializes and returns a singleton instance of the Innertube client.
+ * Registers custom node parsers (`ContinuationItemView`, `VerticalProductCard`), applies
+ * prototype patches for playlist items and continuations, and configures authentication cookies.
+ *
+ * @returns {Promise<any>} The initialized Innertube client instance.
+ * @throws {Error} If initialization fails or exceeds timeout.
+ */
 async function getInnertube() {
   if (!innertubePromise) {
     innertubePromise = (async () => {
@@ -195,6 +217,11 @@ async function getInnertube() {
   }
   return innertubePromise;
 }
+
+module.exports = {
+  getInnertube,
+  getLibrary
+};
 
 module.exports = {
   getInnertube,

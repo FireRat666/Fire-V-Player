@@ -1,17 +1,40 @@
-// Turns a non-YouTube link (Twitch, Vimeo, a video file or stream) into a playlist item:
-// { title, thumbnail, duration (ms, 0 if not known yet or live), link }.
-// When the length isn't known here, the first player to load the video reports it (MEDIA_DURATION).
+/**
+ * @fileoverview Media link resolver and validator for non-YouTube media sources.
+ * Resolves external links (Twitch, Vimeo, VDO.Ninja, audio/video files, and HLS streams)
+ * into standardized playlist items, and enforces security trust policies.
+ * @module server/media
+ */
+
 const MediaSources = require('../public/media-sources.js');
 
 const FETCH_TIMEOUT_MS = 5000;
 
+/**
+ * @typedef {Object} PlaylistItem
+ * @property {string} title - The title of the media item.
+ * @property {string} thumbnail - URL to the media thumbnail image, if available.
+ * @property {number} duration - Media duration in milliseconds (0 if live or unknown).
+ * @property {string} link - The canonical playback URL.
+ */
+
+/**
+ * Fetches JSON from a remote URL with a timeout.
+ * @param {string} url - Target URL to fetch.
+ * @returns {Promise<Object>} The parsed JSON response.
+ * @throws {Error} If HTTP response status is not OK.
+ */
 async function fetchJson(url) {
   const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
 
-// Twitch has no public API without a key, but its pages carry the title in og:title.
+/**
+ * Fetches the OpenGraph title (`og:title`) from an HTML webpage.
+ * Used primarily for Twitch stream or video pages where public API keys are unavailable.
+ * @param {string} url - Web page URL to scrape.
+ * @returns {Promise<string|null>} The parsed and unescaped title, or null if not found or on error.
+ */
 async function fetchPageTitle(url) {
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS), headers: { 'User-Agent': 'Mozilla/5.0' } });
@@ -26,6 +49,15 @@ async function fetchPageTitle(url) {
   }
 }
 
+/**
+ * Resolves an external media URL into a normalized playlist item.
+ * Supports Twitch streams, clips, and VODs; Vimeo videos via oEmbed; VDO.Ninja streams;
+ * and raw media files or HLS streams.
+ *
+ * @param {string} link - Media URL to resolve.
+ * @returns {Promise<PlaylistItem|null>} The resolved playlist item, or null if unsupported or if YouTube.
+ * @throws {Error} If media resolution fails (e.g. Vimeo embed restrictions).
+ */
 async function resolveMediaLink(link) {
   const media = MediaSources.detect(link);
   if (!media || media.type === 'youtube') return null;
@@ -86,8 +118,16 @@ async function resolveMediaLink(link) {
   return { title: MediaSources.nameFromLink(link), thumbnail: '', duration: 0, link };
 }
 
-// Whether this connection may add the link: YouTube, Twitch and Vimeo always; other links only when
-// the world's snippet sets untrusted-links="true" (sent when the world joins the room).
+/**
+ * Checks whether a WebSocket client connection is permitted to queue the specified media link.
+ * Known trusted providers (YouTube, Twitch, Vimeo) are always permitted.
+ * Direct links and files require untrusted link permissions enabled on the connection.
+ *
+ * @param {Object} ws - The client WebSocket connection object.
+ * @param {boolean} [ws.allowUntrusted] - Whether untrusted links are allowed for this client.
+ * @param {string} link - The media link to validate.
+ * @returns {boolean} True if the link is permitted for this connection.
+ */
 function allowedFor(ws, link) {
   const m = MediaSources.detect(link);
   return MediaSources.isTrusted(m) || !!(ws && ws.allowUntrusted);

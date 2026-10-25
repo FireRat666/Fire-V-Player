@@ -1,7 +1,27 @@
-const Commands = require('../../public/commands.js');
-const SkipJumpTimePlaylist = 5;
-const SkipJumpTimeKaraoke = 0.25; // 250ms for karaoke, to allow for more precise timing.
+/**
+ * @fileoverview WebSocket command handlers for host permissions, playback controls,
+ * and instance state management. Handles host takeover, locks, seeking, skipping,
+ * track changes, pausing, and voting toggles.
+ * @module server/handlers/hostHandler
+ */
 
+const Commands = require('../../public/commands.js');
+
+/** Jump increment in seconds when skipping in playlist mode. */
+const SkipJumpTimePlaylist = 5;
+
+/** Jump increment in seconds when skipping in karaoke mode (250ms for finer sync). */
+const SkipJumpTimeKaraoke = 0.25;
+
+/**
+ * Toggles the locked status of the player instance, restricting non-host controls.
+ * Broadcasts the lock state change to all clients in the instance.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - Client WebSocket requesting the action.
+ * @param {boolean} locked - The new locked state.
+ * @returns {Promise<void>}
+ */
 async function toggleLock(app, ws, locked) {
   app.onlyIfHost(ws, async () => {
     const player = app.videoPlayers[ws.i];
@@ -14,6 +34,15 @@ async function toggleLock(app, ws, locked) {
   });
 }
 
+/**
+ * Enables or disables the ability for other users to take over host privileges.
+ * Host must be connected to the 3D space to disable takeover.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - Client WebSocket requesting the action.
+ * @param {boolean} canTakeOver - Whether non-hosts are permitted to assume host role.
+ * @returns {Promise<void>}
+ */
 async function toggleCanTakeOver(app, ws, canTakeOver) {
   app.onlyIfHost(ws, async () => {
     const player = app.videoPlayers[ws.i];
@@ -33,6 +62,14 @@ async function toggleCanTakeOver(app, ws, canTakeOver) {
   });
 }
 
+/**
+ * Transfers host permissions to the requesting user if takeover is permitted.
+ * Updates host state, resets any active takeover grace timeout, and alerts clients.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - Client WebSocket requesting to take over host role.
+ * @returns {Promise<void>}
+ */
 async function takeOver(app, ws) {
   const player = app.videoPlayers[ws.i];
   if(player && player.canTakeOver) {
@@ -60,6 +97,15 @@ async function takeOver(app, ws) {
   }
 }
 
+/**
+ * Skips forward or backward in the currently playing video by a fixed duration increment.
+ * Adjusts `lastStartTime` and broadcasts `HOST_SEEK` to all connected clients.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - Client WebSocket requesting the skip.
+ * @param {boolean} isForward - True to skip forward, false to skip backward.
+ * @returns {Promise<void>}
+ */
 async function hostSkip(app, ws, isForward) {
   app.onlyIfHost(ws, async () => {
     const player = app.videoPlayers[ws.i];
@@ -88,6 +134,13 @@ async function hostSkip(app, ws, isForward) {
   });
 }
 
+/**
+ * Resets playback state and clears the playlist for a specific room instance.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {string} instanceId - Room/instance identifier.
+ * @returns {Promise<void>}
+ */
 async function internalStop(app, instanceId) {
   const player = app.videoPlayers[instanceId];
   if (!player) return;
@@ -101,12 +154,26 @@ async function internalStop(app, instanceId) {
   await app.savePlayerState(instanceId);
 }
 
+/**
+ * Host-guarded stop command that clears playback and empties the queue.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - Client WebSocket requesting stop.
+ * @returns {Promise<void>}
+ */
 async function stop(app, ws) {
   app.onlyIfHost(ws, async () => internalStop(app, ws.i), app.videoPlayers[ws.i].locked);
 }
 
-// data is a track index, or { index, link }. With a link the server picks that video, so a
-// client whose copy of the playlist is out of date still plays the song that was clicked.
+/**
+ * Changes the current playback track index.
+ * Supports passing either an index number or an object `{ index, link }` to guard against stale UI state.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - Client WebSocket requesting track change.
+ * @param {number|{index: number, link?: string}} data - Track index or object with track index and fallback link.
+ * @returns {Promise<void>}
+ */
 async function setVideoTrack(app, ws, data) {
   const player = app.videoPlayers[ws.i];
   if (!player) return;
@@ -139,6 +206,15 @@ async function setVideoTrack(app, ws, data) {
   }, player.locked && !player.canVote);
 }
 
+/**
+ * Seeks the current video to an absolute playback position in seconds.
+ * Clamps timestamp between 0 and track duration, and notifies all connected clients.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - Client WebSocket requesting seek.
+ * @param {number} time - Playback target timestamp in seconds.
+ * @returns {Promise<void>}
+ */
 async function setVideoTime(app, ws, time) {
   const player = app.videoPlayers[ws.i];
   if (!player) return;
@@ -166,6 +242,14 @@ async function setVideoTime(app, ws, time) {
   }, player.locked);
 }
 
+/**
+ * Toggles whether voting mode is active for the current room instance.
+ * When enabled, resets existing votes and notifies clients.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - Client WebSocket requesting vote toggle.
+ * @returns {Promise<void>}
+ */
 async function toggleVote(app, ws) {
   if (app.videoPlayers[ws.i]) {
     app.onlyIfHost(ws, async () => {
@@ -188,6 +272,14 @@ async function toggleVote(app, ws) {
   }
 }
 
+/**
+ * Toggles playback between pause and playing.
+ * Synchronizes elapsed `currentTime` and `lastStartTime`, broadcasting state change to all clients.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - Client WebSocket requesting toggle pause.
+ * @returns {Promise<void>}
+ */
 async function togglePause(app, ws) {
   console.log(`[PAUSE] Toggle request from ${ws.u ? ws.u.name : 'unknown'} (${ws.u ? ws.u.id : 'N/A'}) for instance ${ws.i}`);
   app.onlyIfHost(ws, async () => {

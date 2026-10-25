@@ -1,10 +1,30 @@
+/**
+ * @fileoverview Base player bootstrap class for loading configuration, core runtime,
+ * and initializing in-world widgets or standalone players.
+ * @module public/base-player
+ */
+
+/**
+ * Abstract foundation class for specialized players (e.g. PlaylistPlayer, KaraokePlayer).
+ * Handles host URL resolution, protocol determination, script injection, and core initialization.
+ * @class BasePlayer
+ */
 var BasePlayer = class {
+  /**
+   * Constructs a BasePlayer instance.
+   * @param {HTMLScriptElement} currentScript - The DOM script element that loaded the specialized player.
+   */
   constructor(currentScript) {
     // The 'currentScript' is passed in from the child class (e.g., PlaylistPlayer)
     // because document.currentScript would be null for this dynamically loaded script.
+    /** @type {HTMLScriptElement} */
     this.currentScript = currentScript;
   }
 
+  /**
+   * Resolves the authoritative backend host URL from APP_CONFIG or script origin.
+   * @returns {string} Sanitized host domain (e.g. "localhost:3000" or "vidya.firer.at").
+   */
   getHostUrl() {
     let host = window.APP_CONFIG ? window.APP_CONFIG.HOST_URL : '';
     if (window.APP_CONFIG && typeof window.APP_CONFIG.resolveHostUrl === 'function') {
@@ -25,6 +45,11 @@ var BasePlayer = class {
     return host;
   }
 
+  /**
+   * Determines the network protocol ('http' or 'https') for connecting to the host.
+   * @param {string} [host] - Optional target host to test for localhost / IP.
+   * @returns {'http'|'https'} The resolved protocol without colon.
+   */
   getProtocol(host) {
     const targetHost = host || this.getHostUrl();
     if (this.currentScript && this.currentScript.src) {
@@ -44,6 +69,11 @@ var BasePlayer = class {
     return 'https';
   }
 
+  /**
+   * Executes the common bootstrapping sequence: loads config, injects core.js,
+   * configures parameters, and initiates core engine.
+   * @returns {Promise<void>}
+   */
   async init() {
     // This is the common initialization sequence shared by all player types.
     await this.setupConfigScript();
@@ -60,6 +90,10 @@ var BasePlayer = class {
     await this.core.init();
   }
 
+  /**
+   * Injects the `core.js` engine script element into the document.
+   * @returns {Promise<Event>} Resolves when core script finishes loading.
+   */
   setupCoreScript() {
     const host = this.getHostUrl();
     const proto = this.getProtocol(host);
@@ -71,6 +105,10 @@ var BasePlayer = class {
     });
   }
 
+  /**
+   * Injects the `config.js` script element into the document.
+   * @returns {Promise<Event>} Resolves when configuration script finishes loading.
+   */
   setupConfigScript() {
     const currentScriptUrl = new URL(this.currentScript.src);
     const configUrl = `${currentScriptUrl.origin}/config.js`;
@@ -81,4 +119,4 @@ var BasePlayer = class {
       document.body.appendChild(myScript);
     });
   }
-}
+};

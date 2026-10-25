@@ -1,8 +1,29 @@
+/**
+ * @fileoverview PlayerState Sequelize model definition.
+ * Stores persistent room/instance player state (queue, playback mode, locks, volume, etc.).
+ * @module server/models/playerState
+ */
+
 'use strict';
 const {
   Model
 } = require('sequelize');
+
+/**
+ * Initializes and exports the PlayerState model.
+ *
+ * @param {import('sequelize').Sequelize} sequelize - Sequelize database instance.
+ * @param {typeof import('sequelize').DataTypes} DataTypes - Sequelize data types.
+ * @returns {typeof Model} The initialized PlayerState model.
+ */
 module.exports = (sequelize, DataTypes) => {
+  /**
+   * Entity representing the persisted state of a player instance/room.
+   * @class PlayerState
+   * @extends {Model}
+   * @property {string} instanceId - Unique identifier for the player room or world instance.
+   * @property {Object} playerData - Serialized JSON payload containing playback status, playlist items, and host state.
+   */
   class PlayerState extends Model {}
   PlayerState.init({
     instanceId: {

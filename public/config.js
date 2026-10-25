@@ -1,12 +1,17 @@
-// This is the central configuration file for the Fire-V-Player.
-// You can specify a single domain or an array of domains in 'HOST_URL'.
-// When multiple domains are configured, the player automatically detects and uses
-// the domain matching the current environment, making it easy to test on dev servers
-// or point multiple domains to the same app without changing this file.
-// Do not include "https://", "wss://", or a trailing slash.
-// Examples:
-//   HOST_URL: ['vidya.firer.at', 'localhost:3000']
-//   HOST_URL: 'vidya.firer.at'
+/**
+ * @fileoverview Frontend host domain configuration and automatic resolution logic.
+ * Detects current environment domain against configured candidates (e.g. localhost, test, prod).
+ * @module public/config
+ */
+
+/**
+ * @typedef {Object} AppConfig
+ * @property {string|string[]} HOST_URL - Active host domain, or array of supported domains.
+ * @property {string|string[]} [_RAW_HOST_URL] - Unresolved raw host URL configuration.
+ * @property {string[]} [HOST_URLS] - List of sanitized host domain candidates.
+ * @property {function(string|string[]): string} [resolveHostUrl] - Resolves matched domain for current environment.
+ * @property {function(string): string} [cleanHost] - Strips protocols and trailing slashes.
+ */
 
 window.APP_CONFIG = {
   HOST_URL: [
@@ -18,11 +23,20 @@ window.APP_CONFIG = {
 
 // Automatic resolution for multiple domains / dev testing:
 (() => {
+  /**
+   * Sanitizes a host string by stripping protocols ('https://', 'http://') and trailing slashes.
+   * @param {string} url - Raw URL or host string.
+   * @returns {string} Cleaned host domain.
+   */
   function cleanHost(url) {
     if (!url || typeof url !== 'string') return '';
     return url.replace(/^[a-zA-Z]+:\/\//, '').replace(/\/+$/, '').trim();
   }
 
+  /**
+   * Scans script tags and window location to collect candidate host domains.
+   * @returns {string[]} List of detected host domains.
+   */
   function getCandidateHosts() {
     const candidates = [];
 
@@ -54,6 +68,13 @@ window.APP_CONFIG = {
     return candidates.filter(Boolean);
   }
 
+  /**
+   * Resolves the best matching host URL for the current environment from configured candidates.
+   * Performs exact matching first, then falls back to hostname-only matching (ignoring port).
+   *
+   * @param {string|string[]} hostConfig - Configured host URL or array of candidate hosts.
+   * @returns {string} The resolved active host domain.
+   */
   function resolveHostUrl(hostConfig) {
     let hosts = [];
     if (Array.isArray(hostConfig)) {

@@ -1,17 +1,35 @@
-// Plays playlist items that aren't on YouTube: video/audio files, HLS streams (.m3u8), Twitch and
-// Vimeo. MediaSwitch has the same methods player.js already calls on the YouTube player, and passes
-// each call to YouTube or to the player for the current link, so the sync code works with all of them.
-// Needs media-sources.js (MediaSources) loaded first.
+/**
+ * @fileoverview Unified media player abstraction and multi-source switch.
+ * Adapts non-YouTube media sources (HTML5 video, HLS streams, Twitch streams/VODs/clips,
+ * Vimeo, and VDO.Ninja) to expose the same interface as the YouTube iframe API,
+ * allowing synchronized playback, seek, volume, and state management.
+ * @module public/media-players
+ */
 
-// The same numbers as YT.PlayerState, which player.js compares against.
+/**
+ * Standard playback states matching YouTube iframe API (YT.PlayerState).
+ * @readonly
+ * @enum {number}
+ */
 const MEDIA_STATE = { UNSTARTED: -1, ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3 };
 
+/**
+ * External player library script CDNs loaded on-demand.
+ * @type {Record<string, string>}
+ */
 const MEDIA_SCRIPTS = {
   hls: 'https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js',
   twitch: 'https://player.twitch.tv/js/embed/v1.js',
   vimeo: 'https://player.vimeo.com/api/player.js'
 };
+
 const mediaScriptLoads = {};
+
+/**
+ * Dynamically loads an external media player JavaScript SDK by name.
+ * @param {'hls'|'twitch'|'vimeo'} name - Player library key.
+ * @returns {Promise<Event>} Resolves when script is loaded.
+ */
 function loadMediaScript(name) {
   if (!mediaScriptLoads[name]) {
     mediaScriptLoads[name] = new Promise((resolve, reject) => {
@@ -25,20 +43,37 @@ function loadMediaScript(name) {
   return mediaScriptLoads[name];
 }
 
-// What each source player below provides:
-//   play() pause() seek(seconds) time() state() setRate(r) rate() setVolume(0-100) setMuted(bool)
-//   isLive() destroy()
-// play/pause/seek asked for before the player is ready are remembered and applied once it is.
+/**
+ * Abstract base class for non-YouTube media source player adapters.
+ * @class BaseMediaSource
+ */
 class BaseMediaSource {
+  /**
+   * @param {Object} opts - Source configuration options.
+   * @param {HTMLElement} opts.container - Parent DOM container element.
+   * @param {string} opts.link - Canonical media playback URL.
+   * @param {number} opts.start - Initial playback start timestamp in seconds.
+   * @param {number} opts.volume - Initial volume level (0-100).
+   * @param {boolean} opts.muted - Initial muted state.
+   * @param {function(number): void} opts.onDuration - Callback invoked when media duration is determined.
+   * @param {function(string): void} opts.onError - Callback invoked on player errors.
+   */
   constructor(opts) {
     this.opts = opts;           // { container, link, start, volume, muted, onDuration, onError }
     this.wantPaused = false;
     this.live = false;
     this.ready = false;
   }
-  setRate() {}
+  /** Sets playback rate. @param {number} r */
+  setRate(r) {}
+  /** Gets playback rate. @returns {number} */
   rate() { return 1; }
+  /** Checks if media is a live stream. @returns {boolean} */
   isLive() { return this.live; }
+  /**
+   * Reports discovered media duration to host/server.
+   * @param {number} seconds - Media duration in seconds.
+   */
   reportDuration(seconds) {
     if (seconds > 0 && isFinite(seconds) && !this.reported) {
       this.reported = true;
@@ -47,8 +82,16 @@ class BaseMediaSource {
   }
 }
 
-// A video or audio file, or an HLS stream, in the page's own <video> element.
+/**
+ * Player adapter for direct HTML5 video/audio files (.mp4, .webm, etc.) and HLS streams (.m3u8).
+ * @class VideoElementSource
+ * @extends {BaseMediaSource}
+ */
 class VideoElementSource extends BaseMediaSource {
+  /**
+   * @param {Object} opts - Source configuration options.
+   * @param {boolean} [hls=false] - True if stream is HLS (.m3u8).
+   */
   constructor(opts, hls) {
     super(opts);
     const el = this.el = document.createElement('video');
@@ -87,6 +130,10 @@ class VideoElementSource extends BaseMediaSource {
       }).catch(err => opts.onError(err.message));
     }
   }
+
+  /**
+   * Attempts playback, gracefully falling back to muted autoplay if browser autoplay policy blocks sound.
+   */
   tryPlay() {
     const p = this.el.play();
     // If the browser won't start it with sound, start it muted rather than not at all, and turn
@@ -107,6 +154,7 @@ class VideoElementSource extends BaseMediaSource {
       }
     });
   }
+
   play() { this.wantPaused = false; if (this.ready) this.tryPlay(); }
   pause() { this.wantPaused = true; if (this.ready) this.el.pause(); }
   seek(t) {
@@ -140,8 +188,16 @@ class VideoElementSource extends BaseMediaSource {
   }
 }
 
-// A live Twitch channel, or a recorded Twitch video (which can seek, so it stays in sync).
+/**
+ * Player adapter for live Twitch channels and recorded Twitch VODs.
+ * @class TwitchSource
+ * @extends {BaseMediaSource}
+ */
 class TwitchSource extends BaseMediaSource {
+  /**
+   * @param {Object} opts - Source configuration options.
+   * @param {Object} media - Detected Twitch media descriptor.
+   */
   constructor(opts, media) {
     super(opts);
     this.live = !!media.channel;
@@ -178,10 +234,11 @@ class TwitchSource extends BaseMediaSource {
       if (Twitch.Player.OFFLINE) p.addEventListener(Twitch.Player.OFFLINE, () => opts.onError(`${media.channel} isn't live on Twitch right now.`));
     }).catch(err => opts.onError(err.message));
   }
-  // Twitch's player waits for a click before it starts in Altspace, or starts muted and then pauses
-  // when it's unmuted. So until it's playing with sound: ask it to play, then have the world click
-  // the middle of the screen (a click also lets it unmute). A click on a playing stream pauses it,
-  // so it only clicks when the stream isn't playing, and stops after a few tries.
+
+  /**
+   * Ensures the Twitch stream starts playing and unmuted after browser user gesture policies.
+   * @param {number} tries - Number of retry attempts.
+   */
   ensurePlaying(tries) {
     clearTimeout(this.kick);
     if (this.destroyed || this.wantPaused || !this.p || tries > 6) return;
@@ -198,6 +255,7 @@ class TwitchSource extends BaseMediaSource {
     }
     this.kick = setTimeout(() => this.ensurePlaying(tries + 1), 2500);
   }
+
   play() {
     this.wantPaused = false;
     if (this.ready) { this.p.play(); this.kick = setTimeout(() => this.ensurePlaying(1), 2500); }
@@ -224,11 +282,16 @@ class TwitchSource extends BaseMediaSource {
   }
 }
 
-// A Twitch clip, in Twitch's clip player. That player can't be controlled from the page: no
-// pause, seek or volume, and it doesn't say how long the clip is. So a clip isn't kept in sync
-// (it's under a minute), and mute and volume don't reach it: the only way would be to reload it,
-// which starts the clip again.
+/**
+ * Player adapter for Twitch clips embedded via iframe.
+ * @class TwitchClipSource
+ * @extends {BaseMediaSource}
+ */
 class TwitchClipSource extends BaseMediaSource {
+  /**
+   * @param {Object} opts - Source configuration options.
+   * @param {Object} media - Detected clip descriptor with slug.
+   */
   constructor(opts, media) {
     super(opts);
     this.live = true; // nothing to sync
@@ -266,10 +329,15 @@ class TwitchClipSource extends BaseMediaSource {
   }
 }
 
-// A VDO.Ninja stream, in its own page. Volume and mute go through VDO.Ninja's iframe API
-// (postMessage). It has no position to sync and no pause, so it counts as live. The frame isn't
-// allowed the camera or microphone, so a link can't make viewers send video.
+/**
+ * Player adapter for VDO.Ninja streams embedded via iframe.
+ * @class VdoNinjaSource
+ * @extends {BaseMediaSource}
+ */
 class VdoNinjaSource extends BaseMediaSource {
+  /**
+   * @param {Object} opts - Source configuration options.
+   */
   constructor(opts) {
     super(opts);
     this.live = true;
@@ -290,9 +358,12 @@ class VdoNinjaSource extends BaseMediaSource {
     });
     opts.container.appendChild(f);
   }
-  // Hides VDO.Ninja's video control bar (picture-in-picture, fullscreen), which nobody can use
-  // on the in-world screen.
-  // The rest of the link is kept exactly as given.
+
+  /**
+   * Sanitizes and appends nocontrols parameter to VDO.Ninja embed URLs.
+   * @param {string} link - Base VDO.Ninja link.
+   * @returns {string} Embed URL with nocontrols appended.
+   */
   static embedLink(link) {
     link = String(link);
     const hash = link.indexOf('#');
@@ -300,9 +371,15 @@ class VdoNinjaSource extends BaseMediaSource {
     if (/[?&]nocontrols(=|&|$)/.test(base)) return link;
     return base + (base.includes('?') ? '&' : '?') + 'nocontrols' + tail;
   }
+
+  /**
+   * Dispatches a message to the VDO.Ninja iframe window via postMessage.
+   * @param {Object} msg - Command message.
+   */
   post(msg) {
     try { this.frame.contentWindow.postMessage(msg, '*'); } catch (e) {}
   }
+
   sendSettings() {
     this.post({ volume: Math.max(0, Math.min(1, Number(this.volume) / 100)) });
     this.post({ mute: this.muted });
@@ -321,9 +398,16 @@ class VdoNinjaSource extends BaseMediaSource {
   }
 }
 
-// A Vimeo video. Vimeo's player answers with promises, so the time is kept from its timeupdate
-// events and counted on between them.
+/**
+ * Player adapter for Vimeo videos using the Vimeo SDK.
+ * @class VimeoSource
+ * @extends {BaseMediaSource}
+ */
 class VimeoSource extends BaseMediaSource {
+  /**
+   * @param {Object} opts - Source configuration options.
+   * @param {Object} media - Detected Vimeo video descriptor with ID and optional hash.
+   */
   constructor(opts, media) {
     super(opts);
     this.div = document.createElement('div');
@@ -382,8 +466,16 @@ class VimeoSource extends BaseMediaSource {
   }
 }
 
-// Shown instead of a link this world doesn't allow.
+/**
+ * Fallback display source shown when an untrusted media link is rejected.
+ * @class NoticeSource
+ * @extends {BaseMediaSource}
+ */
 class NoticeSource extends BaseMediaSource {
+  /**
+   * @param {Object} opts - Source configuration options.
+   * @param {string} text - Message text to display.
+   */
   constructor(opts, text) {
     super(opts);
     this.live = true;
@@ -405,9 +497,22 @@ class NoticeSource extends BaseMediaSource {
   destroy() { this.el.remove(); }
 }
 
+/**
+ * Controller class that transparently switches between YouTube and alternative media player sources.
+ * Implements the standard YouTube player interface (`playVideo`, `pauseVideo`, `seekTo`, etc.)
+ * so the player controller operates seamlessly with any media provider.
+ * @class MediaSwitch
+ */
 class MediaSwitch {
-  // yt: the YouTube player. opts: { getId(link), onDuration(link, seconds), onError(message),
-  //   allowUntrusted() (may this viewer play files/streams?), requestClick() (click the screen's middle) }
+  /**
+   * @param {Object} yt - The YouTube player instance.
+   * @param {Object} opts - Player configuration and callbacks.
+   * @param {function(string): string} opts.getId - Extracts YouTube video ID.
+   * @param {function(string, number): void} opts.onDuration - Duration reporting callback.
+   * @param {function(string): void} opts.onError - Error handling callback.
+   * @param {function(): boolean} [opts.allowUntrusted] - Permission check for untrusted sources.
+   * @param {function(): void} [opts.requestClick] - Requests synthetic gesture/click for sound.
+   */
   constructor(yt, opts) {
     this.yt = yt;
     this.opts = opts;
@@ -424,7 +529,11 @@ class MediaSwitch {
     }
   }
 
-  // Plays a playlist item's link from `start` seconds, with whichever player suits it.
+  /**
+   * Loads and initiates playback for a media URL with the appropriate player adapter.
+   * @param {string} link - Canonical playback URL.
+   * @param {number} start - Start playback offset in seconds.
+   */
   loadMedia(link, start) {
     const media = window.MediaSources ? MediaSources.detect(link) : null;
     if (!media || media.type === 'youtube') {
@@ -452,15 +561,22 @@ class MediaSwitch {
     else if (media.type === 'vdoninja') this.source = new VdoNinjaSource(opts, media);
     else this.source = new VideoElementSource(opts, media.type === 'hls');
   }
+
+  /** Destroys the active non-YouTube player source instance. */
   stopSource() {
     if (this.source) { this.source.destroy(); this.source = null; }
   }
+
+  /** Toggles visibility between YouTube iframe and alternative media container. */
   showYouTube(show) {
     this.container.style.display = show ? 'none' : 'block';
     const iframe = this.yt.getIframe && this.yt.getIframe();
     if (iframe) iframe.style.visibility = show ? 'visible' : 'hidden';
   }
+
+  /** Checks if the active media stream is live. @returns {boolean} */
   isLive() { return !!(this.source && this.source.isLive()); }
+  /** Checks if currently playing a YouTube source. @returns {boolean} */
   isYouTube() { return !this.source; }
 
   // --- The YouTube player's methods that player.js uses ---
@@ -490,6 +606,16 @@ class MediaSwitch {
   setOption(a, b, c) { if (!this.source) this.yt.setOption(a, b, c); }
   getOption(a, b) { return this.source ? undefined : this.yt.getOption(a, b); }
 }
+window.MediaSwitch = MediaSwitch;
+
+// Fullscreen breaks the in-world screen until the space is rejoined, so leave it at once if any
+// embedded player (or its controls) asks for it.
+['fullscreenchange', 'webkitfullscreenchange'].forEach(name => document.addEventListener(name, () => {
+  const el = document.fullscreenElement || document.webkitFullscreenElement;
+  if (!el) return;
+  console.log('Fire-V-Player: leaving fullscreen');
+  try { (document.exitFullscreen || document.webkitExitFullscreen).call(document); } catch (e) {}
+}));
 window.MediaSwitch = MediaSwitch;
 
 // Fullscreen breaks the in-world screen until the space is rejoined, so leave it at once if any

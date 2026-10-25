@@ -1,3 +1,9 @@
+/**
+ * @fileoverview Sequelize model loader and association registry.
+ * Dynamically discovers and initializes all model definitions in this directory.
+ * @module server/models
+ */
+
 'use strict';
 
 const fs = require('fs');
@@ -5,6 +11,11 @@ const path = require('path');
 const { Sequelize, DataTypes } = require('sequelize');
 const { sequelize } = require('../db'); // Import the singleton instance
 const basename = path.basename(__filename);
+
+/**
+ * Container object holding initialized Sequelize models and the Sequelize instance.
+ * @type {Record<string, any> & { sequelize?: import('sequelize').Sequelize, Sequelize: typeof Sequelize }}
+ */
 const db = {};
 
 if (sequelize) {

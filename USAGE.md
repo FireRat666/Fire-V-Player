@@ -101,7 +101,7 @@ Settings are the same as the script attributes below, except:
 - An empty `youtube` uses the default silent video.
 - The section between the two comments is read as XML by Unity: quote every attribute, close every element, and write `&` as `&amp;`.
 
-The player uses the SDK's legacy A-Frame bridge, so `snippet.js` adds an `<a-scene>` if the page has none. With the plain script tag, add `<a-scene></a-scene>` to the page yourself.
+The player builds everything in the world with the BS SDK (`BS.GameObject` and components such as `BS.Browser`), so the page needs no `<a-scene>`; one left over from older versions does no harm. Script-tag positions and rotations still use A-Frame axes (Z flipped from Unity's), as before, so existing script tags keep working.
 
 In these worlds the Playlist button opens an **in-world panel** beside the screen. The main view has playback and volume controls, the playlist (play, reorder, remove, vote) and YouTube search. Under the search box are your last five searches (kept on your device; click one to search again, **Clear** forgets them) and, in karaoke mode, **+ karaoke**, **+ lyrics** and **+ zoom karaoke**, which add that word to the search. Search also accepts a video link, or a playlist link (host only), which replaces the playlist. **Refresh** fetches the latest playlist from the server; the panel also does this each time it opens. **More...** opens a second view with:
 
@@ -182,7 +182,7 @@ All parameters are optional unless marked as **(Required)**.
 | `mute` | Whether the player should start muted. | `false` |
 | `untrusted-links` | Whether links from any site (video files, `.m3u8` streams, VDO.Ninja) can be played, as well as YouTube, Twitch and Vimeo. Off by default, as those links aren't moderated. Each viewer's own world must allow them for them to play on their screen. See [Links from other sites](#links-from-other-sites). | `false` |
 | `captions` | Whether closed captions start on. Each viewer can turn them on or off in the panel's More view, and their choice is remembered on their device. | `true` |
-| `resolution` | The resolution (width in pixels) of the browser surface. Higher values are crisper but use more resources. | `1600` |
+| `resolution` | Pixels per unit of the browser surface, in older Banter clients. The Creator SDK draws every browser at 1300 pixels per metre and ignores it; the screen's page is 1280 x 720. | `1600` |
 | `native-screen-size` | The size (`"width height"`, before `scale`) of the world video player that video and audio files play on. Empty matches the browser screen: a 1280 x 720 page at 1300 pixels per unit. | `""` (0.985 x 0.554) |
 
 ### 3D Environment Parameters
@@ -195,13 +195,13 @@ All parameters are optional unless marked as **(Required)**.
 | `spatial` | Set to `true` to make the volume fade as you move away from the screen. It only changes the volume: Banter always plays the screen's sound in 3D, coming from the screen, and has no setting for 2D sound. | `true` |
 | `spatial-min-distance` | With `spatial` on, the distance at which the volume starts to fade. | `5` |
 | `spatial-max-distance` | With `spatial` on, how far past `spatial-min-distance` the volume reaches zero. | `40` |
-| `mip-maps` | The number of mip-map levels for the browser texture. Affects visual quality at sharp angles. | `1` |
+| `mip-maps` | The number of mip-map levels for the browser texture, in older Banter clients. The Creator SDK ignores it. | `1` |
 
 ### UI & Control Parameters
 
 | Attribute | Description | Default Value |
 | :--- | :--- | :--- |
-| `hand-controls` | Set to `true` to enable a small UI attached to the user's left hand in VR. | `false` |
+| `hand-controls` | Set to `true` to put six buttons on your left hand in VR: mute, volume down and up, skip back and forward (your player only), and the Playlist / Singers panel. They come back if you leave and rejoin the space. | `false` |
 | `button-position` | The `x y z` position of the in-world UI buttons, relative to the player screen. | `0 0 0` |
 | `button-rotation` | The `x y z` rotation of the in-world UI buttons. | `0 0 0` |
 | `button-scale` | The `x y z` scale of the in-world UI buttons. | `1 1 1` |
@@ -224,10 +224,10 @@ All parameters are optional unless marked as **(Required)**.
 | `singer-button-position` | The `x y z` position of the "Join/Leave Queue" button. | `0 ${-yScale*0.335} 3` |
 | `singer-button-rotation` | The `x y z` rotation of the "Join/Leave Queue" button. | `-30 180 0` |
 | `box-trigger-enter-enabled` | Set to `true` to automatically start the next singer's song when they enter a trigger volume. | `false` |
-| `box-trigger-exit-enabled` | Set to `true` to automatically stop the song and remove the singer when they leave a trigger volume. | `false` |
-| `box-trigger-position` | The `x y z` position of the trigger volume. | `0 0 0` |
+| `box-trigger-exit-enabled` | Set to `true` to automatically stop the song and remove the singer when they leave a trigger volume (5 seconds after the last of their body, head and hands is out). | `false` |
+| `box-trigger-position` | The `x y z` position of the trigger volume, relative to the in-world buttons. | `0 0 0` |
 | `box-trigger-rotation` | The `x y z` rotation of the trigger volume. | `0 0 0` |
-| `box-trigger-scale` | The `x y z` scale of the trigger volume. | `1 1 1` |
+| `box-trigger-scale` | The `x y z` size of the trigger volume, in metres (it's a 1 m box before scaling). | `1 1 1` |
 
 ### Miscellaneous Parameters
 

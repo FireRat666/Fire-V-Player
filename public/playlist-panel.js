@@ -52,7 +52,7 @@ var FirePlaylistPanel = class {
     if (p.length === 1 && !isNaN(p[0])) return [p[0], p[0], p[0]];
     return (p.length >= 3 && !p.slice(0, 3).some(isNaN)) ? p.slice(0, 3) : def;
   }
-  // The legacy A-Frame bridge mirrors Z, so convert A-Frame values the same way it does.
+  // Script-tag values use A-Frame's axes, where Z is mirrored from Unity's (see Core.toUnityPos).
   toUnityPos([x, y, z]) { return new BS.Vector3(x, y, -z); }
   toUnityEuler([x, y, z]) { return new BS.Vector3(-x, -y, z); }
 

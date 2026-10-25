@@ -19,7 +19,7 @@
     const init = () => {
       console.log("VIDYA: INIT");
       try {
-        const banterScene = BS.BanterScene.GetInstance();
+        const banterScene = (BS.Scene || BS.BanterScene).GetInstance();
         clearTimeout(fallbackTimeout);
         if (banterScene.unityLoaded) {
           console.log("VIDYA: UNITY LOADED");
@@ -110,8 +110,11 @@
         // Files play on the world's own video player instead of the browser (native-video.js).
         await core.setupScript(null, "media-sources");
         await core.setupScript(null, "native-video");
-        this.core.setupBrowserElement(url);
-        if (karaoke) this.core.setupJoinLeaveButton();
+        await this.core.setupBrowserElement(url);
+        if (karaoke) {
+          try { await this.core.setupJoinLeaveButton(); }
+          catch (e) { console.error('Vidya: could not create the Singers button.', e); }
+        }
 
         // In the new SDK the 2D menu page may not be available, so the Playlist / Singers button
         // opens an in-world UI Toolkit panel instead.

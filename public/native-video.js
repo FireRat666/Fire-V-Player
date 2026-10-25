@@ -46,26 +46,20 @@ var FireNativeScreen = (() => {
     }
 
     async create() {
-      const scene = document.querySelector('a-scene');
-      if (!scene || !window.BS || !BS.BanterVideoPlayer) throw new Error('No A-Frame scene or BanterVideoPlayer.');
-      const entity = this.entity = document.createElement('a-entity');
-      entity.setAttribute('position', this.core.params.position);
-      entity.setAttribute('rotation', this.core.params.rotation);
-      entity.setAttribute('scale', this.core.params.scale);
-      scene.appendChild(entity);
-
-      // The SDK's A-Frame bridge gives the entity a Unity object, then sets unityReady.
-      if (!entity.unityReady) await new Promise(resolve => entity.addEventListener('unityready', resolve, { once: true }));
-      if (this.destroyed) return;
-      const go = entity.gameObject;
+      const core = this.core;
+      if (!core.inWorld() || !(BS.VideoPlayer || BS.BanterVideoPlayer)) throw new Error('No BS SDK scene or video player.');
+      // In the browser screen's place.
+      const t = core.screenTransform();
+      const go = this.go = await core.makeObject('FireVPlayer_VideoScreen', { position: t.position, rotation: t.rotation, scale: t.scale });
+      if (this.destroyed) { core.destroyObject(go); return; }
       const [w, h] = this.size();
       // The plane's renderer has to exist before the video player, which draws onto its material.
-      await go.AddComponent(new BS.BanterPlane(w, h));
-      await go.AddComponent(new BS.BanterMaterial('Unlit/Diffuse'));
+      await core.addComponent(go, core.bsComponent('Plane', { width: w, height: h }, 'BanterPlane', [w, h]));
+      await core.addComponent(go, core.bsComponent('Material', { shaderName: 'Unlit/Diffuse' }, 'BanterMaterial', ['Unlit/Diffuse']));
       if (this.destroyed) return;
-      // url, volume, loop, playOnAwake, skipOnDrop, waitForFirstFrame
-      const vp = new BS.BanterVideoPlayer(this.link, this.unityVolume(), false, !this.wantPaused, true, true);
-      await go.AddComponent(vp);
+      const settings = { url: this.link, volume: this.unityVolume(), loop: false, playOnAwake: !this.wantPaused, skipOnDrop: true, waitForFirstFrame: true };
+      const vp = await core.addComponent(go, core.bsComponent('VideoPlayer', settings,
+        'BanterVideoPlayer', [settings.url, settings.volume, settings.loop, settings.playOnAwake, settings.skipOnDrop, settings.waitForFirstFrame]));
       if (this.destroyed) return;
       this.vp = vp;
       // time only reaches the page when asked for; the rest are watched too, to be sure they do.
@@ -231,9 +225,9 @@ var FireNativeScreen = (() => {
       this.destroyed = true;
       clearInterval(this.pollTimer);
       clearInterval(this.syncTimer);
-      // Removing the entity destroys its Unity object, and the video player with it.
-      if (this.entity && this.entity.parentNode) this.entity.parentNode.removeChild(this.entity);
-      this.entity = null;
+      // Destroying the object destroys the video player with it.
+      if (this.go) this.core.destroyObject(this.go);
+      this.go = null;
       this.vp = null;
     }
   };

@@ -58,16 +58,36 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
       this.playPlaylist();
       window.seek = this.seek.bind(this);
     }
+  // Messages from the world. The SDK's BS Browser raises bsmessage; older Banter raised
+  // bantermessage. A client may raise both for one message, so each id is only handled once.
   setupBrowserMessaging() {
-     window.addEventListener("bantermessage", (e) => this.parseMessage(e.detail.message));
+    const seen = [];
+    const onMessage = (e) => {
+      const message = e && e.detail && e.detail.message;
+      try {
+        const id = JSON.parse(message).id;
+        if (id) {
+          if (seen.includes(id)) return;
+          seen.push(id);
+          if (seen.length > 50) seen.shift();
+        }
+      } catch (err) {}
+      this.parseMessage(message);
+    };
+    window.addEventListener("bsmessage", onMessage);
+    window.addEventListener("bantermessage", onMessage);
   }
+  // Messages to the world: window.O.sendMessage in the SDK's BS Browser, window.bantermessage in
+  // older Banter.
   sendBrowserMessage(msg) {
-    if (!window.bantermessage) {
-      console.log("No banter message, is this banter?");
-    } else {
+    if (window.O && typeof window.O.sendMessage === 'function') {
+      window.O.sendMessage("app", JSON.stringify(msg));
+    } else if (window.bantermessage) {
       window.bantermessage(JSON.stringify(msg));
+    } else {
+      console.log("No way to message the world, is this in a world?");
     }
-  }  
+  }
   setupVisibilityHandler() {
     document.addEventListener('visibilitychange', () => {
       // When the tab/window becomes visible again (e.g., exiting Quest passthrough)

@@ -1006,8 +1006,8 @@ var Core = class {
       // hand-controls-rotation settings change them.
       const wrapper = await this.makeObject('FireVPlayer_HandWrapper', {
         parent: root,
-        position: this.toVector3(this.vec3(this.params['hand-controls-position'], [-0.02, 0.046, 0.03])),
-        rotation: this.toVector3(this.vec3(this.params['hand-controls-rotation'], [0, 90, 0])),
+        position: this.toVector3(this.vec3(this.params['hand-controls-position'], [0, 0.046, 0.03])),
+        rotation: this.toVector3(this.vec3(this.params['hand-controls-rotation'], [0, 90, 180])),
         scale: new BS.Vector3(0.1, 0.1, 0.1)
       });
       const buttons = [
@@ -1104,6 +1104,7 @@ var Core = class {
     // "x y z" metres and "x y z" degrees. Empty uses the built-in layout.
     this.setOrDefault("hand-controls-position", '');
     this.setOrDefault("hand-controls-rotation", '');
+    this.setOrDefault("playlist-panel-front-height", '1.4');
     this.setOrDefault("mip-maps", '1');
     this.setOrDefault("spatial", 'true');
     this.setOrDefault("geometry", "false");

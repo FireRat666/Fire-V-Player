@@ -73,15 +73,15 @@ In a Creator SDK world (`Assets/WebRoot/index.html`), add the player as a snippe
   button-rotation=""
   button-scale="1"
   playlist-ui="auto"
-  playlist-panel-position="1.8 1.5 1.85"
-  playlist-panel-rotation="0 20 0"
+  playlist-panel-position="-1.8 1.5 1.85"
+  playlist-panel-rotation="0 -20 0"
   playlist-panel-scale="1"
   singer-button-position="0 0 0"
   singer-button-rotation="0 0 0">
   <bs-gizmo type="position" attribute="position"/>
   <bs-gizmo type="plane" attribute="position" size="2 1.125" rotation="0 180 0"/>
   <bs-gizmo type="position" attribute="playlist-panel-position"/>
-  <bs-gizmo type="plane" attribute="playlist-panel-position" size="1.4 1.2" rotation="0 200 0"/>
+  <bs-gizmo type="plane" attribute="playlist-panel-position" size="1.4 1.2" rotation="0 160 0"/>
   <bs-gizmo type="position" attribute="button-position"/>
   <bs-gizmo type="position" attribute="singer-button-position"/>
 </bs-snippet>
@@ -96,7 +96,7 @@ Settings are the same as the script attributes below, except:
 - `singer-button-position` and `singer-button-rotation` (karaoke) place the Singers button, a Unity world position and rotation like `button-position`, with its own drag handle. `0 0 0` (or empty) means the default: for the position, below and in front of the in-world buttons, placed from them; for the rotation, tilted back 30° and turned with the screen. With `controls-follow-screen="true"` they're offsets from the screen instead. They default to `0 0 0` rather than empty because Unity picks each setting's field from its value: an empty one shows as a single text box instead of X, Y and Z. The `box-trigger-*` settings from the parameter reference work too.
 - The room ID is `room`, not `instance`: Unity's BSSnippet component writes its own `instance` attribute. Without `room`, the space URL is used, so each space has its own room.
 - `playlist-panel-position` and `playlist-panel-rotation` place the in-world panel in the world (Unity values), and it has its own drag handle in the Scene view. Clear `playlist-panel-position` to put the panel beside the screen instead; `playlist-panel-rotation` is then relative to the screen.
-- `button-position` is where the in-world buttons go (Unity world position), with its own drag handle. Empty puts them just under the screen; an empty `button-rotation` uses the screen's.
+- `button-position` is where the in-world buttons go (Unity world position), with its own drag handle. Empty (or `0 0 0`) puts them just under the screen; an empty or `0 0 0` `button-rotation` uses the screen's.
 - `controls-follow-screen="true"` makes `button-position`, `playlist-panel-position`, `singer-button-position` and their rotations offsets from the screen (in the screen's own axes) instead of world values, so the buttons and panel move and turn with the screen. Their drag handles then don't show where they'll be, as a gizmo can only show a setting's own value. For example `button-position="0 -0.67 0"` puts the buttons 0.67 m below the screen's centre.
 - An empty `youtube` uses the default silent video.
 - The section between the two comments is read as XML by Unity: quote every attribute, close every element, and write `&` as `&amp;`.
@@ -206,7 +206,7 @@ All parameters are optional unless marked as **(Required)**.
 | `hand-controls-position` | Moves the hand buttons: `x y z` in metres, in the hand's own Unity axes (not converted, in a snippet or a script tag). Empty uses the built-in layout. `z` slides them along the hand, away from the wrist toward the fingers (bigger) or toward the wrist (smaller); `x` lifts them off the back of the hand (more negative). | `0 0.046 0.07` |
 | `hand-controls-rotation` | Turns the hand buttons: `x y z` in degrees, in the hand's own Unity axes. For example add `180` to `y` if they face into the wrist, add `180` to `z` if they're upside down, or change `z` by `90` to turn them on the wrist. | `0 90 180` |
 | `button-position` | The `x y z` position of the in-world UI buttons, relative to the player screen. | `0 0 0` |
-| `button-rotation` | The `x y z` rotation of the in-world UI buttons. | `0 0 0` |
+| `button-rotation` | The `x y z` rotation of the in-world UI buttons. `0 0 0` (or empty) means "the same as the screen's rotation", not zero, so for a true zero on a turned screen use something like `0.001 0 0`. | `0 0 0` |
 | `button-scale` | The `x y z` scale of the in-world UI buttons. | `1 1 1` |
 | `playlist-ui` | What the Playlist (or, in karaoke mode, Singers) button opens. `panel`: an in-world panel (UI Toolkit) with controls, the playlist or singer queue, and search. `page`: the 2D playlist page in the client's menu browser. `auto`: `panel` whenever the client has the UI system (the SideQuest/Altspace Creator SDK), otherwise `page`. | `auto` |
 | `playlist-panel-position` | Where the in-world panel sits in the world, in the same units as `position`. When set, `playlist-panel-rotation` is a world rotation too (empty = the screen's rotation), and `playlist-panel-offset` is ignored. | (beside the screen) |

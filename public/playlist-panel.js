@@ -12,7 +12,7 @@
 // Each user gets their own local panel. It sits beside the screen and is shown/hidden by the
 // playlist button. It hides by moving out of view, because deactivating a UI Toolkit document
 // can drop the elements created at runtime. The hand's Playlist button and Move Here put it in
-// front of the player, and the bar under it can be grabbed to carry it.
+// front of the player, and the cube under it can be grabbed to carry it.
 var PAGE_JUMP = 5; // pages the << and >> buttons move
 var FirePlaylistPanel = class {
   constructor(core) {
@@ -283,24 +283,28 @@ var FirePlaylistPanel = class {
     }).Async(), 15000, 'Creating the panel root object');
     this.checkAlive();
 
-    // root (the screen, or the world) > mover (where the panel is; the part that's grabbed and
-    // carried) > panel (the UI). Hiding moves only the panel, so the mover stays wherever the
-    // player put it.
+    // root (the screen, or the world) > mover (the grab handle: a small cube just under the
+    // panel's bottom edge, which players pick up to carry it) > panel (the UI, above the cube).
+    // Closing sends the mover and the panel out of sight; opening puts them back.
+    const panelHeightM = panelWidthM * this.H / this.W;
+    this.handleDrop = panelHeightM / 2 + 0.08; // from the panel's middle down to the cube
     // Where it sits by the screen, to go back to after being opened in front of a player.
+    const moverRot = this.toUnityEuler(rot);
+    const centre = this.toUnityPos(offset);
+    const down = this.qRotate(this.qEuler(moverRot), [0, -this.handleDrop, 0]);
     this.home = {
       rootLocalPos: worldPos ? new BS.Vector3(0, 0, 0) : this.toUnityPos(screenPos),
       rootLocalRot: worldPos ? new BS.Vector3(0, 0, 0) : this.toUnityEuler(screenRot),
-      moverPos: this.toUnityPos(offset),
-      moverRot: this.toUnityEuler(rot)
+      moverPos: new BS.Vector3(centre.x + down[0], centre.y + down[1], centre.z + down[2]),
+      moverRot
     };
     this.placement = 'home'; // 'home' (by the screen) | 'front' (in front of the player) | 'moved' (carried)
-    this.moverWorld = this.homeWorld(); // { pos, q }: where the panel is, for putting the bar under it
-    this.shownPos = new BS.Vector3(0, 0, 0);
+    this.shownPos = new BS.Vector3(0, this.handleDrop, 0);
     this.hiddenPos = new BS.Vector3(0, -1000, 0);
     this.mover = await this.withTimeout(new BS.GameObject({
       name: 'FireVPlayer_PlaylistMover',
       parent: this.root,
-      localPosition: this.home.moverPos,
+      localPosition: new BS.Vector3(0, -1000, 0), // out of sight until opened
       localEulerAngles: this.home.moverRot
     }).Async(), 15000, 'Creating the panel mover object');
     this.checkAlive();
@@ -554,13 +558,11 @@ var FirePlaylistPanel = class {
 
     this.checkAlive();
     try {
-      await this.addGrabBar();
+      await this.addGrabHandle();
     } catch (e) {
       if (this.destroyed) throw e;
-      console.warn('[PlaylistPanel] Could not add the grab bar, so the panel can only be moved with Move Here:', e);
-      // Without it, so showing and hiding the panel doesn't wait on a half-made bar.
-      try { if (this.grabBar && typeof this.grabBar.Destroy === 'function') this.grabBar.Destroy(); } catch (e2) {}
-      this.grabBar = this.body = null;
+      console.warn('[PlaylistPanel] Could not make the panel grabbable, so it can only be moved with Move Here:', e);
+      this.body = null;
     }
     this.checkAlive();
     this.built = true;
@@ -568,98 +570,46 @@ var FirePlaylistPanel = class {
     console.log('[PlaylistPanel] Ready.');
   }
 
-  // A bar under the panel that players grab to carry it. Grabbing needs a collider on the
-  // Grabbable layer (20) with a GrabHandle, and it moves the Rigidbody that collider belongs to;
-  // a handle with no Rigidbody holds on to the world like a climbing hold, which pulls the
-  // player along (it flung them away). So the bar has its own collider, Rigidbody and handle,
-  // as in the SDK docs, and isn't under the panel: while it's held, the panel is moved to sit
-  // on it. The panel has no Rigidbody, so its UI colliders never push the player.
-  async addGrabBar() {
-    if (!BS.Rigidbody || !BS.GrabHandle || !BS.BoxCollider) {
-      console.log('[PlaylistPanel] This client has no Rigidbody / GrabHandle, so no grab bar.');
+  // Makes the mover a small cube players pick up to carry the panel, as in the SDK docs: a box,
+  // its collider, a Rigidbody, then Grababble (which adds the grab handle, a WorldObject and
+  // HeldEvents, and puts it on the Grabbable layer). The panel is the cube's child, so Unity
+  // carries it along. Without the Rigidbody and WorldObject the grab held on to the world like a
+  // climbing hold and pulled the player instead.
+  async addGrabHandle() {
+    if (!BS.Rigidbody || !(BS.Grababble || BS.GrabHandle) || !BS.BoxCollider) {
+      console.log('[PlaylistPanel] This client has no Rigidbody / Grababble, so the panel is not grabbable.');
       return;
     }
-    const LAYER_GRABBABLE = (BS.L && BS.L.Grabbable) || 20;
-    // Just below the panel's bottom edge, in metres.
-    const panelHeightM = this.panelWidthM * this.H / this.W;
-    this.barDrop = panelHeightM / 2 + 0.06;
     const T = 15000;
-    const bar = this.grabBar = await this.withTimeout(new BS.GameObject({
-      name: 'FireVPlayer_PlaylistGrabBar',
-      localPosition: new BS.Vector3(0, -1000, 0),
-      layer: LAYER_GRABBABLE
-    }).Async(), T, 'Creating the grab bar');
+    const cube = this.mover;
+    const size = 0.1;
+    if (BS.Box) await this.withTimeout(cube.AddComponent(new BS.Box({ width: size, height: size, depth: size })), T, 'Adding the handle box');
+    if (BS.Material) await this.withTimeout(cube.AddComponent(new BS.Material({ shaderName: 'Unlit/Diffuse', color: new BS.Vector4(0.6, 0.6, 0.66, 1) })), T, 'Adding the handle material');
+    await this.withTimeout(cube.AddComponent(new BS.BoxCollider({ isTrigger: false, size: new BS.Vector3(size, size, size) })), T, 'Adding the handle collider');
     this.checkAlive();
-    const w = 0.5 * this.panelWidthM / 1.4, h = 0.045;
-    if (BS.Box) await this.withTimeout(bar.AddComponent(new BS.Box({ width: w, height: h, depth: h })), T, 'Adding the grab bar box');
-    if (BS.Material) await this.withTimeout(bar.AddComponent(new BS.Material({ shaderName: 'Unlit/Diffuse', color: new BS.Vector4(0.6, 0.6, 0.66, 1) })), T, 'Adding the grab bar material');
-    // A little bigger than the bar, so it's easy to catch.
-    await this.withTimeout(bar.AddComponent(new BS.BoxCollider({ isTrigger: false, size: new BS.Vector3(w + 0.04, h + 0.04, h + 0.04) })), T, 'Adding the grab bar collider');
-    this.checkAlive();
-    // No gravity, and it can only turn around the vertical, so the panel on it stays upright.
-    this.body = await this.withTimeout(bar.AddComponent(new BS.Rigidbody({
-      mass: 0.5, drag: 5, angularDrag: 10, useGravity: false, isKinematic: false,
+    // No gravity, and it only turns around the vertical, so the panel stays upright.
+    this.body = await this.withTimeout(cube.AddComponent(new BS.Rigidbody({
+      mass: 1, drag: 2, angularDrag: 10, useGravity: false, isKinematic: false,
       freezeRotationX: true, freezeRotationZ: true
-    })), T, 'Adding the grab bar Rigidbody');
+    })), T, 'Adding the handle Rigidbody');
     this.checkAlive();
+    // Each player's panel is their own, so its network id is too: no one else's cube matches it.
+    const uid = (this.core.banterScene && this.core.banterScene() && this.core.banterScene().localUser && this.core.banterScene().localUser.uid) || (window.user && window.user.id) || Math.random().toString(36).slice(2);
+    if (typeof cube.SetNetworkId === 'function') {
+      try { await this.withTimeout(cube.SetNetworkId(`FireVPlayer_PlaylistHandle_${uid}`), T, 'Naming the handle'); } catch (e) {}
+    }
     const soft = BS.BSGrabType && BS.BSGrabType.Soft !== undefined ? BS.BSGrabType.Soft : 3;
-    await this.withTimeout(bar.AddComponent(new BS.GrabHandle({ grabType: soft, grabRadius: 0.01 })), T, 'Adding the grab handle');
+    if (BS.Grababble) {
+      await this.withTimeout(cube.AddComponent(new BS.Grababble({ grabType: soft, grabRadius: 0.01 })), T, 'Making the handle grabbable');
+    } else {
+      if (typeof cube.SetLayer === 'function') await this.withTimeout(cube.SetLayer((BS.L && BS.L.Grabbable) || 20), T, 'Moving the handle to the Grabbable layer');
+      await this.withTimeout(cube.AddComponent(new BS.GrabHandle({ grabType: soft, grabRadius: 0.01 })), T, 'Adding the grab handle');
+    }
     this.checkAlive();
-    const PN = BS.PN || BS.PropertyName;
-    if (typeof bar.WatchTransform === 'function' && PN) {
-      await this.withTimeout(bar.WatchTransform([PN.position, PN.rotation], t => {
-        if (this.held && t && t.position) this.followBar(t);
-      }), T, 'Watching the grab bar');
-    }
-    bar.On('grab', async () => {
-      this.held = true;
-      this.placement = 'moved';
-      if (this.mover) await this.setLocal(this.mover, new BS.Vector3(0, 0, 0), new BS.Vector3(0, 0, 0));
-    });
-    bar.On('drop', () => {
-      this.held = false;
-      this.stopDrift();
-    });
-    await this.withTimeout(this.placeBar(), T, 'Placing the grab bar');
-    console.log('[PlaylistPanel] Grab bar added under the panel.');
-  }
-
-  // While the bar is held: the panel goes on top of it, facing the way it faces. Only the latest
-  // position is used if they come faster than the panel moves.
-  async followBar(t) {
-    this.barPose = t;
-    if (this.following) return;
-    this.following = true;
-    try {
-      while (this.barPose && this.root) {
-        const { position: p, rotation: q } = this.barPose;
-        this.barPose = null;
-        const yaw = q ? this.yawOf(q) : (this.moverWorld ? this.yawOf(this.moverWorld.q) : 0);
-        const pos = new BS.Vector3(p.x, p.y + this.barDrop, p.z);
-        this.moverWorld = { pos, q: this.qEuler([0, yaw, 0]) };
-        await this.setLocal(this.root, pos, new BS.Vector3(0, yaw, 0));
-      }
-    } finally {
-      this.following = false;
-    }
-  }
-
-  // Puts the bar under the panel (or out of sight while the panel is hidden), unless it's held.
-  async placeBar() {
-    const bar = this.grabBar;
-    if (!bar || this.held) return;
-    let pos = new BS.Vector3(0, -1000, 0), yaw = 0;
-    const m = this.moverWorld;
-    if (this.visible && m) {
-      const d = this.qRotate(m.q, [0, -this.barDrop, 0]);
-      pos = new BS.Vector3(m.pos.x + d[0], m.pos.y + d[1], m.pos.z + d[2]);
-      yaw = this.yawOf(m.q);
-    }
-    if (typeof bar.SetPosition === 'function') await bar.SetPosition(pos);
-    else await this.setLocal(bar, pos, null);
-    if (typeof bar.SetEulerAngles === 'function') await bar.SetEulerAngles(new BS.Vector3(0, yaw, 0));
-    else await this.setLocal(bar, null, new BS.Vector3(0, yaw, 0));
-    this.stopDrift();
+    // Once carried, the screen's Playlist button brings it back beside the screen.
+    cube.On('grab', () => { this.held = true; this.placement = 'moved'; });
+    cube.On('drop', () => { this.held = false; this.stopDrift(); });
+    console.log('[PlaylistPanel] The cube under the panel can be grabbed to carry it.');
   }
 
   // Rotations in Unity's convention: Euler degrees applied Z, then X, then Y.
@@ -681,13 +631,8 @@ var FirePlaylistPanel = class {
     const p = this.qMul(this.qMul(q, [v[0], v[1], v[2], 0]), [-q[0], -q[1], -q[2], q[3]]);
     return [p[0], p[1], p[2]];
   }
-  // The way a rotation's forward (+Z) points on the floor, in degrees. Takes [x,y,z,w] or {x,y,z,w}.
-  yawOf(q) {
-    const [x, y, z, w] = Array.isArray(q) ? q : [q.x, q.y, q.z, q.w];
-    return Math.atan2(2 * (x * z + w * y), 1 - 2 * (x * x + y * y)) * 180 / Math.PI;
-  }
 
-  // Stops the bar sliding on after it's let go or moved by script.
+  // Stops the panel sliding on after it's let go or moved by script.
   stopDrift() {
     const b = this.body;
     if (!b) return;
@@ -715,11 +660,10 @@ var FirePlaylistPanel = class {
     const removeObjects = () => {
       try {
         if (this.root && typeof this.root.Destroy === 'function') this.root.Destroy();
-        if (this.grabBar && typeof this.grabBar.Destroy === 'function') this.grabBar.Destroy();
       } catch (e) {
         console.warn('[PlaylistPanel] Could not remove the panel objects:', e);
       }
-      this.root = this.mover = this.panelObj = this.ui = this.body = this.grabBar = null;
+      this.root = this.mover = this.panelObj = this.ui = this.body = null;
     };
     if (this.buildPromise) this.buildPromise.then(removeObjects, removeObjects);
     else removeObjects();
@@ -747,12 +691,11 @@ var FirePlaylistPanel = class {
     if (!this.visible) await this.open();
   }
 
-  // Shows (shownPos) or hides (hiddenPos) the panel, and its grab bar with it.
+  // Shows (shownPos) or hides (hiddenPos) the panel above its cube.
   async moveTo(pos) {
     const o = this.panelObj;
     if (!o) return;
     await this.setLocal(o, pos, null);
-    await this.placeBar();
   }
 
   // ---------------------------------------------------------------- placement
@@ -814,25 +757,15 @@ var FirePlaylistPanel = class {
       }
       // The panel is seen from -Z, so facing the same way as the player turns its front to them.
       await this.setLocal(root, pose.position, new BS.Vector3(0, pose.yaw, 0));
-      await this.setLocal(mover, new BS.Vector3(0, 0, 0), new BS.Vector3(0, 0, 0));
-      this.moverWorld = { pos: pose.position, q: this.qEuler([0, pose.yaw, 0]) };
+      await this.setLocal(mover, new BS.Vector3(0, -this.handleDrop, 0), new BS.Vector3(0, 0, 0));
     } else {
       const h = this.home;
       await this.setLocal(root, h.rootLocalPos, h.rootLocalRot);
       await this.setLocal(mover, h.moverPos, h.moverRot);
-      this.moverWorld = this.homeWorld();
     }
+    this.stopDrift();
     this.placement = where;
     await this.moveTo(this.visible ? this.shownPos : this.hiddenPos);
-  }
-
-  // Where the panel is in the world when it's by the screen (the root has no parent).
-  homeWorld() {
-    const h = this.home;
-    const rq = this.qEuler(h.rootLocalRot);
-    const d = this.qRotate(rq, [h.moverPos.x, h.moverPos.y, h.moverPos.z]);
-    const r = h.rootLocalPos;
-    return { pos: new BS.Vector3(r.x + d[0], r.y + d[1], r.z + d[2]), q: this.qMul(rq, this.qEuler(h.moverRot)) };
   }
 
   // The root has no parent, so its local position and rotation are world ones.
@@ -873,14 +806,19 @@ var FirePlaylistPanel = class {
   }
 
   async close() {
-    if (this.held && this.grabBar && typeof this.grabBar.ReleaseGrab === 'function') {
-      try { await this.grabBar.ReleaseGrab(); } catch (e) {}
+    if (this.held && this.mover && typeof this.mover.ReleaseGrab === 'function') {
+      try { await this.mover.ReleaseGrab(); } catch (e) {}
     }
     this.held = false;
     this.visible = false;
     clearInterval(this.tickTimer);
     this.tickTimer = null;
     await this.moveTo(this.hiddenPos);
+    // The cube goes too; opening always places it again first.
+    if (this.mover) {
+      await this.setLocal(this.mover, new BS.Vector3(0, -1000, 0), null);
+      this.stopDrift();
+    }
   }
 
   // ---------------------------------------------------------------- actions

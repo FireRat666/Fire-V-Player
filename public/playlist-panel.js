@@ -11,7 +11,9 @@
 //
 // Each user gets their own local panel. It sits beside the screen and is shown/hidden by the
 // playlist button. It hides by moving out of view, because deactivating a UI Toolkit document
-// can drop the elements created at runtime.
+// can drop the elements created at runtime. The hand's Playlist button and Move Here put it in
+// front of the player, and the bar under it can be grabbed to carry it.
+var PAGE_JUMP = 5; // pages the << and >> buttons move
 var FirePlaylistPanel = class {
   constructor(core) {
     this.core = core;
@@ -281,14 +283,31 @@ var FirePlaylistPanel = class {
     }).Async(), 15000, 'Creating the panel root object');
     this.checkAlive();
 
-    this.shownPos = this.toUnityPos(offset);
-    this.hiddenPos = new BS.Vector3(this.shownPos.x, this.shownPos.y - 1000, this.shownPos.z);
+    // root (the screen, or the world) > mover (where the panel is; the part that's grabbed and
+    // carried) > panel (the UI). Hiding moves only the panel, so the mover stays wherever the
+    // player put it.
+    // Where it sits by the screen, to go back to after being opened in front of a player.
+    this.home = {
+      rootLocalPos: worldPos ? new BS.Vector3(0, 0, 0) : this.toUnityPos(screenPos),
+      rootLocalRot: worldPos ? new BS.Vector3(0, 0, 0) : this.toUnityEuler(screenRot),
+      moverPos: this.toUnityPos(offset),
+      moverRot: this.toUnityEuler(rot)
+    };
+    this.placement = 'home'; // 'home' (by the screen) | 'front' (in front of the player) | 'moved' (carried)
+    this.shownPos = new BS.Vector3(0, 0, 0);
+    this.hiddenPos = new BS.Vector3(0, -1000, 0);
+    this.mover = await this.withTimeout(new BS.GameObject({
+      name: 'FireVPlayer_PlaylistMover',
+      parent: this.root,
+      localPosition: this.home.moverPos,
+      localEulerAngles: this.home.moverRot
+    }).Async(), 15000, 'Creating the panel mover object');
+    this.checkAlive();
     const s = panelWidthM / (this.W / 100); // a panel is 100 pixels per metre
     this.panelObj = await this.withTimeout(new BS.GameObject({
       name: 'FireVPlayer_PlaylistPanel',
-      parent: this.root,
+      parent: this.mover,
       localPosition: this.hiddenPos,
-      localEulerAngles: this.toUnityEuler(rot),
       localScale: new BS.Vector3(s, s, s)
     }).Async(), 15000, 'Creating the panel object');
     this.checkAlive();
@@ -317,6 +336,11 @@ var FirePlaylistPanel = class {
     this.hostLabel = await this.label(header, '', { fontSize: '20px', color: '#bbbbbb', marginRight: '12px' });
     await this.button(header, 'Refresh', () => this.refresh(true), { backgroundColor: GREY });
     this.moreBtn = await this.button(header, 'More...', () => this.setView(this.view === 'more' ? 'main' : 'more'), { backgroundColor: GREY });
+    // Brings the panel round in front of you, wherever you're standing.
+    await this.button(header, 'Move Here', () => {
+      if (this.frontPose()) this.place('front');
+      else this.setStatus('Move your head a little first, so the world knows where you are.');
+    }, { backgroundColor: GREY });
     await this.button(header, 'Close', () => this.close(), { backgroundColor: GREY });
 
     // Now playing
@@ -363,9 +387,15 @@ var FirePlaylistPanel = class {
     this.tabPlaylistBtn = await this.button(tabs, this.karaoke ? 'Singers' : 'Playlist', () => this.setTab('playlist'));
     this.tabSearchBtn = await this.button(tabs, 'Search', () => this.setTab('search'));
     await this.div(tabs, { flexGrow: 1 });
-    await this.button(tabs, '<', () => this.changePage(-1), { backgroundColor: GREY });
+    // Page buttons: first, back 5, back 1, forward 1, forward 5, last.
+    const pageBtn = { backgroundColor: GREY, paddingLeft: '12px', paddingRight: '12px' };
+    this.firstPageBtn = await this.button(tabs, '|<', () => this.changePage(-Infinity), pageBtn);
+    this.back5Btn = await this.button(tabs, '<<', () => this.changePage(-PAGE_JUMP), pageBtn);
+    await this.button(tabs, '<', () => this.changePage(-1), pageBtn);
     this.pageLabel = await this.label(tabs, '1 / 1', { fontSize: '20px', width: '100px', textAlign: 'center' });
-    await this.button(tabs, '>', () => this.changePage(1), { backgroundColor: GREY });
+    await this.button(tabs, '>', () => this.changePage(1), pageBtn);
+    this.fwd5Btn = await this.button(tabs, '>>', () => this.changePage(PAGE_JUMP), pageBtn);
+    this.lastPageBtn = await this.button(tabs, '>|', () => this.changePage(Infinity), pageBtn);
 
     this.searchRow = await row(this.mainView, { marginTop: '4px' });
     const searchHint = this.karaoke ? 'Search for a song to sing, or paste a video link' : 'Search YouTube, or paste a YouTube / Twitch / Vimeo / video link';
@@ -522,9 +552,70 @@ var FirePlaylistPanel = class {
     this.statusLabel = await this.label(footer, '', { fontSize: '20px', color: '#ffcc66', flexGrow: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' });
 
     this.checkAlive();
+    try {
+      await this.addGrabBar();
+    } catch (e) {
+      if (this.destroyed) throw e;
+      console.warn('[PlaylistPanel] Could not add the grab bar, so the panel can only be moved with Move Here:', e);
+    }
+    this.checkAlive();
     this.built = true;
     this.render();
     console.log('[PlaylistPanel] Ready.');
+  }
+
+  // A bar under the panel that players grab to carry it. The panel's own collider has to stay on
+  // the UI layer for clicks, and grabbing needs a collider on the Grabbable layer (20) with a
+  // GrabHandle, so the bar is separate. Grabbing moves the Rigidbody the bar belongs to, which is
+  // on the mover, so the whole panel comes along. The Rigidbody has no gravity, a lot of drag (so
+  // it stays put when let go) and can only turn around the vertical, so the panel stays upright.
+  async addGrabBar() {
+    if (!BS.Rigidbody || !BS.GrabHandle || !BS.BoxCollider) {
+      console.log('[PlaylistPanel] This client has no Rigidbody / GrabHandle, so no grab bar.');
+      return;
+    }
+    const LAYER_GRABBABLE = (BS.L && BS.L.Grabbable) || 20;
+    // In the panel's own units: it is W/100 wide and H/100 tall, centred.
+    const bar = await new BS.GameObject({
+      name: 'FireVPlayer_PlaylistGrabBar',
+      parent: this.panelObj,
+      localPosition: new BS.Vector3(0, -this.H / 200 - 0.45, 0),
+      layer: LAYER_GRABBABLE
+    }).Async();
+    this.checkAlive();
+    const w = 4, h = 0.35;
+    if (BS.Box) await bar.AddComponent(new BS.Box({ width: w, height: h, depth: h }));
+    if (BS.Material) await bar.AddComponent(new BS.Material({ shaderName: 'Unlit/Diffuse', color: new BS.Vector4(0.6, 0.6, 0.66, 1) }));
+    // A little bigger than the bar, so it's easy to catch.
+    await bar.AddComponent(new BS.BoxCollider({ isTrigger: false, size: new BS.Vector3(w + 0.4, h + 0.4, h + 0.4) }));
+    this.checkAlive();
+    this.body = await this.mover.AddComponent(new BS.Rigidbody({
+      mass: 1, drag: 20, angularDrag: 20, useGravity: false, isKinematic: false,
+      freezeRotationX: true, freezeRotationZ: true
+    }));
+    this.checkAlive();
+    const soft = BS.BSGrabType && BS.BSGrabType.Soft !== undefined ? BS.BSGrabType.Soft : 3;
+    await bar.AddComponent(new BS.GrabHandle({ grabType: soft, grabRadius: 0.01 }));
+    // Once carried, the screen's Playlist button brings it back beside the screen.
+    bar.On('grab', () => { this.placement = 'moved'; });
+    this.mover.On('grab', () => { this.placement = 'moved'; });
+    const settle = () => {
+      this.placement = 'moved';
+      this.stopDrift();
+    };
+    bar.On('drop', settle);
+    this.mover.On('drop', settle);
+    console.log('[PlaylistPanel] Grab bar added under the panel.');
+  }
+
+  // Stops the panel sliding on after it's let go or moved by script.
+  stopDrift() {
+    const b = this.body;
+    if (!b) return;
+    try {
+      b.velocity = new BS.Vector3(0, 0, 0);
+      b.angularVelocity = new BS.Vector3(0, 0, 0);
+    } catch (e) {}
   }
 
   // Stops a build that is still running when the panel is destroyed.
@@ -548,7 +639,7 @@ var FirePlaylistPanel = class {
       } catch (e) {
         console.warn('[PlaylistPanel] Could not remove the panel objects:', e);
       }
-      this.root = this.panelObj = this.ui = null;
+      this.root = this.mover = this.panelObj = this.ui = this.body = null;
     };
     if (this.buildPromise) this.buildPromise.then(removeObjects, removeObjects);
     else removeObjects();
@@ -557,7 +648,9 @@ var FirePlaylistPanel = class {
 
   // ---------------------------------------------------------------- show / hide
 
-  async toggle() {
+  // inFront: open (or bring over) in front of the player, as the hand's Playlist button does.
+  // Otherwise it opens by the screen. Pressing the same button again closes it.
+  async toggle(inFront) {
     if (!this.built && !this.failed) console.log('[PlaylistPanel] Still building, will open when ready.');
     await this.build();
     if (this.destroyed) return;
@@ -565,8 +658,13 @@ var FirePlaylistPanel = class {
       this.core.openPlaylistPage();
       return;
     }
-    if (this.visible) await this.close();
-    else await this.open();
+    const want = inFront && this.frontPose() ? 'front' : 'home';
+    if (this.visible && this.placement === want && want === 'home') return this.close();
+    // In front, a press while it's open in front closes it only when the player hasn't turned
+    // away from it; otherwise it comes round to where they're looking.
+    if (this.visible && want === 'front' && this.placement === 'front' && !this.lookedAway()) return this.close();
+    await this.place(want);
+    if (!this.visible) await this.open();
   }
 
   async moveTo(pos) {
@@ -574,6 +672,66 @@ var FirePlaylistPanel = class {
     if (!o) return;
     if (typeof o.SetLocalPosition === 'function') await o.SetLocalPosition(pos);
     else if (o.transform) o.transform.localPosition = pos;
+  }
+
+  // ---------------------------------------------------------------- placement
+
+  // Where the panel goes in front of the player: 0.9 m ahead of their head, a little below eye
+  // level, turned to face them (only around the vertical, so it stays upright). Null until the
+  // SDK has sent the head's pose, which it does once the player moves.
+  frontPose() {
+    const head = this.core.lastHead;
+    if (!head || !head.position || !head.rotation) return null;
+    const q = head.rotation, p = head.position;
+    // The head's forward (+Z) flattened onto the floor.
+    const fx = 2 * (q.x * q.z + q.w * q.y), fz = 1 - 2 * (q.x * q.x + q.y * q.y);
+    if (Math.abs(fx) + Math.abs(fz) < 1e-6) return null;
+    const yaw = Math.atan2(fx, fz);
+    const d = 0.9;
+    return {
+      yaw: yaw * 180 / Math.PI,
+      position: new BS.Vector3(p.x + Math.sin(yaw) * d, p.y - 0.15, p.z + Math.cos(yaw) * d)
+    };
+  }
+
+  // Whether the player now faces more than 45 degrees away from where the panel was put.
+  lookedAway() {
+    const now = this.frontPose();
+    if (!now || this.frontYaw === undefined) return false;
+    const diff = Math.abs(((now.yaw - this.frontYaw) % 360 + 540) % 360 - 180);
+    return diff > 45;
+  }
+
+  async place(where) {
+    const root = this.root, mover = this.mover;
+    if (!root || !mover) return;
+    if (where === 'front') {
+      const pose = this.frontPose();
+      if (!pose) return;
+      this.frontYaw = pose.yaw;
+      // The panel is seen from -Z, so facing the same way as the player turns its front to them.
+      await this.setLocal(root, pose.position, new BS.Vector3(0, pose.yaw, 0));
+      await this.setLocal(mover, new BS.Vector3(0, 0, 0), new BS.Vector3(0, 0, 0));
+    } else {
+      const h = this.home;
+      await this.setLocal(root, h.rootLocalPos, h.rootLocalRot);
+      await this.setLocal(mover, h.moverPos, h.moverRot);
+    }
+    this.stopDrift();
+    this.placement = where;
+    await this.moveTo(this.visible ? this.shownPos : this.hiddenPos);
+  }
+
+  // The root has no parent, so its local position and rotation are world ones.
+  async setLocal(o, pos, euler) {
+    if (pos) {
+      if (typeof o.SetLocalPosition === 'function') await o.SetLocalPosition(pos);
+      else if (o.transform) o.transform.localPosition = pos;
+    }
+    if (euler) {
+      if (typeof o.SetLocalEulerAngles === 'function') await o.SetLocalEulerAngles(euler);
+      else if (o.transform) o.transform.localEulerAngles = euler;
+    }
   }
 
   // Fetches the whole state from the server, in case the panel's list is out of date.
@@ -947,6 +1105,11 @@ var FirePlaylistPanel = class {
     else this.page = Math.min(this.page, pages - 1);
     const page = onSearch ? this.searchPage : this.page;
     this.setText(this.pageLabel, `${page + 1} / ${pages}`);
+    // First and last are worth showing from 3 pages, the jumps of 5 only past that.
+    this.display(this.firstPageBtn, pages > 2);
+    this.display(this.lastPageBtn, pages > 2);
+    this.display(this.back5Btn, pages > PAGE_JUMP);
+    this.display(this.fwd5Btn, pages > PAGE_JUMP);
 
     // Rows
     for (let k = 0; k < this.rows.length; k++) {

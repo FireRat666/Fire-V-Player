@@ -76,6 +76,7 @@ var Core = class {
       }
 
       this.setupSpatial();
+      this.trackHead();
       // By the time this runs, window.user is already set by the entry-point script
       // (playlist.js / karaoke.js) which waited for bs-loaded + unity-loaded before
       // loading anything. No further waiting is needed here.
@@ -616,7 +617,8 @@ var Core = class {
     this.playlistButtonText = button.label;
   }
 
-  openPlaylist() {
+  // inFront: the hand's Playlist button, which opens the panel in front of the player.
+  openPlaylist(inFront) {
     // Clicks can arrive twice in quick succession (pointer + trigger), so debounce.
     const now = Date.now();
     if (this._lastPlaylistToggle && now - this._lastPlaylistToggle < 600) return;
@@ -625,7 +627,7 @@ var Core = class {
 
     // In-world UI Toolkit panel (new SDK), when one was set up for this player.
     if (this.playlistPanel) {
-      this.playlistPanel.toggle();
+      this.playlistPanel.toggle(inFront === true);
       return;
     }
     this.openPlaylistPage();
@@ -883,6 +885,16 @@ var Core = class {
   // ---------------------------------------------------------------- spatial volume
   // With `spatial` on, the volume fades with the local player's distance from the screen. The
   // SDK sends the head's world position as pose-update, only while the player moves.
+  // Keeps the local player's latest head pose (world space), for opening the panel in front of them.
+  trackHead() {
+    const scene = this.banterScene();
+    if (!scene || this.onHeadPose) return;
+    this.onHeadPose = e => {
+      const head = e && e.detail && e.detail.head;
+      if (head && head.position && head.rotation) this.lastHead = head;
+    };
+    scene.On('pose-update', this.onHeadPose);
+  }
   setupSpatial() {
     const scene = this.banterScene();
     if (!scene || this.params.spatial !== 'true' || this.onPoseUpdate) return;
@@ -947,27 +959,29 @@ var Core = class {
     try {
       const root = await this.makeObject('FireVPlayer_HandControls');
       this.handControls = root;
-      const Quaternion = BS.Quaternion || BS.Vector4;
+      // The buttons lie flat on the back of the wrist, facing out of it. These are in the hand's
+      // own Unity axes, with no A-Frame conversion. The hand-controls-position and
+      // hand-controls-rotation settings change them.
       const wrapper = await this.makeObject('FireVPlayer_HandWrapper', {
         parent: root,
-        position: new BS.Vector3(0, 0.046, 0.030),
-        quaternion: new Quaternion(0.25, 0, 0.8, 1),
+        position: this.toVector3(this.vec3(this.params['hand-controls-position'], [0, 0.046, 0.03])),
+        rotation: this.toVector3(this.vec3(this.params['hand-controls-rotation'], [0, 90, 180])),
         scale: new BS.Vector3(0.1, 0.1, 0.1)
       });
-      const flip = new BS.Vector3(180, 0, 0);
       const buttons = [
         ['Mute', -0.4, 0.4, "data-mute-icon-url", () => this.mute()],
         ['VolumeDown', 0, 0.4, "data-vol-down-icon-url", () => this.volume(false)],
         ['VolumeUp', 0.4, 0.4, "data-vol-up-icon-url", () => this.volume(true)],
         ['SkipBack', -0.4, -0.1, "data-skip-backward-icon-url", () => this.sendBrowserMessage({path: Commands.SKIP_BACK})],
         ['SkipForward', 0, -0.1, "data-skip-forward-icon-url", () => this.sendBrowserMessage({path: Commands.SKIP_FORWARD})],
-        ['Playlist', 0.4, -0.1, "data-playlist-icon-url", () => this.openPlaylist()]
+        ['Playlist', 0.4, -0.1, "data-playlist-icon-url", () => this.openPlaylist(true)]
       ];
       for (const [name, x, y, icon, callback] of buttons) {
         if (root !== this.handControls) return; // removed meanwhile
-        await this.makeIconButton(`FireVPlayer_Hand${name}`, wrapper, new BS.Vector3(x, y, 0.3), 0.4, this.params[icon], () => {
+        // Just off the wrist, toward -Z: the side a button is seen from.
+        await this.makeIconButton(`FireVPlayer_Hand${name}`, wrapper, new BS.Vector3(x, y, -0.3), 0.4, this.params[icon], () => {
           Promise.resolve(callback()).catch(() => {});
-        }, flip);
+        });
       }
       if (root !== this.handControls) return; // removed meanwhile
       await new Promise(resolve => setTimeout(resolve, 1000));
@@ -1042,6 +1056,10 @@ var Core = class {
     this.setOrDefault("announce", 'true');
     this.setOrDefault("announce-four-twenty", 'false');
     this.setOrDefault("hand-controls", 'false');
+    // Fine-tunes where the hand buttons sit on the left hand, in the hand's own Unity axes:
+    // "x y z" metres and "x y z" degrees. Empty uses the built-in layout.
+    this.setOrDefault("hand-controls-position", '');
+    this.setOrDefault("hand-controls-rotation", '');
     this.setOrDefault("mip-maps", '1');
     this.setOrDefault("spatial", 'true');
     this.setOrDefault("geometry", "false");
@@ -1535,10 +1553,11 @@ var Core = class {
     const scene = this.banterScene();
     if (scene && typeof scene.Off === 'function') {
       if (this.onPoseUpdate) scene.Off('pose-update', this.onPoseUpdate);
+      if (this.onHeadPose) scene.Off('pose-update', this.onHeadPose);
       if (this.onHandUserLeft) scene.Off('user-left', this.onHandUserLeft);
       if (this.onHandUserJoined) scene.Off('user-joined', this.onHandUserJoined);
     }
-    this.onPoseUpdate = this.onHandUserLeft = this.onHandUserJoined = null;
+    this.onPoseUpdate = this.onHeadPose = this.onHandUserLeft = this.onHandUserJoined = null;
     this.watchingHandUser = false;
     console.log("Removed the world's objects.");
 

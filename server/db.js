@@ -97,8 +97,10 @@ const sequelize = mainDbUrl ? createSequelizeInstance(mainDbUrl) : null;
 // --- Helper Functions ---
 
 /**
- * Applies a strict Row Level Security (RLS) "Deny All" policy to a given PostgreSQL table.
- * Enhances security by ensuring external or unauthorized clients cannot query the table directly.
+ * Turns on Row Level Security (RLS) for a PostgreSQL table with a "Deny All" policy, so roles
+ * subject to RLS (such as a hosting provider's public API roles) can't read or write its rows.
+ * It doesn't block the table's owner (the app's own connection) or roles with BYPASSRLS or
+ * superuser, since RLS isn't forced on the table.
  *
  * @param {string} tableName - Name of the database table.
  * @returns {Promise<void>}

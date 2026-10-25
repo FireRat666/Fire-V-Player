@@ -27,6 +27,18 @@ const { getInnertube } = require('./youtubeiService.js');
  */
 
 /**
+ * @typedef {Object} VideoLookup
+ * @property {string} id - 11-character YouTube video ID.
+ * @property {string} title - Video title ('Unknown Title' if none was found).
+ * @property {number} duration - Video duration in milliseconds (0 if unknown).
+ * @property {string} link - Full YouTube watch URL.
+ * @property {string} thumbnail - URL of best available thumbnail.
+ * @property {Object} channel - Video author/channel details.
+ * @property {string} channel.name - Channel name ('Unknown Channel' if none was found).
+ * @property {string} channel.id - Channel identifier (empty if unknown).
+ */
+
+/**
  * @typedef {Object} ScrapedPlaylist
  * @property {string} id - YouTube playlist ID.
  * @property {string} link - Full YouTube playlist URL.
@@ -188,7 +200,7 @@ class Scraper {
    * Fetches metadata for a single video by full URL or ID.
    *
    * @param {string} url - The full YouTube URL or watch link.
-   * @returns {Promise<ScrapedVideo>} Resolved video metadata object.
+   * @returns {Promise<VideoLookup>} The video's metadata.
    * @throws {Error} If URL is invalid or video cannot be found/accessed.
    */
   async getVideoByUrl(url) {

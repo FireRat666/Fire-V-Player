@@ -68,7 +68,9 @@
    *
    * @param {HTMLScriptElement|Object} source - The launcher script or snippet element.
    * @param {'playlist'|'karaoke'} mode - Desired startup mode.
-   * @returns {Promise<Object|undefined>} The initialized player instance.
+   * @returns {Promise<Object|undefined>} The player instance, or undefined if a player is already
+   *   running or base-player.js couldn't load. The instance may still be starting up: await
+   *   `instance.ready` before using it.
    */
   FVP.startPlayer = async (source, mode) => {
     mode = mode === 'karaoke' ? 'karaoke' : 'playlist';
@@ -85,9 +87,9 @@
     }
   };
 
-  /** Launches a player in Playlist mode. @param {Object} source @returns {Promise<Object>} */
+  /** Launches a player in Playlist mode (see startPlayer). @param {Object} source @returns {Promise<Object|undefined>} Await `instance.ready` before using it. */
   FVP.startPlaylistPlayer = (source) => FVP.startPlayer(source, 'playlist');
-  /** Launches a player in Karaoke mode. @param {Object} source @returns {Promise<Object>} */
+  /** Launches a player in Karaoke mode (see startPlayer). @param {Object} source @returns {Promise<Object|undefined>} Await `instance.ready` before using it. */
   FVP.startKaraokePlayer = (source) => FVP.startPlayer(source, 'karaoke');
 
   /**
@@ -95,7 +97,8 @@
    *
    * @param {Object} source - Script element or adapter.
    * @param {'playlist'|'karaoke'} defaultMode - Default operating mode.
-   * @returns {Promise<Object>} Instantiated player.
+   * @returns {Promise<Object|undefined>} The player, still starting up (await its `ready`), or
+   *   undefined if base-player.js couldn't load.
    */
   const startPlayer = async (source, defaultMode) => {
     const origin = new URL(source.src).origin;

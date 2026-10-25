@@ -105,16 +105,18 @@ class VideoElementSource extends BaseMediaSource {
 
     el.addEventListener('loadedmetadata', () => {
       this.ready = true;
-      if (el.duration === Infinity) this.live = true; // a live stream
-      else {
-        this.reportDuration(el.duration);
-        if (this.pendingSeek > 0 && this.pendingSeek < el.duration) el.currentTime = this.pendingSeek;
-      }
-      this.pendingSeek = 0;
+      // No length doesn't mean live: a file can just not say how long it is. Only an .m3u8 the
+      // browser plays itself (no hls.js stream details to go by) counts as live from that.
+      if (el.duration === Infinity && hls && !this.hls) this.live = true;
+      this.reportDuration(el.duration);
+      this.applyPendingSeek();
       this.wantPaused ? el.pause() : this.tryPlay();
     });
+    // A file without a length up front may give one later, and can only seek as far as it has loaded.
+    el.addEventListener('durationchange', () => { this.reportDuration(el.duration); this.applyPendingSeek(); });
+    el.addEventListener('progress', () => this.applyPendingSeek());
     el.addEventListener('error', () => opts.onError("Couldn't play this video. The link may be wrong, or the site may not allow it here."));
-    this.pendingSeek = opts.start;
+    this.pendingSeek = opts.start > 0 ? opts.start : null; // a seek waiting until the file can go there
 
     if (!hls || el.canPlayType('application/vnd.apple.mpegurl')) {
       el.src = opts.link;
@@ -159,10 +161,23 @@ class VideoElementSource extends BaseMediaSource {
   pause() { this.wantPaused = true; if (this.ready) this.el.pause(); }
   seek(t) {
     if (this.live) return;
-    if (!this.ready) { this.pendingSeek = t; return; }
-    this.el.currentTime = Math.max(0, t);
+    this.pendingSeek = Math.max(0, Number(t) || 0);
+    if (this.ready) this.applyPendingSeek();
   }
-  time() { return this.ready ? this.el.currentTime : (this.pendingSeek || 0); }
+
+  /** Moves to the waiting seek once the file can go there: within its length, or what has loaded. */
+  applyPendingSeek() {
+    const el = this.el, t = this.pendingSeek;
+    if (!this.ready || this.live || t == null) return;
+    if (isFinite(el.duration)) {
+      if (t < el.duration) el.currentTime = t;
+      this.pendingSeek = null;
+      return;
+    }
+    const s = el.seekable;
+    if (s && s.length && t <= s.end(s.length - 1)) { el.currentTime = t; this.pendingSeek = null; }
+  }
+  time() { return this.ready && this.pendingSeek == null ? this.el.currentTime : (this.pendingSeek || 0); }
   state() {
     const el = this.el;
     if (!this.ready) return MEDIA_STATE.UNSTARTED;
@@ -606,16 +621,6 @@ class MediaSwitch {
   setOption(a, b, c) { if (!this.source) this.yt.setOption(a, b, c); }
   getOption(a, b) { return this.source ? undefined : this.yt.getOption(a, b); }
 }
-window.MediaSwitch = MediaSwitch;
-
-// Fullscreen breaks the in-world screen until the space is rejoined, so leave it at once if any
-// embedded player (or its controls) asks for it.
-['fullscreenchange', 'webkitfullscreenchange'].forEach(name => document.addEventListener(name, () => {
-  const el = document.fullscreenElement || document.webkitFullscreenElement;
-  if (!el) return;
-  console.log('Fire-V-Player: leaving fullscreen');
-  try { (document.exitFullscreen || document.webkitExitFullscreen).call(document); } catch (e) {}
-}));
 window.MediaSwitch = MediaSwitch;
 
 // Fullscreen breaks the in-world screen until the space is rejoined, so leave it at once if any

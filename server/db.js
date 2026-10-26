@@ -173,19 +173,44 @@ const runOneTimeMigration = async () => {
   const PlayerStateModel = require('./models/playerState');
   const OldPlayerState = PlayerStateModel(oldSequelize, DataTypes);
   const NewPlayerState = PlayerStateModel(sequelize, DataTypes); // Use the main new sequelize instance
+  const BlockedUserModel = require('./models/blockedUser');
+  const OldBlockedUser = BlockedUserModel(oldSequelize, DataTypes);
+  const NewBlockedUser = BlockedUserModel(sequelize, DataTypes);
+
+  // The destination needs every table before anything is copied into it (this is a no-op for
+  // tables it already has; the usual run after this finds nothing left to do).
+  console.log('Applying the schema to the destination database...');
+  await runMigrations();
 
   console.log('Fetching all data from the source database...');
   const allStates = await OldPlayerState.findAll({ raw: true });
-  console.log(`Found ${allStates.length} records to migrate.`);
+  console.log(`Found ${allStates.length} player state records to migrate.`);
+  // The blacklist (see server/blacklist.js). A source database from before it has no table yet.
+  let blockedUsers = [];
+  try {
+    blockedUsers = await OldBlockedUser.findAll({ raw: true });
+    console.log(`Found ${blockedUsers.length} blocked users to migrate.`);
+  } catch (err) {
+    if (err.original && err.original.code === '42P01') console.log('The source database has no blacklist table, so there are no blocked users to migrate.');
+    else throw err;
+  }
 
-  if (allStates.length > 0) {
+  if (allStates.length > 0 || blockedUsers.length > 0) {
     const transaction = await sequelize.transaction();
     try {
       console.log('Starting transaction on destination database...');
-      await NewPlayerState.destroy({ where: {}, truncate: true, transaction });
-      console.log('Destination table truncated.');
-      await NewPlayerState.bulkCreate(allStates, { transaction });
-      console.log('All records inserted into destination database.');
+      if (allStates.length > 0) {
+        await NewPlayerState.destroy({ where: {}, truncate: true, transaction });
+        console.log('Destination player state table truncated.');
+        await NewPlayerState.bulkCreate(allStates, { transaction });
+        console.log('All player state records inserted into destination database.');
+      }
+      if (blockedUsers.length > 0) {
+        // Keeps each entry's original dates (bulkCreate only fills in missing ones).
+        await NewBlockedUser.destroy({ where: {}, truncate: true, transaction });
+        await NewBlockedUser.bulkCreate(blockedUsers, { transaction });
+        console.log('All blocked users inserted into destination database.');
+      }
       await transaction.commit();
       console.log('Transaction committed.');
     } catch (err) {
@@ -224,6 +249,7 @@ const initializeDatabase = async () => {
 
     await applyRlsPolicy('SequelizeMeta');
     await applyRlsPolicy('player_state');
+    await applyRlsPolicy('blocked_users');
 
     return { dbConnected: true };
 

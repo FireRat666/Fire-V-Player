@@ -125,7 +125,7 @@ The migration is triggered by setting both a `DATABASE_URL` (for the old DB) and
 
 3.  **Trigger the Migration:**
     -   From the Render dashboard, manually restart your web service by going to the "Manual Deploy" menu and selecting "Restart service".
-    -   On startup, the application will detect both database URLs, apply the schema to the new database, and copy all data from the old `DATABASE_URL` to the `NEW_DATABASE_URL`.
+    -   On startup, the application will detect both database URLs, apply the schema to the new database, and copy all data (player state and the blacklist) from the old `DATABASE_URL` to the `NEW_DATABASE_URL`. A source database from before the blacklist existed just has no blocked users to copy.
 
 4.  **Verify Success:**
     -   Go to the "Logs" tab for your service. You should see log messages like `!!! New database URL detected...` followed by `✔✔✔ Application will now use the new database. ✔✔✔`.
@@ -135,6 +135,28 @@ The migration is triggered by setting both a `DATABASE_URL` (for the old DB) and
     -   Update the value of the original `DATABASE_URL` variable, replacing it with your **new** database's URL.
     -   **Delete** the `NEW_DATABASE_URL` environment variable.
     -   The service will restart automatically. It will now run exclusively on your new, permanent database. Your old database is no longer used and can be safely deleted.
+
+### Blacklist
+
+You can stop people using the player in every world that uses your server. They still see the video, but nothing they press works and their volume stays at 100% (see [USAGE.md](USAGE.md#blacklist)).
+
+1.  **Make a hash of your password** on your own computer, in the project folder (after `npm install`):
+    ```bash
+    npm run hash-password
+    ```
+    (Or `node server/hash-password.js`, which needs no `npm install`.) Type a password of at least 12 characters, twice (nothing shows as you type). It prints one line starting with `scrypt:`. That's a salted hash: the server can check your password with it, but nobody can get the password back from it.
+2.  **Save the hash on the server:** in your Render Web Service's "Environment" tab, add `ADMIN_PASSWORD_HASH` and paste that whole line as the value. The service restarts. Without it the admin page is turned off.
+    -   Keep the password itself somewhere safe, such as a password manager. To change it, run the command again and replace the value.
+    -   `ADMIN_PASSWORD` (the password itself, in plain text) also works when there's no hash, but anyone who can see your Render settings can read it, so prefer the hash.
+3.  **Open the admin page:** `https://<your server>/admin.html` (e.g. `https://vidya.firer.at/admin.html`) and sign in with the password itself, not the hash. It's kept only for that browser tab.
+4.  **Block someone:** the **Recently seen** list shows everyone who has connected since the server started, with their user ID and the world they were in (a green dot means they're connected now). Search for their name and press **Block**. Or paste a user ID (it's in the server's logs, e.g. `Requester ID: ...`) into **Block someone by ID**.
+5.  **Unblock** them from the **Blocked** list.
+
+Changes apply straight away, also to people who are connected: they lose host (anyone can take over from them), their votes and their place in the singer queue, and clicks on their screen are turned off.
+
+-   People are matched by their Banter user ID, which each player reports for itself. That stops anyone using the normal client; a modified client could report someone else's ID.
+-   The list is saved in the `blocked_users` table (created by the migrations). Without a database it only lasts until the server restarts. The [one-time database migration](#automated-database-migration) copies it along with the player state.
+-   After 5 wrong passwords from one address, it has to wait 10 minutes.
 
 ### Advanced Configuration
 

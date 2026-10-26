@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Fire-V-Player Blacklist</title>
+  <link rel="icon" href="favicon.ico">
+  <style>
+    :root {
+      --bg: #050706; --panel: #0d1210; --border: rgba(255,255,255,0.1); --text: #f2f5f3; --muted: #8f9894;
+      --green: #00ff44; --red: #ff4d5e; --yellow: #ffe94d;
+      color-scheme: dark;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+    main { max-width: 960px; margin: 0 auto; padding: 24px 16px 60px; }
+    h1 { font-size: 1.6rem; margin: 0 0 4px; }
+    h1 span { color: var(--green); }
+    h2 { font-size: 1.1rem; margin: 0 0 12px; }
+    p.note { color: var(--muted); margin: 0 0 20px; font-size: 0.9rem; }
+    section { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px; margin-bottom: 18px; }
+    label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 4px; }
+    input { width: 100%; background: #000; color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px; font: inherit; }
+    input:focus { outline: none; border-color: var(--green); }
+    button { background: transparent; color: var(--green); border: 1px solid rgba(0,255,68,0.5); border-radius: 8px; padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; }
+    button:hover { background: rgba(0,255,68,0.1); }
+    button.danger { color: var(--red); border-color: rgba(255,77,94,0.5); }
+    button.danger:hover { background: rgba(255,77,94,0.1); }
+    button:disabled { opacity: 0.4; cursor: default; }
+    .row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+    .row > div { flex: 1 1 180px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    td.id { font-family: ui-monospace, Consolas, monospace; font-size: 0.8rem; color: var(--muted); word-break: break-all; }
+    td.where { font-size: 0.8rem; color: var(--muted); word-break: break-all; }
+    td.act { text-align: right; width: 1%; }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--green); margin-right: 6px; }
+    .tag { font-size: 0.7rem; color: var(--red); border: 1px solid rgba(255,77,94,0.5); border-radius: 999px; padding: 1px 7px; margin-left: 6px; }
+    .empty { color: var(--muted); padding: 10px 0; }
+    #msg { min-height: 1.4em; margin: 10px 0 0; font-size: 0.9rem; }
+    #msg.err { color: var(--red); } #msg.ok { color: var(--green); }
+    #warn { color: var(--yellow); font-size: 0.85rem; margin-top: 10px; }
+    .table-wrap { overflow-x: auto; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+<main>
+  <h1><span>Fire-V-Player</span> Blacklist</h1>
+  <p class="note">People on this list can't control the player in any world. They still see the video, but every button does nothing and their volume stays at 100%. They're matched by their Banter user ID, not their name.</p>
+
+  <section id="login">
+    <h2>Sign in</h2>
+    <form class="row" id="login-form">
+      <div><label for="password">Admin password</label><input type="password" id="password" autocomplete="current-password" required></div>
+      <button type="submit">Sign in</button>
+    </form>
+    <p id="login-msg" class="note" style="margin:10px 0 0"></p>
+  </section>
+
+  <div id="app" hidden>
+    <section>
+      <h2>Block someone by ID</h2>
+      <form class="row" id="add-form">
+        <div><label for="add-id">User ID</label><input id="add-id" required placeholder="e.g. 22de6bc5c2aea8267d20901e86e46014"></div>
+        <div><label for="add-name">Name (optional, to recognise them)</label><input id="add-name"></div>
+        <div><label for="add-reason">Reason (optional)</label><input id="add-reason"></div>
+        <button type="submit" class="danger">Block</button>
+      </form>
+      <p id="msg"></p>
+      <p id="warn" hidden>The server has no database connected, so this list is lost when it restarts.</p>
+    </section>
+
+    <section>
+      <h2>Blocked (<span id="blocked-count">0</span>)</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Name</th><th>User ID</th><th>Reason</th><th>Blocked</th><th></th></tr></thead>
+        <tbody id="blocked"></tbody>
+      </table></div>
+    </section>
+
+    <section>
+      <h2>Recently seen</h2>
+      <p class="note" style="margin-bottom:10px">Everyone who has connected since the server last started, newest first. <span class="dot"></span>= connected now.</p>
+      <div class="row" style="margin-bottom:10px">
+        <div><label for="filter">Search names, IDs or worlds</label><input id="filter" type="search"></div>
+        <button type="button" id="refresh">Refresh</button>
+        <button type="button" id="signout">Sign out</button>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Name</th><th>User ID</th><th>World / room</th><th>Last seen</th><th></th></tr></thead>
+        <tbody id="recent"></tbody>
+      </table></div>
+    </section>
+  </div>
+</main>
+<script>
+(() => {
+  const KEY = 'fvp-admin-password';
+  const $ = (id) => document.getElementById(id);
+  let password = '';
+  try { password = sessionStorage.getItem(KEY) || ''; } catch (e) {}
+  let recent = [];
+
+  const api = async (path, opts = {}, retries = 8) => {
+    const res = await fetch('/admin/api' + path, Object.assign({}, opts, {
+      headers: Object.assign({ 'Authorization': 'Bearer ' + password, 'Content-Type': 'application/json' }, opts.headers || {})
+    }));
+    let body = {};
+    try { body = await res.json(); } catch (e) {}
+    // The server is still checking another of this page's requests: wait and ask again.
+    if (res.status === 503 && body.busy && retries > 0) {
+      await new Promise(r => setTimeout(r, 400));
+      return api(path, opts, retries - 1);
+    }
+    if (!res.ok) {
+      const err = new Error(body.error || ('Error ' + res.status));
+      err.status = res.status;
+      throw err;
+    }
+    return body;
+  };
+
+  const when = (t) => {
+    if (!t) return '';
+    const s = Math.round((Date.now() - t) / 1000);
+    if (s < 60) return 'just now';
+    if (s < 3600) return Math.round(s / 60) + ' min ago';
+    if (s < 86400) return Math.round(s / 3600) + ' h ago';
+    return new Date(t).toLocaleDateString();
+  };
+  const cell = (tr, text, cls) => { const td = document.createElement('td'); if (cls) td.className = cls; td.textContent = text || ''; tr.appendChild(td); return td; };
+  const showMsg = (text, ok) => { const m = $('msg'); m.textContent = text; m.className = ok ? 'ok' : 'err'; };
+
+  const renderBlocked = (list) => {
+    const tbody = $('blocked');
+    tbody.textContent = '';
+    $('blocked-count').textContent = list.length;
+    if (!list.length) { const tr = tbody.insertRow(); const td = cell(tr, 'Nobody is blocked.', 'empty'); td.colSpan = 5; return; }
+    list.forEach(b => {
+      const tr = document.createElement('tr');
+      cell(tr, b.name || '(no name)');
+      cell(tr, b.id, 'id');
+      cell(tr, b.reason);
+      cell(tr, when(b.addedAt));
+      const act = cell(tr, '', 'act');
+      const btn = document.createElement('button');
+      btn.textContent = 'Unblock';
+      btn.onclick = async () => {
+        if (!confirm(`Unblock ${b.name || b.id}?`)) return;
+        btn.disabled = true;
+        try { const r = await api('/blacklist/' + encodeURIComponent(b.id), { method: 'DELETE' }); renderBlocked(r.blocked); markRecent(r.blocked); showMsg(`Unblocked ${b.name || b.id}.`, true); }
+        catch (e) { btn.disabled = false; handleError(e); }
+      };
+      act.appendChild(btn);
+      tbody.appendChild(tr);
+    });
+  };
+
+  const markRecent = (blocked) => {
+    const ids = new Set(blocked.map(b => b.id));
+    recent.forEach(p => { p.blocked = ids.has(p.id); });
+    renderRecent();
+  };
+
+  const renderRecent = () => {
+    const q = $('filter').value.trim().toLowerCase();
+    const tbody = $('recent');
+    tbody.textContent = '';
+    const list = recent.filter(p => !q || [p.name, p.id, p.instance].some(v => String(v || '').toLowerCase().includes(q)));
+    if (!list.length) { const tr = tbody.insertRow(); const td = cell(tr, recent.length ? 'Nobody matches.' : 'Nobody has connected yet.', 'empty'); td.colSpan = 5; return; }
+    list.forEach(p => {
+      const tr = document.createElement('tr');
+      const name = cell(tr, '');
+      if (p.online) { const d = document.createElement('span'); d.className = 'dot'; d.title = 'Connected now'; name.appendChild(d); }
+      name.appendChild(document.createTextNode(p.name || '(no name)'));
+      if (p.blocked) { const t = document.createElement('span'); t.className = 'tag'; t.textContent = 'blocked'; name.appendChild(t); }
+      cell(tr, p.id, 'id');
+      cell(tr, p.instance, 'where');
+      cell(tr, when(p.lastSeen));
+      const act = cell(tr, '', 'act');
+      if (!p.blocked) {
+        const btn = document.createElement('button');
+        btn.className = 'danger';
+        btn.textContent = 'Block';
+        btn.onclick = () => block(p.id, p.name, '', btn);
+        act.appendChild(btn);
+      }
+      tbody.appendChild(tr);
+    });
+  };
+
+  const block = async (id, name, reason, btn) => {
+    if (!confirm(`Block ${name || id} from using Fire-V-Player in every world?`)) return;
+    if (btn) btn.disabled = true;
+    try {
+      const r = await api('/blacklist', { method: 'POST', body: JSON.stringify({ id, name, reason }) });
+      renderBlocked(r.blocked);
+      markRecent(r.blocked);
+      showMsg(`Blocked ${r.entry.name || r.entry.id}.`, true);
+      return true;
+    } catch (e) {
+      if (btn) btn.disabled = false;
+      handleError(e);
+      return false;
+    }
+  };
+
+  const handleError = (e) => {
+    if (e.status === 401 || e.status === 404 || e.status === 429) { signOut(e.message); return; }
+    showMsg(e.message, false);
+  };
+
+  const load = async () => {
+    const [b, r] = await Promise.all([api('/blacklist'), api('/recent')]);
+    recent = r.recent;
+    renderBlocked(b.blocked);
+    renderRecent();
+    $('warn').hidden = b.saved !== false;
+  };
+
+  const signIn = async () => {
+    try {
+      await load();
+      try { sessionStorage.setItem(KEY, password); } catch (e) {}
+      $('login').hidden = true;
+      $('app').hidden = false;
+    } catch (e) {
+      signOut(e.message);
+    }
+  };
+
+  const signOut = (why) => {
+    password = '';
+    try { sessionStorage.removeItem(KEY); } catch (e) {}
+    $('app').hidden = true;
+    $('login').hidden = false;
+    $('login-msg').textContent = why || '';
+  };
+
+  $('login-form').onsubmit = (e) => { e.preventDefault(); password = $('password').value; $('password').value = ''; signIn(); };
+  $('add-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const ok = await block($('add-id').value.trim(), $('add-name').value.trim(), $('add-reason').value.trim());
+    if (ok) { $('add-id').value = ''; $('add-name').value = ''; $('add-reason').value = ''; }
+  };
+  $('filter').oninput = renderRecent;
+  $('refresh').onclick = () => load().catch(handleError);
+  $('signout').onclick = () => signOut('Signed out.');
+
+  if (password) signIn();
+})();
+</script>
+</body>
+</html>

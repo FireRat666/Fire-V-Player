@@ -201,7 +201,11 @@ class App {
       ws.on('message', async (message) => {
         const msg = JSON.parse(message);
         if (msg.path !== 'spatial' && msg.path !== 'playback-update') {
-          console.log(`[CMD] ${msg.path} from ${ws.u ? ws.u.name : 'unknown'} for instance ${ws.i || 'unset'}`);
+          // "instance" is the first message on a connection: it carries who and which room, so
+          // the socket doesn't know them yet.
+          const who = ws.u || (msg.path === 'instance' && msg.u) || null;
+          const where = ws.i || (msg.path === 'instance' && msg.data) || 'unset';
+          console.log(`[CMD] ${msg.path} from ${who ? who.name : 'unknown'} for instance ${where}`);
         }
         try {
           // Using Buffer.from to handle different message types gracefully.

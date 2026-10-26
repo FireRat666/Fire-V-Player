@@ -9,7 +9,7 @@ In a SideQuest / Altspace Creator SDK world, add the player as a snippet. Its sl
 ### In Unity
 
 1. Create an empty GameObject (**GameObject > Create Empty**).
-2. Make sure its Transform **Position is `0 0 0`** (and its Rotation `0 0 0`). The snippet's settings are world values: the player never sees the GameObject, so if it isn't at the origin, the Scene-view outlines won't line up with where the player really appears.
+2. Make sure its Transform **Position is `0 0 0`** (and its Rotation `0 0 0`). The snippet's settings are world values: the player never sees the GameObject, so moving it (or its parents) doesn't move the player, and the SDK's blue outlines are then off by however far it's moved. The orange [live preview](#in-unity) always shows the real place, and labels the object when it isn't at the origin.
 3. **Add Component** and pick **Snippet** (`BSSnippet`).
 4. Type `fire-v-player` as the slug, then refresh / load it. The component downloads the snippet and writes it into your world's `Assets/WebRoot/index.html`.
 5. The player's settings now show in the Inspector. Change them there, or drag the handles in the Scene view to place the screen, buttons and playlist panel. See [Settings](#sidequest--altspace-creator-sdk-snippet) for what each one does.

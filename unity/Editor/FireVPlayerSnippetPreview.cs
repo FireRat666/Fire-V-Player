@@ -70,10 +70,13 @@ namespace FireVPlayer.EditorTools
             if (e == null || !IsFireVPlayer(e)) return;
             bool used = WarnAboutCopies(e);
 
-            // Like the SDK's gizmos: the object's position and rotation are the frame the values
-            // are in. (Its scale isn't used: the player never sees it.)
+            // The player never sees the snippet's GameObject (or its parents): every value is
+            // measured from the world's origin. So this draws from the origin, where the player
+            // will really be. The SDK's own blue gizmos are drawn from the object instead, so
+            // they're off by the object's position and rotation when it isn't at the origin.
             var t = snippet.transform;
-            var frame = Matrix4x4.TRS(t.position, t.rotation, Vector3.one);
+            var frame = Matrix4x4.identity;
+            WarnIfMoved(t);
 
             bool follow = Attr(e, "controls-follow-screen") == "true";
             bool karaoke = Attr(e, "karaoke").ToLowerInvariant() == "true" || Attr(e, "mode").ToLowerInvariant() == "karaoke";
@@ -148,6 +151,34 @@ namespace FireVPlayer.EditorTools
             }
             Rect(frame, gPos, gRot, gScale, SingerSize, SingerOutline, karaoke ? SingerFill : Color.clear,
                 karaoke ? "Singers button" : "Singers button (karaoke only)");
+        }
+
+        // ---- the GameObject's own transform
+
+        static readonly Color MovedColor = new Color(1f, 0.85f, 0.2f, 1f);
+        static string _warnedMoved;
+
+        /// <summary>
+        /// When the snippet's GameObject (with its parents) isn't at the world's origin, labels it
+        /// and draws a line from it to the origin, and says once in the Console that moving it
+        /// doesn't move the player.
+        /// </summary>
+        /// <param name="t">The snippet's transform.</param>
+        static void WarnIfMoved(Transform t)
+        {
+            bool moved = t.position.sqrMagnitude > 1e-6f || Quaternion.Angle(t.rotation, Quaternion.identity) > 0.01f;
+            if (!moved) { _warnedMoved = null; return; }
+            string key = t.GetInstanceID().ToString(); // once per object, not on every frame of a drag
+
+            Handles.color = MovedColor;
+            Handles.DrawDottedLine(t.position, Vector3.zero, 4f);
+            Handles.Label(t.position, "Fire-V-Player ignores where this object is.\nThe orange outlines show where it really goes\n(measured from the world origin). The blue SDK\ngizmos are off by this object's position.");
+            if (key == _warnedMoved) return;
+            _warnedMoved = key;
+            Debug.LogWarning($"[Fire-V-Player] '{t.name}' is at {t.position} (rotation {t.rotation.eulerAngles}) in the world, but the player " +
+                             "never sees this object: its position, rotation and scale settings are measured from the world origin. The orange " +
+                             "outlines show where it will really be; the SDK's blue gizmos are off by this object's position. To make them " +
+                             "agree, put this object (and its parents) at 0 0 0 with no rotation.", t);
         }
 
         // ---- copies

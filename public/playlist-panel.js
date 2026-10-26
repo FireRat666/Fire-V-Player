@@ -776,7 +776,7 @@ var FirePlaylistPanel = class {
    * @returns {{yaw: number, position: Object}|null} Position descriptor or null.
    */
   singerPose() {
-    const s = this.core.singerPose;
+    const s = this.core.singerPose || this.singerPoseFromLayout();
     if (!s || !s.position) return null;
     const q = s.rotation;
     let yaw = 0;
@@ -784,8 +784,28 @@ var FirePlaylistPanel = class {
       // The button's forward (+Z) flattened onto the floor.
       const fx = 2 * (q.x * q.z + q.w * q.y), fz = 1 - 2 * (q.x * q.x + q.y * q.y);
       if (Math.abs(fx) + Math.abs(fz) > 1e-6) yaw = Math.atan2(fx, fz) * 180 / Math.PI;
+      // The panel is seen from its -Z, like the button's front. The button reads from both
+      // sides, so a player on its back (+Z) side gets the panel turned round to face them.
+      const head = this.core.headPose();
+      if (head && head.position && (head.position.x - s.position.x) * fx + (head.position.z - s.position.z) * fz > 0) yaw += 180;
     }
     return { yaw, position: new BS.Vector3(s.position.x, s.position.y, s.position.z) };
+  }
+
+  // The Singers button's world pose from its settings, for when Unity hasn't reported it (it
+  // only does when the button moves): its own values, or offsets from the buttons under the screen.
+  singerPoseFromLayout() {
+    const l = this.core.singerLayout;
+    if (!l || !l.position) return null;
+    const v = o => [o.x, o.y, o.z];
+    let pos = v(l.position), q = this.qEuler(l.rotation);
+    if (!l.world && l.parent) {
+      const P = l.parent, sc = v(P.scale), pq = this.qEuler(P.rotation);
+      const r = this.qRotate(pq, [pos[0] * sc[0], pos[1] * sc[1], pos[2] * sc[2]]);
+      pos = [P.position.x + r[0], P.position.y + r[1], P.position.z + r[2]];
+      q = this.qMul(pq, q);
+    }
+    return { position: { x: pos[0], y: pos[1], z: pos[2] }, rotation: { x: q[0], y: q[1], z: q[2], w: q[3] } };
   }
 
   /**

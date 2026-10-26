@@ -903,7 +903,9 @@ var Core = class {
     this.watchModeOverride();
     clearTimeout(this.adminWriteTimer);
     this.adminWriteTimer = setTimeout(() => this.adminWriteRefused(), MODE_WRITE_TIMEOUT_MS);
-    scene.SetProtectedSpaceProps({ [ADMIN_STATE_KEY]: `${uid}|${Date.now()}` });
+    // "uid:time". Not "|", "§" or "¶": the SDK uses those to separate its own messages, and refuses
+    // a value with one in it ("Invalid prop").
+    scene.SetProtectedSpaceProps({ [ADMIN_STATE_KEY]: `${String(uid).replace(/[|§¶:]/g, '')}:${Date.now()}` });
     return true;
   }
 
@@ -912,8 +914,8 @@ var Core = class {
     if (c.isPublic === true || c.type === 'public') return;
     let value = c.newValue;
     if (value && typeof value === 'object' && 'value' in value) value = value.value;
-    const uid = String(value == null ? '' : value).trim().replace(/^"|"$/g, '').split('|')[0];
-    const me = window.user && String(window.user.id);
+    const uid = String(value == null ? '' : value).trim().replace(/^"|"$/g, '').split(':')[0];
+    const me = window.user && String(window.user.id).replace(/[|§¶:]/g, '');
     if (!uid || uid !== me) return;
     // Without a type on the change, check it's in the local copy of the protected state.
     if (c.isPublic !== false && c.type !== 'protected' && !this.protectedValueHas(ADMIN_STATE_KEY, uid)) return;

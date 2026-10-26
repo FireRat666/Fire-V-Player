@@ -1313,16 +1313,17 @@ var FirePlaylistPanel = class {
     const safe = url ? String(url).replace(/["\\\n\r]/g, '') : '';
     const value = safe ? `url("${safe}")` : 'none';
     if (!this._changed(slot.thumb, 'backgroundImage', value)) return;
-    // Cleared first, so a row doesn't keep the last page's picture while (or if) this one loads.
-    slot.thumb.SetStyles({ backgroundImage: 'none' });
+    // Only ever the picture itself: 'none' and then the picture straight after can leave the row
+    // blank.
     slot.thumb.SetStyles({ backgroundImage: value });
-    this.reapplyThumbsSoon();
+    if (value !== 'none') this.reapplyThumbsSoon();
   }
 
-  // Unity loads each picture in the background. One can fail (the row stays black), or one from
-  // a page already left can finish after the new one and replace it. Setting each row's picture
-  // again a little later puts the right one back and retries the failed ones, a row at a time
-  // so they don't all load at once.
+  // Unity downloads each picture and shows it when it arrives, even if the row has moved on to
+  // another page by then (UIElementBridge.SetBackgroundImage), so a late one from a page already
+  // left can replace the right one. Setting each row's picture again a little later puts the
+  // right one back (by then it's in Unity's cache, so it shows at once) and retries a failed one,
+  // a row at a time so they don't all load at once.
   reapplyThumbsSoon() {
     (this.thumbTimers || []).forEach(clearTimeout);
     this.thumbTimers = [];
@@ -1333,10 +1334,7 @@ var FirePlaylistPanel = class {
           const c = this.cache.get(slot.thumb);
           const value = c && c.backgroundImage;
           if (!value || value === 'none') return;
-          try {
-            slot.thumb.SetStyles({ backgroundImage: 'none' });
-            slot.thumb.SetStyles({ backgroundImage: value });
-          } catch (e) {}
+          try { slot.thumb.SetStyles({ backgroundImage: value }); } catch (e) {}
         }, delay + k * 150));
       });
     }

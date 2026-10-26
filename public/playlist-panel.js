@@ -673,6 +673,8 @@ var FirePlaylistPanel = class {
     this.visible = false;
     [this.tickTimer, this.renderTimer, this.statusTimer, this.searchTimer].forEach(t => { clearTimeout(t); clearInterval(t); });
     this.tickTimer = this.renderTimer = this.statusTimer = this.searchTimer = null;
+    (this.thumbTimers || []).forEach(clearTimeout);
+    this.thumbTimers = [];
     if (typeof this.core.removeMessageListener === 'function') this.core.removeMessageListener(this.onMessageFn);
     const removeObjects = () => {
       try {
@@ -1309,7 +1311,35 @@ var FirePlaylistPanel = class {
   setThumb(slot, url, link) {
     url = this.thumbUrl(url, link);
     const safe = url ? String(url).replace(/["\\\n\r]/g, '') : '';
-    this.setStyle(slot.thumb, 'backgroundImage', safe ? `url("${safe}")` : 'none');
+    const value = safe ? `url("${safe}")` : 'none';
+    if (!this._changed(slot.thumb, 'backgroundImage', value)) return;
+    // Cleared first, so a row doesn't keep the last page's picture while (or if) this one loads.
+    slot.thumb.SetStyles({ backgroundImage: 'none' });
+    slot.thumb.SetStyles({ backgroundImage: value });
+    this.reapplyThumbsSoon();
+  }
+
+  // Unity loads each picture in the background. One can fail (the row stays black), or one from
+  // a page already left can finish after the new one and replace it. Setting each row's picture
+  // again a little later puts the right one back and retries the failed ones, a row at a time
+  // so they don't all load at once.
+  reapplyThumbsSoon() {
+    (this.thumbTimers || []).forEach(clearTimeout);
+    this.thumbTimers = [];
+    for (const delay of [1500, 5000]) {
+      (this.rows || []).forEach((slot, k) => {
+        this.thumbTimers.push(setTimeout(() => {
+          if (this.destroyed) return;
+          const c = this.cache.get(slot.thumb);
+          const value = c && c.backgroundImage;
+          if (!value || value === 'none') return;
+          try {
+            slot.thumb.SetStyles({ backgroundImage: 'none' });
+            slot.thumb.SetStyles({ backgroundImage: value });
+          } catch (e) {}
+        }, delay + k * 150));
+      });
+    }
   }
 
   setButtons(slot, defs) {

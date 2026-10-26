@@ -130,7 +130,7 @@ In these worlds the Playlist button opens an **in-world panel** beside the scree
 - seek to a time (host)
 - your player only: skip back/forward, Auto Sync, Captions (closed captions on or off for you, remembered on your device) and Resolution (steps your screen's page through 1280 x 720, 1600 x 900 and 1920 x 1080, then back to the snippet's `resolution`; remembered on your device)
 - add by link: a video (YouTube, Twitch, Vimeo or a direct link, see [Links from other sites](#links-from-other-sites)), or a YouTube playlist (host)
-- mode: switch between playlist and karaoke, for space admins (see [Switching mode in world](#switching-mode-in-world))
+- space admins only: **Admin Take Over** (see [Admin Take Over](#admin-take-over)) and the mode switch between playlist and karaoke (see [Switching mode in world](#switching-mode-in-world))
 
 The Creator SDK client currently doesn't open the 2D playlist page, so the panel has no button for it.
 
@@ -174,7 +174,7 @@ Files, streams and Twitch videos show no length until the first player loads the
 
 ### Switching mode in world
 
-At the bottom of the panel's **More...** view, the **Mode (space admins only)** section has:
+At the bottom of the panel's **More...** view, the **Space admins only** section has:
 
 - **Switch to Karaoke** / **Switch to Playlist**, which switches the player for everyone in the space.
 - **Use Snippet Default**, shown once the mode has been changed, which goes back to the snippet's `karaoke` setting.
@@ -184,6 +184,20 @@ Everyone sees these buttons, because the client can't always tell who is a space
 - Space state lasts 24 hours after its last change, so after a day with no changes the player goes back to the snippet's mode.
 - The shared playlist is kept while the room is in karaoke mode. Switching back to playlist mode brings it back and plays its current track from the start. Switching to karaoke stops what's playing.
 - Only the in-world panel has the switch. Players using the 2D playlist page (`playlist-ui="page"`) still follow the saved mode.
+
+### Admin Take Over
+
+The **Space admins only** section also has **Admin Take Over** (shown when you aren't the host). It makes a space admin the host even when the player is locked or the host has turned Take Over off, so a world's owner or moderators can always stop someone running the player.
+
+- While the admin is in the space, nobody else can take over (Take Over is turned off for them). They can turn it back on, or Lock / Unlock, like any host.
+- When they leave the space, the usual rule applies: 42 seconds later anyone can take over again. So people can still use the player when no admin is around.
+- It works the same way as the mode switch: pressing it saves the admin's ID as protected space state (the key `fire-v-player-admin`), which only space admins can write. When that change arrives, the admin's own player asks the server for control. For anyone else the write is refused, and after a few seconds the panel says "Only space admins can take control this way."
+- The player server can't check who is a space admin itself. It trusts the admin's player, as it trusts every player's own user ID. That stops anyone using the normal client, but not a modified one.
+- The room is shared by everyone with the same `room`, so an admin of one world can take control of a room another world uses too. Without a `room`, each space has its own.
+
+### Blacklist
+
+The owner of the server can stop someone using the player in every world (see [DEPLOYMENT.md](DEPLOYMENT.md#blacklist)). A blacklisted person still sees and hears the video, but every button, the panel and the hand controls do nothing, clicking on the screen does nothing, and their volume stays at 100%. They aren't told why: the player just looks frozen to them. They're matched by their Banter user ID, not their name, so someone else with the same name isn't affected.
 
 ---
 

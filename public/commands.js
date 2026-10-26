@@ -87,7 +87,9 @@ var Commands = {
   SET_VOLUME_INCREMENT: 'set-volume-increment',
   TOGGLE_PAUSE: 'toggle-pause',
   PAUSE_STATE_CHANGED: 'pause-state-changed',
-  REQUEST_STATE: 'request-state'
+  REQUEST_STATE: 'request-state',
+  SET_BLOCKED: 'set-blocked', // server -> a player: its person is (or isn't) on the blacklist
+  ADMIN_TAKE_OVER: 'admin-take-over' // a space admin taking control, even when locked (see Core.adminTakeOver)
 };
 if ((typeof process !== 'undefined') && 
 (process.release.name.search(/node|io.js/) !== -1)) {

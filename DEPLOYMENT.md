@@ -125,7 +125,7 @@ The migration is triggered by setting both a `DATABASE_URL` (for the old DB) and
 
 3.  **Trigger the Migration:**
     -   From the Render dashboard, manually restart your web service by going to the "Manual Deploy" menu and selecting "Restart service".
-    -   On startup, the application will detect both database URLs, apply the schema to the new database, and copy all data from the old `DATABASE_URL` to the `NEW_DATABASE_URL`.
+    -   On startup, the application will detect both database URLs, apply the schema to the new database, and copy all data (player state and the blacklist) from the old `DATABASE_URL` to the `NEW_DATABASE_URL`. A source database from before the blacklist existed just has no blocked users to copy.
 
 4.  **Verify Success:**
     -   Go to the "Logs" tab for your service. You should see log messages like `!!! New database URL detected...` followed by `✔✔✔ Application will now use the new database. ✔✔✔`.
@@ -135,6 +135,21 @@ The migration is triggered by setting both a `DATABASE_URL` (for the old DB) and
     -   Update the value of the original `DATABASE_URL` variable, replacing it with your **new** database's URL.
     -   **Delete** the `NEW_DATABASE_URL` environment variable.
     -   The service will restart automatically. It will now run exclusively on your new, permanent database. Your old database is no longer used and can be safely deleted.
+
+### Blacklist
+
+You can stop people using the player in every world that uses your server. They still see the video, but nothing they press works and their volume stays at 100% (see [USAGE.md](USAGE.md#blacklist)).
+
+1.  **Set a password:** in your Render Web Service's "Environment" tab, add `ADMIN_PASSWORD` with a long random value. The service restarts. Without it the admin page is turned off.
+2.  **Open the admin page:** `https://<your server>/admin.html` (e.g. `https://vidya.firer.at/admin.html`) and sign in with that password. The password is kept only for that browser tab.
+3.  **Block someone:** the **Recently seen** list shows everyone who has connected since the server started, with their user ID and the world they were in (a green dot means they're connected now). Search for their name and press **Block**. Or paste a user ID (it's in the server's logs, e.g. `Requester ID: ...`) into **Block someone by ID**.
+4.  **Unblock** them from the **Blocked** list.
+
+Changes apply straight away, also to people who are connected: they lose host (anyone can take over from them), their votes and their place in the singer queue, and clicks on their screen are turned off.
+
+-   People are matched by their Banter user ID, which each player reports for itself. That stops anyone using the normal client; a modified client could report someone else's ID.
+-   The list is saved in the `blocked_users` table (created by the migrations). Without a database it only lasts until the server restarts. The [one-time database migration](#automated-database-migration) copies it along with the player state.
+-   After 5 wrong passwords from one address, it has to wait 10 minutes.
 
 ### Advanced Configuration
 

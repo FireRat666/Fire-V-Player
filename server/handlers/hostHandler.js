@@ -72,7 +72,9 @@ async function toggleCanTakeOver(app, ws, canTakeOver) {
  */
 async function takeOver(app, ws) {
   const player = app.videoPlayers[ws.i];
-  if(player && player.canTakeOver) {
+  // Anyone can take over from a blacklisted host.
+  const hostBlocked = !!(player && player.host && app.blacklist && app.blacklist.has(player.host.id));
+  if(player && (player.canTakeOver || hostBlocked)) {
     const oldHostName = player.host ? player.host.name : 'nobody';
     player.host = ws.u;
 
@@ -95,6 +97,39 @@ async function takeOver(app, ws) {
   } else {
     app.send(ws, Commands.ERROR);
   }
+}
+
+/**
+ * A space admin takes control, even when the player is locked or take over is off.
+ *
+ * Only a space admin can write the protected space state key the in-world player watches
+ * (fire-v-player-admin, see Core.adminTakeOver), and only the player of the person it names sends
+ * this. The server can't check who is a space admin, so like every other identity here it trusts
+ * the player that sends it.
+ *
+ * While they're in the space nobody else can take over (Take Over is turned off). When they leave,
+ * the usual rule applies: 42 seconds later anyone can take over again (see App.handleClose).
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - The admin's in-world socket.
+ * @returns {Promise<void>}
+ */
+async function adminTakeOver(app, ws) {
+  const player = app.videoPlayers[ws.i];
+  // Only from the in-world player, which is the one that saw the space admin's write.
+  if (!player || !ws.u || !ws.u.id || ws.type !== 'space') return;
+  const oldHostName = player.host ? player.host.name : 'nobody';
+  player.host = ws.u;
+  if (player.takeoverTimeout) {
+    clearTimeout(player.takeoverTimeout);
+    player.takeoverTimeout = null;
+  }
+  player.hostConnected = player.sockets.some(s => s.u && s.u.id === ws.u.id && s.type === 'space');
+  // Only a host who is in the space can keep others out (as for toggleCanTakeOver).
+  player.canTakeOver = !player.hostConnected;
+  console.log(`[ADMIN] Space admin ${ws.u.name} (${ws.u.id}) took control from ${oldHostName} in ${ws.i}. Locked: ${player.locked}, Can Take Over: ${player.canTakeOver}`);
+  app.updateClients(ws.i, 'host-changed');
+  await app.savePlayerState(ws.i);
 }
 
 /**
@@ -316,6 +351,7 @@ module.exports = {
     toggleLock,
     toggleCanTakeOver,
     takeOver,
+    adminTakeOver,
     hostSkip,
     stop,
     setVideoTrack,

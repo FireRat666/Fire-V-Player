@@ -1,6 +1,10 @@
 // Protected space state key holding a space admin's mode choice (see switchMode).
 var MODE_STATE_KEY = 'fire-v-player-mode';
 var MODE_WRITE_TIMEOUT_MS = 6000;
+// Protected space state key a space admin writes to take control of the player (see adminTakeOver).
+var ADMIN_STATE_KEY = 'fire-v-player-admin';
+// While blacklisted, how often the full volume is put back (in case the page reloaded).
+var BLOCKED_VOLUME_MS = 5000;
 var CAPTIONS_PREF_KEY = 'fire-v-player-captions';
 // SDK layers: clicks only reach colliders on UI (5). UserLayer9 (13) is ignored by teleport, the
 // grapple and the ground, but players still touch it, which is what a trigger zone needs.
@@ -204,7 +208,7 @@ var Core = class {
   async makeIconButton(name, parent, position, size, iconUrl, callback, rotation) {
     const go = await this.makeImage(name, parent, position, size, size, iconUrl, { rotation, layer: LAYER_UI });
     await this.addColliderBox(go, new BS.Vector3(size, size, 0.01), true);
-    go.On('click', () => callback());
+    go.On('click', () => { if (!this.blocked) callback(); });
     return go;
   }
   // A flat picture, seen from -Z. Words are pictures too (assets/*Label.png): the world's own
@@ -314,7 +318,8 @@ var Core = class {
       'BanterBrowser', [url, p['mip-maps'], ppu, w, h, null]));
     if (browser.removed) { this.destroyObject(go); return; }
     browser.component = component;
-    if (typeof component.ToggleInteraction === 'function') component.ToggleInteraction(true);
+    // Clicks on the page, except for a blacklisted person (see setBlocked).
+    this.setScreenInteraction(!this.blocked);
     // The sound plays from the screen at the same volume everywhere (the SDK's Flat fade); the
     // `spatial` setting does its own fade. A BS Browser has no 2D sound: on PC it's always heard
     // from the screen's direction, and on Quest the page plays its own sound, which isn't placed.
@@ -465,6 +470,7 @@ var Core = class {
     }
   }
   setAbsoluteVolume(amount) {
+    if (this.blocked) return;
     this.params.volume = amount;
     if(this.params.volume > 100) {
       this.params.volume = 100;
@@ -474,6 +480,7 @@ var Core = class {
     this.sendBrowserMessage({path: Commands.SET_VOLUME, data: this.params.volume});
   }
   setVolumeIncrement(amount) {
+    if (this.blocked) return;
     this.params.volume += amount;
     if(this.params.volume > 100) {
       this.params.volume = 100;
@@ -517,7 +524,7 @@ var Core = class {
     if (!alive()) return;
     await this.addColliderBox(button, new BS.Vector3(1, 0.3, 0.05), true);
     // Like the hand's Playlist button, it brings the panel to itself (just above it).
-    button.On('click', () => this.openPlaylist('singer'));
+    button.On('click', () => { if (!this.blocked) this.openPlaylist('singer'); });
     // Where it is in the world, for the panel. Unity only reports a transform when it changes, so
     // a button that never moves is worked out from its settings (see PlaylistPanel.singerPose).
     this.singerLayout = { world, position, rotation, parent: this.buttonsTransform };
@@ -683,6 +690,7 @@ var Core = class {
    * @param {'front'|'singer'|undefined} [where] - Where to place the panel ('front' in front of player, 'singer' above karaoke button, or undefined for beside screen).
    */
   openPlaylist(where) {
+    if (this.blocked) return;
     // Clicks can arrive twice in quick succession (pointer + trigger), so debounce.
     const now = Date.now();
     if (this._lastPlaylistToggle && now - this._lastPlaylistToggle < 600) return;
@@ -830,6 +838,8 @@ var Core = class {
     scene.On('space-state-changed', e => {
       const d = e && e.detail;
       const changes = Array.isArray(d) ? d : (d && Array.isArray(d.changes) ? d.changes : []);
+      const admin = changes.find(c => c && c.property === ADMIN_STATE_KEY);
+      if (admin) this.adminStateChanged(admin);
       const c = changes.find(c => c && c.property === MODE_STATE_KEY);
       if (!c) return;
       const isPublic = c.isPublic === true || c.type === 'public';
@@ -842,6 +852,11 @@ var Core = class {
     });
     scene.On('space-state-error', e => {
       const d = (e && e.detail) || {};
+      if (d.key === ADMIN_STATE_KEY || d.path === ADMIN_STATE_KEY) {
+        console.warn('[Core] Could not take control as a space admin:', d.code, d.message);
+        this.adminWriteRefused(d.code);
+        return;
+      }
       if (d.key !== MODE_STATE_KEY && d.path !== MODE_STATE_KEY) return;
       console.warn('[Core] Could not save the mode:', d.code, d.message);
       this.modeWriteRefused(d.code);
@@ -871,6 +886,102 @@ var Core = class {
       : "The mode didn't change. Only space admins can switch it.";
     this.showToast(msg);
     if (this.playlistPanel) this.playlistPanel.setStatus(msg);
+  }
+
+  // ---------------------------------------------------------------- space admin take over
+  //
+  // A space admin can take control of the player even when it's locked or Take Over is off. The
+  // server can't tell who is a space admin, but only a space admin can write protected space state,
+  // so the admin's press writes ADMIN_STATE_KEY there, naming themselves. When that change comes
+  // back, the named person's player asks the server for control (Commands.ADMIN_TAKE_OVER). The
+  // time in the value makes every press a change. A write from anyone else is refused, which may
+  // arrive as a space-state-error or as nothing at all, as for the mode.
+  adminTakeOver() {
+    const scene = this.banterScene();
+    const uid = window.user && window.user.id;
+    if (!scene || typeof scene.SetProtectedSpaceProps !== 'function' || !uid) return false;
+    this.watchModeOverride();
+    clearTimeout(this.adminWriteTimer);
+    this.adminWriteTimer = setTimeout(() => this.adminWriteRefused(), MODE_WRITE_TIMEOUT_MS);
+    scene.SetProtectedSpaceProps({ [ADMIN_STATE_KEY]: `${uid}|${Date.now()}` });
+    return true;
+  }
+
+  adminStateChanged(c) {
+    // Anyone can write a public value with the same name, so only a protected one counts.
+    if (c.isPublic === true || c.type === 'public') return;
+    let value = c.newValue;
+    if (value && typeof value === 'object' && 'value' in value) value = value.value;
+    const uid = String(value == null ? '' : value).trim().replace(/^"|"$/g, '').split('|')[0];
+    const me = window.user && String(window.user.id);
+    if (!uid || uid !== me) return;
+    // Without a type on the change, check it's in the local copy of the protected state.
+    if (c.isPublic !== false && c.type !== 'protected' && !this.protectedValueHas(ADMIN_STATE_KEY, uid)) return;
+    clearTimeout(this.adminWriteTimer);
+    this.adminWriteTimer = null;
+    console.log('[Core] Taking control of the player as a space admin.');
+    this.sendMessage({ path: Commands.ADMIN_TAKE_OVER });
+    const msg = 'You have control of the player (space admin).';
+    this.showToast(msg);
+    if (this.playlistPanel) this.playlistPanel.setStatus(msg);
+  }
+
+  protectedValueHas(key, text) {
+    const scene = this.banterScene();
+    if (!scene) return false;
+    const json = scene.spaceStateJson && scene.spaceStateJson.protected;
+    const str = scene.spaceState && scene.spaceState.protected;
+    const v = json && json[key] !== undefined ? json[key] : (str ? str[key] : undefined);
+    return v !== undefined && String(typeof v === 'object' && v && 'value' in v ? v.value : v).includes(text);
+  }
+
+  adminWriteRefused(code) {
+    clearTimeout(this.adminWriteTimer);
+    this.adminWriteTimer = null;
+    const msg = code && code !== 'not_authorized'
+      ? 'Could not take control.'
+      : 'Only space admins can take control this way.';
+    this.showToast(msg);
+    if (this.playlistPanel) this.playlistPanel.setStatus(msg);
+  }
+
+  // ---------------------------------------------------------------- blacklist
+  //
+  // The server tells a blacklisted person's player (Commands.SET_BLOCKED). They can still watch,
+  // but nothing they press does anything and their volume stays at 100%, so the player just looks
+  // frozen. The server ignores their controls as well, so this is only how it looks to them.
+  setBlocked(blocked) {
+    blocked = !!blocked;
+    if (this.blocked === blocked) return;
+    this.blocked = blocked;
+    clearInterval(this.blockedTimer);
+    this.blockedTimer = null;
+    // No clicking on the screen either (to pause or skip their own copy). The player's own clicks
+    // (Commands.CLICK_BROWSER, for Twitch) are browser actions, so they still work.
+    this.setScreenInteraction(!blocked);
+    if (!blocked) return;
+    if (this.playlistPanel && this.playlistPanel.visible) {
+      Promise.resolve(this.playlistPanel.close()).catch(() => {});
+    }
+    this.forceFullVolume(true);
+    this.blockedTimer = setInterval(() => this.forceFullVolume(false), BLOCKED_VOLUME_MS);
+  }
+
+  // Turns clicks on the screen's page on or off (the SDK's input handler on the browser).
+  setScreenInteraction(enabled) {
+    const component = this.browser && this.browser.component;
+    if (!component || typeof component.ToggleInteraction !== 'function') return;
+    try { component.ToggleInteraction(!!enabled); } catch (e) { console.warn('[Core] Could not change screen interaction:', e); }
+  }
+
+  // The page only shows a toast when the volume changes, but on every mute message, so unmute once.
+  forceFullVolume(unmute) {
+    this.params.volume = 100;
+    this.tempVolume = 100;
+    this.params.mute = 'false';
+    // Rejected while there's no screen yet; the page then starts at the volume from browserUrl().
+    if (unmute) Promise.resolve(this.sendBrowserMessage({ path: Commands.MUTE, data: 'false' })).catch(() => {});
+    Promise.resolve(this.sendBrowserMessage({ path: Commands.SET_VOLUME, data: 100 })).catch(() => {});
   }
 
   // Switches this player in place: the server room, the buttons, the panel and the video page.
@@ -929,6 +1040,7 @@ var Core = class {
     return this.setupButton(playlistContainer, isBack ? 'SkipBack' : 'SkipForward', isBack ? -0.332 : -0.081, skipIconUrl, () => (isBack ? this.back() : this.forward()));
   }
   volume(isUp) {
+    if (this.blocked) return;
     this.setVolume(isUp);
     if(isUp && this.params.mute == 'true') {
       this.params.mute = 'false';
@@ -938,7 +1050,8 @@ var Core = class {
   }
   
   mute() {
-     this.params.mute = this.params.mute == 'true' ? 'false' : 'true';
+    if (this.blocked) return;
+    this.params.mute = this.params.mute == 'true' ? 'false' : 'true';
     this.sendBrowserMessage({path: Commands.MUTE, data: this.params.mute});
   }
   setupMuteButton(playlistContainer) {
@@ -1039,7 +1152,7 @@ var Core = class {
     let lastSendTime = Date.now();
     this.onPoseUpdate = e => {
       const head = e && e.detail && e.detail.head;
-      if (!head || !head.position) return;
+      if (!head || !head.position || this.blocked) return;
       const now = Date.now();
       if (now - lastSendTime <= 500) return;
       lastSendTime = now;
@@ -1307,6 +1420,7 @@ var Core = class {
     return this.captions;
   }
   setCaptions(on) {
+    if (this.blocked) return;
     this.captions = !!on;
     try { localStorage.setItem(CAPTIONS_PREF_KEY, String(this.captions)); } catch (e) {}
     Promise.resolve(this.sendBrowserMessage({ path: Commands.CAPTIONS, data: this.captions })).catch(() => {});
@@ -1349,6 +1463,9 @@ var Core = class {
       case Commands.ERROR:
         // Show the server's reason (e.g. a link this world doesn't allow), not just that it refused.
         console.error((json.data && json.data.message) || (typeof json.data === 'string' && json.data) || "I can't let you do that...");
+        break;
+      case Commands.SET_BLOCKED:
+        this.setBlocked(json.data && json.data.blocked === true);
         break;
       case Commands.RESET_BROWSER:
         if(window.isBanter && this.browser) {
@@ -1635,6 +1752,7 @@ var Core = class {
     });
   }
   back() {
+    if (this.blocked) return;
     const isHost = this.player && this.player.host && this.player.host.id === window.user.id;
     // The host can only perform a global skip in playlist mode.
     // In karaoke mode, their skip is local, just like any other user.
@@ -1647,6 +1765,7 @@ var Core = class {
     }
   }
   forward() {
+    if (this.blocked) return;
     const isHost = this.player && this.player.host && this.player.host.id === window.user.id;
     // The host can only perform a global skip in playlist mode.
     // In karaoke mode, their skip is local, just like any other user.
@@ -1657,6 +1776,7 @@ var Core = class {
     }
   }
   vol(num) {
+    if (this.blocked) return;
     this.sendBrowserMessage({path: Commands.SET_VOLUME, data: num});
   }
   destroy() { // To Use : window.cleanupVideoPlayer();

@@ -19,6 +19,7 @@ const hostHandler = require('./handlers/hostHandler.js');
 const { Op } = require('sequelize');
 const { initializeDatabase } = require('./db.js');
 const models = require('./models'); // Sequelize models
+const { Blacklist } = require('./blacklist.js');
 
 /** Seek skip increment in seconds for standard playlist mode. */
 const SkipJumpTimePlaylist = 5;
@@ -42,6 +43,8 @@ class App {
     this.cleanupLoop = null;
     /** @type {boolean} Flag indicating whether persistent database connection is active. */
     this.dbConnected = false;
+    /** People who can't control the player in any world (see server/blacklist.js). */
+    this.blacklist = new Blacklist(this, models);
   };
 
   /**
@@ -176,6 +179,10 @@ class App {
       });
     });
 
+    // Behind the host's proxy (Render), so req.ip is the visitor's address, for the admin
+    // page's wrong-password limit.
+    this.app.set('trust proxy', 1);
+    this.blacklist.setupRoutes(this.app);
     this.app.use(express.static(path.join(__dirname, '..', 'public')));
   }
   /**
@@ -334,6 +341,11 @@ class App {
     if (process.env.NODE_ENV !== 'production') {
       console.log(`[RECV] user: ${ws.u ? ws.u.name : 'N/A'}, instance: ${ws.i || 'N/A'}, type: ${ws.type || 'N/A'}, path: ${msg.path}`);
     }
+    // Blacklisted: every control is ignored without a reply, so the player just looks frozen.
+    if (this.blacklist.refuses(msg, ws)) {
+      console.log(`[BLACKLIST] Ignored ${msg.path} from ${ws.u ? ws.u.name : 'unknown'} (${ws.u ? ws.u.id : 'N/A'}).`);
+      return;
+    }
     switch (msg.path) {
       case Commands.INSTANCE:
         if (msg.u) {
@@ -342,6 +354,8 @@ class App {
           // The world's snippet may allow links from any site (untrusted-links="true").
           ws.allowUntrusted = msg.untrusted === true;
           await this.createVideoPlayer(msg.data, msg.u, ws);
+          this.blacklist.seen(msg.u, msg.data);
+          if (this.blacklist.has(msg.u.id)) this.blacklist.tell(ws);
           console.log(msg.u.name, 'connected', msg.data, "host: ", this.videoPlayers[msg.data].host.name);
           this.getUserVideoPlayer(ws);
           // Takeover cancellation logic is now handled in SET_WS_TYPE,
@@ -381,6 +395,9 @@ class App {
         break;
       case Commands.TAKE_OVER:
         await hostHandler.takeOver(this, ws);
+        break;
+      case Commands.ADMIN_TAKE_OVER:
+        await hostHandler.adminTakeOver(this, ws);
         break;
       case Commands.TOGGLE_PAUSE:
         await hostHandler.togglePause(this, ws);
@@ -1353,6 +1370,7 @@ async function start() {
     // This single function call replaces all the previous setup logic.
     const { dbConnected } = await initializeDatabase();
     app.dbConnected = dbConnected;
+    await app.blacklist.load();
 
     // Schedule the periodic cleanup of old database records.
     const cleanupIntervalMs = 24 * 60 * 60 * 1000; // 24 hours in milliseconds

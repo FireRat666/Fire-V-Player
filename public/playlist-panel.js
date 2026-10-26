@@ -221,6 +221,7 @@ var FirePlaylistPanel = class {
       const now = Date.now();
       if (now - last < 350) return;
       last = now;
+      if (this.core.blocked) return; // blacklisted: nothing works (see Core.setBlocked)
       try { onClick(); } catch (e) { console.error('[PlaylistPanel] click handler failed:', e); }
     });
     return el;
@@ -556,12 +557,14 @@ var FirePlaylistPanel = class {
 
     // Mode: switches everyone (saved in the space state, see Core.switchMode). Shown to everyone,
     // because the client can't always tell who is a space admin; the server refuses anyone else.
-    this.adminSection = await section('Mode (space admins only)');
+    this.adminSection = await section('Space admins only');
     const adminRow = await row(this.adminSection, { flexWrap: 'wrap' });
     this.modeLabel = await this.label(adminRow, '', { fontSize: '20px', marginLeft: '4px', marginRight: '12px' });
     this.modeSwitchBtn = await this.button(adminRow, '', () => this.switchMode(), { backgroundColor: '#6a1b9a' });
     this.modeDefaultBtn = await this.button(adminRow, 'Use Snippet Default', () => this.useDefaultMode(), { backgroundColor: GREY });
-    await this.label(this.adminSection, 'Only works for space admins (the world owner and community moderators). It switches everyone in the space.', { fontSize: '16px', color: '#999999', marginLeft: '4px', marginTop: '4px', whiteSpace: 'normal' });
+    // Take control even when the player is locked (see Core.adminTakeOver).
+    this.adminTakeOverBtn = await this.button(adminRow, 'Admin Take Over', () => this.adminTakeOver(), { backgroundColor: '#ad1457' });
+    await this.label(this.adminSection, 'These only work for space admins (the world owner and community moderators). Admin Take Over makes you the host even when the player is locked. The mode switches everyone in the space.', { fontSize: '16px', color: '#999999', marginLeft: '4px', marginTop: '4px', whiteSpace: 'normal' });
 
     // Footer
     const footer = await row(rootEl, { marginTop: '4px' });
@@ -1064,6 +1067,11 @@ var FirePlaylistPanel = class {
     else this.setStatus('The mode can only be changed in a Creator SDK world.');
   }
 
+  adminTakeOver() {
+    if (this.core.adminTakeOver()) this.setStatus('Taking control as a space admin...', 0);
+    else this.setStatus('Admin Take Over only works in a Creator SDK world.');
+  }
+
   useDefaultMode() {
     if (this.core.setModeOverride(null)) this.setStatus(`Going back to the snippet's ${this.modeName(this.core.defaultMode)} mode...`, 0);
     else this.setStatus('The mode can only be changed in a Creator SDK world.');
@@ -1223,7 +1231,8 @@ var FirePlaylistPanel = class {
     this.setText(this.notHostLabel, host ? '' : (player.canTakeOver ? 'The host allows take over.' : 'Only the host can use these.'));
     this.display(this.notHostLabel, !host);
 
-    // Mode (space admins only, but shown to everyone)
+    // Space admins only, but shown to everyone
+    this.display(this.adminTakeOverBtn, !host);
     {
       const def = this.core.defaultMode || (this.karaoke ? 'karaoke' : 'playlist');
       const override = this.core.modeOverride;

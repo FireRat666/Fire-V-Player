@@ -1322,7 +1322,7 @@ var FirePlaylistPanel = class {
     // Only ever the picture itself: 'none' and then the picture straight after can leave the row
     // blank.
     slot.thumb.SetStyles({ backgroundImage: value });
-    if (value !== 'none') this.reapplyThumbsSoon();
+    this.reapplyThumbsSoon(); // also for 'none': a picture still loading from before can land later
   }
 
   // Unity downloads each picture and shows it when it arrives, even if the row has moved on to
@@ -1339,7 +1339,7 @@ var FirePlaylistPanel = class {
           if (this.destroyed) return;
           const c = this.cache.get(slot.thumb);
           const value = c && c.backgroundImage;
-          if (!value || value === 'none') return;
+          if (!value) return;
           try { slot.thumb.SetStyles({ backgroundImage: value }); } catch (e) {}
         }, delay + k * 150));
       });

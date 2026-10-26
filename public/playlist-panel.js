@@ -349,7 +349,7 @@ var FirePlaylistPanel = class {
 
     // Header
     const header = await row(rootEl);
-    await this.label(header, this.karaoke ? 'Karaoke' : 'Fire-V-Player', { fontSize: '30px', fontWeight: 'bold', flexGrow: 1 });
+    await this.label(header, this.karaoke ? 'Fire-V-Player Karaoke' : 'Fire-V-Player', { fontSize: '30px', fontWeight: 'bold', flexGrow: 1 });
     this.hostLabel = await this.label(header, '', { fontSize: '20px', color: '#bbbbbb', marginRight: '12px' });
     await this.button(header, 'Refresh', () => this.refresh(true), { backgroundColor: GREY });
     this.moreBtn = await this.button(header, 'More...', () => this.setView(this.view === 'more' ? 'main' : 'more'), { backgroundColor: '#2e7d32' });

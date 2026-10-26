@@ -6,8 +6,9 @@
 // changes, scale and rotation included. It follows the same rules as snippet.js and core.js,
 // controls-follow-screen too.
 //
-// Put this file in any Editor folder of a Unity project that has the Creator SDK
-// (e.g. Assets/Editor/). It draws while the snippet's GameObject is selected.
+// Put this file in a folder named Editor in a Unity project that has the Creator SDK
+// (e.g. Assets/Editor/). Anywhere else it doesn't compile (it uses editor-only code), and the
+// Console shows errors instead. It draws while the snippet's GameObject is selected.
 using System;
 using System.Globalization;
 using System.Xml.Linq;
@@ -64,7 +65,10 @@ namespace FireVPlayer.EditorTools
             XElement e;
             try { e = SnippetHtmlSync.Get(snippet.InstanceId); }
             catch (Exception) { return; }
-            if (e == null || (string)e.Attribute("name") != SnippetName) return;
+            // altvr.app accepts the slug in any case, and the SDK names the element after what was
+            // typed (e.g. "Fire-V-Player"), so the name is matched the same way.
+            if (e == null || !IsFireVPlayer(e)) return;
+            bool used = WarnAboutCopies(e);
 
             // Like the SDK's gizmos: the object's position and rotation are the frame the values
             // are in. (Its scale isn't used: the player never sees it.)
@@ -78,7 +82,8 @@ namespace FireVPlayer.EditorTools
             var sPos = Vec(e, "position") ?? Vector3.zero;
             var sRot = Quaternion.Euler(Vec(e, "rotation") ?? Vector3.zero);
             var sScale = Vec(e, "scale") ?? Vector3.one;
-            Rect(frame, sPos, sRot, Vector3.one, new Vector2(sScale.x, sScale.y * ScreenAspect), Outline, Fill, "Screen");
+            Rect(frame, sPos, sRot, Vector3.one, new Vector2(sScale.x, sScale.y * ScreenAspect), Outline, Fill,
+                used ? "Screen" : "Screen (NOT USED: another Fire-V-Player comes first in index.html)");
 
             // Buttons: "0 0 0" (or empty) puts them under the screen, turned with it.
             var under = sPos + new Vector3(0, -sScale.y * ButtonsDrop, 0);
@@ -143,6 +148,38 @@ namespace FireVPlayer.EditorTools
             }
             Rect(frame, gPos, gRot, gScale, SingerSize, SingerOutline, karaoke ? SingerFill : Color.clear,
                 karaoke ? "Singers button" : "Singers button (karaoke only)");
+        }
+
+        // ---- copies
+
+        /// <summary>Whether an element is a Fire-V-Player snippet, whatever case its name is in.</summary>
+        static bool IsFireVPlayer(XElement e) => string.Equals(Attr(e, "name"), SnippetName, StringComparison.OrdinalIgnoreCase);
+
+        static int _warnedCount;
+
+        /// <summary>
+        /// Only the first Fire-V-Player in index.html loads (snippet.js and the SDK's single-instance rule),
+        /// so extra copies, such as ones left behind by deleted or unsaved objects, do nothing. Warns once
+        /// in the Console each time the number of copies changes.
+        /// </summary>
+        /// <param name="e">The selected snippet's element.</param>
+        /// <returns>Whether this element is the one that loads.</returns>
+        static bool WarnAboutCopies(XElement e)
+        {
+            XElement first = null;
+            int count = 0;
+            foreach (var other in SnippetHtmlSync.All())
+            {
+                if (!IsFireVPlayer(other)) continue;
+                if (first == null) first = other;
+                count++;
+            }
+            if (count > 1 && count != _warnedCount)
+                Debug.LogWarning($"[Fire-V-Player] {SnippetHtmlSync.AssetPath} has {count} Fire-V-Player snippets; only the first one loads. " +
+                                 "Delete the extra objects, or remove the extra <bs-snippet name=\"fire-v-player\"> entries between the snippet " +
+                                 "section markers (on Creator SDK 4.0.24 or newer: Creator SDK > Setup > Tools > Recover orphaned snippets > Remove).");
+            _warnedCount = count;
+            return first == null || first == e;
         }
 
         // ---- drawing

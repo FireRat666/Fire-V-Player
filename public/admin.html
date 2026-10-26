@@ -104,12 +104,17 @@
   try { password = sessionStorage.getItem(KEY) || ''; } catch (e) {}
   let recent = [];
 
-  const api = async (path, opts = {}) => {
+  const api = async (path, opts = {}, retries = 8) => {
     const res = await fetch('/admin/api' + path, Object.assign({}, opts, {
       headers: Object.assign({ 'Authorization': 'Bearer ' + password, 'Content-Type': 'application/json' }, opts.headers || {})
     }));
     let body = {};
     try { body = await res.json(); } catch (e) {}
+    // The server is still checking another of this page's requests: wait and ask again.
+    if (res.status === 503 && body.busy && retries > 0) {
+      await new Promise(r => setTimeout(r, 400));
+      return api(path, opts, retries - 1);
+    }
     if (!res.ok) {
       const err = new Error(body.error || ('Error ' + res.status));
       err.status = res.status;

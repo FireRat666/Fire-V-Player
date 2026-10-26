@@ -217,23 +217,31 @@ class Blacklist {
       const now = Date.now();
       const failed = this.failedLogins.get(ip);
       if (failed && now - failed.since > FAILED_LOGIN_WINDOW_MS) this.failedLogins.delete(ip);
-      const tries = this.failedLogins.get(ip) || { count: 0, since: now };
+      // count: wrong passwords. pending: checks still running.
+      const tries = this.failedLogins.get(ip) || { count: 0, pending: 0, since: now };
       if (tries.count >= MAX_FAILED_LOGINS) {
         return res.status(429).json({ error: 'Too many wrong passwords. Try again in 10 minutes.' });
       }
-      // Counted before the (slow) check, so a burst of requests can't all get past the limit.
-      tries.count++;
+      // Checks still running take up the guesses left, so a burst can't get past the limit (or
+      // queue lots of slow scrypt work). That's "busy", not a wrong password: the page retries.
+      if (tries.count + tries.pending >= MAX_FAILED_LOGINS) {
+        res.set('Retry-After', '1');
+        return res.status(503).json({ error: 'Busy checking another sign-in. Try again in a moment.', busy: true });
+      }
+      tries.pending++;
       this.failedLogins.set(ip, tries);
-      const attempt = tries.count;
       const header = req.get('authorization') || '';
       const given = header.startsWith('Bearer ') ? header.slice(7) : '';
       let ok = false;
       try { ok = await this.passwordMatches(given); } catch (err) { console.error('[BLACKLIST] Could not check the admin password:', err.message); }
+      tries.pending--;
+      if (ok) tries.count = 0;
+      else tries.count++;
+      if (!tries.count && !tries.pending && this.failedLogins.get(ip) === tries) this.failedLogins.delete(ip);
       if (!ok) {
-        console.warn(`[BLACKLIST] Wrong admin password from ${ip} (${attempt}).`);
+        console.warn(`[BLACKLIST] Wrong admin password from ${ip} (${tries.count}).`);
         return res.status(401).json({ error: 'Wrong password.' });
       }
-      this.failedLogins.delete(ip);
       next();
     };
   }

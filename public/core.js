@@ -1787,6 +1787,10 @@ var Core = class {
     this.destroyed = true;
     clearTimeout(this.handRejoinTimer);
     clearTimeout(this.headRejoinTimer);
+    clearInterval(this.blockedTimer);
+    this.blockedTimer = null;
+    clearTimeout(this.adminWriteTimer);
+    this.adminWriteTimer = null;
     this.removeJoinLeaveButton();
 
     if (this.playlistPanel) {

@@ -355,7 +355,8 @@ class App {
           ws.allowUntrusted = msg.untrusted === true;
           await this.createVideoPlayer(msg.data, msg.u, ws);
           this.blacklist.seen(msg.u, msg.data);
-          if (this.blacklist.has(msg.u.id)) this.blacklist.tell(ws);
+          // Always, so a player that missed an unblock while disconnected is unfrozen.
+          this.blacklist.tell(ws);
           console.log(msg.u.name, 'connected', msg.data, "host: ", this.videoPlayers[msg.data].host.name);
           this.getUserVideoPlayer(ws);
           // Takeover cancellation logic is now handled in SET_WS_TYPE,
@@ -1130,6 +1131,12 @@ class App {
       // --- FIX for stuck takeover state on load ---
       // If an instance is loaded from the database with an absent host and takeover disabled,
       // there is no automatic trigger to re -enable it. This check fixes that.
+      // A blacklisted host (blocked while this room was unloaded) can't keep others out.
+      if (existingState && player.canTakeOver === false && player.host && this.blacklist.has(player.host.id)) {
+        console.log(`Instance ${instanceId} loaded with a blacklisted host. Enabling takeover.`);
+        player.canTakeOver = true;
+        this.savePlayerState(instanceId);
+      }
       if (existingState && player.canTakeOver === false) {
         // We assume the host is not connected because the instance was dormant. The `hostConnected`
         // flag is already correctly `false` by default. We start  the same 42-second timer that

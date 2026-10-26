@@ -217,19 +217,20 @@ class Blacklist {
       const now = Date.now();
       const failed = this.failedLogins.get(ip);
       if (failed && now - failed.since > FAILED_LOGIN_WINDOW_MS) this.failedLogins.delete(ip);
-      const tries = this.failedLogins.get(ip);
-      if (tries && tries.count >= MAX_FAILED_LOGINS) {
+      const tries = this.failedLogins.get(ip) || { count: 0, since: now };
+      if (tries.count >= MAX_FAILED_LOGINS) {
         return res.status(429).json({ error: 'Too many wrong passwords. Try again in 10 minutes.' });
       }
+      // Counted before the (slow) check, so a burst of requests can't all get past the limit.
+      tries.count++;
+      this.failedLogins.set(ip, tries);
+      const attempt = tries.count;
       const header = req.get('authorization') || '';
       const given = header.startsWith('Bearer ') ? header.slice(7) : '';
       let ok = false;
       try { ok = await this.passwordMatches(given); } catch (err) { console.error('[BLACKLIST] Could not check the admin password:', err.message); }
       if (!ok) {
-        const t = this.failedLogins.get(ip) || { count: 0, since: now };
-        t.count++;
-        this.failedLogins.set(ip, t);
-        console.warn(`[BLACKLIST] Wrong admin password from ${ip} (${t.count}).`);
+        console.warn(`[BLACKLIST] Wrong admin password from ${ip} (${attempt}).`);
         return res.status(401).json({ error: 'Wrong password.' });
       }
       this.failedLogins.delete(ip);
@@ -271,7 +272,8 @@ class Blacklist {
     router.delete('/blacklist/:id', async (req, res) => {
       try {
         const removed = await this.remove(req.params.id);
-        res.status(removed ? 200 : 404).json({ removed, blocked: list() });
+        // 200 either way: already unblocked is fine (and the admin page signs out on a 404).
+        res.json({ removed, blocked: list() });
       } catch (err) {
         console.error('[BLACKLIST] Could not unblock:', err);
         res.status(500).json({ error: 'Could not save it: ' + err.message });

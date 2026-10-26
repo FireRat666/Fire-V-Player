@@ -186,7 +186,10 @@
 
   /** Finds snippet elements, constructs adapted source, and launches player. */
   const run = async () => {
-    const els = document.querySelectorAll(`bs-snippet[name="${SNIPPET_NAME}"]`);
+    // altvr.app accepts the slug in any case and the Unity SDK names the element after what was
+    // typed (e.g. "Fire-V-Player"), so match the name without caring about case.
+    const els = Array.from(document.querySelectorAll('bs-snippet'))
+      .filter(el => (el.getAttribute('name') || '').trim().toLowerCase() === SNIPPET_NAME);
     if (!els.length) {
       console.warn(`Vidya (snippet): no <bs-snippet name="${SNIPPET_NAME}"> found.`);
       return;

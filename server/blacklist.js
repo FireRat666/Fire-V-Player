@@ -4,7 +4,9 @@
  * player is held at full volume (see Core.setBlocked in public/core.js).
  *
  * The list is kept in the database (table blocked_users) and in memory. It's managed from
- * /admin.html, whose API needs the ADMIN_PASSWORD environment variable. Without it the API is off.
+ * /admin.html, whose API needs the ADMIN_PASSWORD_HASH environment variable (made by
+ * `npm run hash-password`, see server/hash-password.js), or the password itself in ADMIN_PASSWORD.
+ * Without either the API is off.
  *
  * The user ID is the one each client reports for itself (Banter's localUser.uid), so this stops
  * people using the normal client; a modified client could still report someone else's ID.
@@ -170,18 +172,47 @@ class Blacklist {
 
   // ------------------------------------------------------------------ admin API
 
-  /** Compares a password without giving away how much of it matched. */
-  passwordMatches(given) {
-    const want = process.env.ADMIN_PASSWORD || '';
-    const a = crypto.createHash('sha256').update(String(given || '')).digest();
-    const b = crypto.createHash('sha256').update(want).digest();
-    return want.length > 0 && crypto.timingSafeEqual(a, b);
+  /** Whether an admin password is set up (ADMIN_PASSWORD_HASH, or ADMIN_PASSWORD). */
+  adminConfigured() {
+    return !!(process.env.ADMIN_PASSWORD_HASH || process.env.ADMIN_PASSWORD);
+  }
+
+  /**
+   * Checks a password without giving away how much of it matched. ADMIN_PASSWORD_HASH holds
+   * "scrypt:N:r:p:<salt>:<hash>" (base64), from `npm run hash-password`. ADMIN_PASSWORD, the
+   * password itself, still works when there's no hash.
+   */
+  async passwordMatches(given) {
+    given = String(given || '');
+    const stored = (process.env.ADMIN_PASSWORD_HASH || '').trim();
+    if (stored) {
+      const parts = stored.split(':');
+      const [kind, n, r, p, saltB64, hashB64] = parts;
+      const N = Number(n), R = Number(r), P = Number(p);
+      const salt = Buffer.from(saltB64 || '', 'base64');
+      const want = Buffer.from(hashB64 || '', 'base64');
+      if (parts.length !== 6 || kind !== 'scrypt' || !(N > 1 && N <= 1048576) || !(R > 0 && R <= 32) || !(P > 0 && P <= 16) || !salt.length || !want.length) {
+        if (!this.warnedBadHash) console.error('[BLACKLIST] ADMIN_PASSWORD_HASH is not in the format from `npm run hash-password`, so nobody can sign in.');
+        this.warnedBadHash = true;
+        return false;
+      }
+      const got = await new Promise((resolve, reject) => crypto.scrypt(given, salt, want.length, { N, r: R, p: P, maxmem: 256 * N * R + 1024 * 1024 },
+        (err, key) => (err ? reject(err) : resolve(key))));
+      return crypto.timingSafeEqual(got, want);
+    }
+    const plain = process.env.ADMIN_PASSWORD || '';
+    if (!plain) return false;
+    if (!this.warnedPlain) console.warn('[BLACKLIST] The admin password is stored as plain text (ADMIN_PASSWORD). Use ADMIN_PASSWORD_HASH from `npm run hash-password` instead.');
+    this.warnedPlain = true;
+    const a = crypto.createHash('sha256').update(given).digest();
+    const b = crypto.createHash('sha256').update(plain).digest();
+    return crypto.timingSafeEqual(a, b);
   }
 
   /** Middleware: needs "Authorization: Bearer <ADMIN_PASSWORD>", with a limit on wrong guesses. */
   requireAdmin() {
-    return (req, res, next) => {
-      if (!process.env.ADMIN_PASSWORD) return res.status(404).json({ error: 'The admin page is turned off. Set ADMIN_PASSWORD to turn it on.' });
+    return async (req, res, next) => {
+      if (!this.adminConfigured()) return res.status(404).json({ error: 'The admin page is turned off. Set ADMIN_PASSWORD_HASH (from npm run hash-password) to turn it on.' });
       const ip = req.ip || (req.socket && req.socket.remoteAddress) || 'unknown';
       const now = Date.now();
       const failed = this.failedLogins.get(ip);
@@ -192,7 +223,9 @@ class Blacklist {
       }
       const header = req.get('authorization') || '';
       const given = header.startsWith('Bearer ') ? header.slice(7) : '';
-      if (!this.passwordMatches(given)) {
+      let ok = false;
+      try { ok = await this.passwordMatches(given); } catch (err) { console.error('[BLACKLIST] Could not check the admin password:', err.message); }
+      if (!ok) {
         const t = this.failedLogins.get(ip) || { count: 0, since: now };
         t.count++;
         this.failedLogins.set(ip, t);

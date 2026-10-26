@@ -140,10 +140,17 @@ The migration is triggered by setting both a `DATABASE_URL` (for the old DB) and
 
 You can stop people using the player in every world that uses your server. They still see the video, but nothing they press works and their volume stays at 100% (see [USAGE.md](USAGE.md#blacklist)).
 
-1.  **Set a password:** in your Render Web Service's "Environment" tab, add `ADMIN_PASSWORD` with a long random value. The service restarts. Without it the admin page is turned off.
-2.  **Open the admin page:** `https://<your server>/admin.html` (e.g. `https://vidya.firer.at/admin.html`) and sign in with that password. The password is kept only for that browser tab.
-3.  **Block someone:** the **Recently seen** list shows everyone who has connected since the server started, with their user ID and the world they were in (a green dot means they're connected now). Search for their name and press **Block**. Or paste a user ID (it's in the server's logs, e.g. `Requester ID: ...`) into **Block someone by ID**.
-4.  **Unblock** them from the **Blocked** list.
+1.  **Make a hash of your password** on your own computer, in the project folder (after `npm install`):
+    ```bash
+    npm run hash-password
+    ```
+    (Or `node server/hash-password.js`, which needs no `npm install`.) Type a password of at least 12 characters, twice (nothing shows as you type). It prints one line starting with `scrypt:`. That's a salted hash: the server can check your password with it, but nobody can get the password back from it.
+2.  **Save the hash on the server:** in your Render Web Service's "Environment" tab, add `ADMIN_PASSWORD_HASH` and paste that whole line as the value. The service restarts. Without it the admin page is turned off.
+    -   Keep the password itself somewhere safe, such as a password manager. To change it, run the command again and replace the value.
+    -   `ADMIN_PASSWORD` (the password itself, in plain text) also works when there's no hash, but anyone who can see your Render settings can read it, so prefer the hash.
+3.  **Open the admin page:** `https://<your server>/admin.html` (e.g. `https://vidya.firer.at/admin.html`) and sign in with the password itself, not the hash. It's kept only for that browser tab.
+4.  **Block someone:** the **Recently seen** list shows everyone who has connected since the server started, with their user ID and the world they were in (a green dot means they're connected now). Search for their name and press **Block**. Or paste a user ID (it's in the server's logs, e.g. `Requester ID: ...`) into **Block someone by ID**.
+5.  **Unblock** them from the **Blocked** list.
 
 Changes apply straight away, also to people who are connected: they lose host (anyone can take over from them), their votes and their place in the singer queue, and clicks on their screen are turned off.
 

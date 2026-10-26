@@ -5,7 +5,8 @@
   "main": "server/app.js",
   "repository": "-",
   "scripts": {
-    "start": "node server/app.js"
+    "start": "node server/app.js",
+    "hash-password": "node server/hash-password.js"
   },
   "engines": {
     "node": "22"

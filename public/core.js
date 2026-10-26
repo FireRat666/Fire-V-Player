@@ -202,29 +202,35 @@ var Core = class {
   white() { return new BS.Vector4(1, 1, 1, 1); }
   // A picture you click: a plane with the icon on it, and a thin collider on the UI layer.
   async makeIconButton(name, parent, position, size, iconUrl, callback, rotation) {
-    const go = await this.makeObject(name, { parent, position, rotation, layer: LAYER_UI });
-    const shader = 'Unlit/DiffuseTransparent';
-    await this.addComponent(go, this.bsComponent('Plane', { width: size, height: size }, 'BanterPlane', [size, size]));
-    await this.addComponent(go, this.bsComponent('Material', { shaderName: shader, texture: iconUrl, color: this.white() },
-      'BanterMaterial', [shader, iconUrl, this.white(), 0, true]));
+    const go = await this.makeImage(name, parent, position, size, size, iconUrl, { rotation, layer: LAYER_UI });
     await this.addColliderBox(go, new BS.Vector3(size, size, 0.01), true);
     go.On('click', () => callback());
     return go;
   }
+  // A flat picture, seen from -Z. Words are pictures too (assets/*Label.png): the world's own
+  // text shows as pink blocks on some clients.
+  async makeImage(name, parent, position, width, height, url, opts = {}) {
+    const go = await this.makeObject(name, { parent, position, rotation: opts.rotation, layer: opts.layer });
+    if (opts.made) opts.made.push(go);
+    const shader = 'Unlit/DiffuseTransparent';
+    await this.addComponent(go, this.bsComponent('Plane', { width, height }, 'BanterPlane', [width, height]));
+    await this.addComponent(go, this.bsComponent('Material', { shaderName: shader, texture: url, color: this.white() },
+      'BanterMaterial', [shader, url, this.white(), 0, true]));
+    return go;
+  }
+  assetUrl(file) { return `${this.getProtocol()}://${this.hostUrl}/assets/${file}`; }
+  /**
+   * Adds a box collider component to a GameObject.
+   * @param {Object} go - Banter GameObject.
+   * @param {Object} size - Box collider dimensions.
+   * @param {boolean} isTrigger - Whether collider acts as a trigger.
+   * @returns {Promise<Object>}
+   */
   addColliderBox(go, size, isTrigger) {
     const center = new BS.Vector3(0, 0, 0);
     return this.addComponent(go, this.bsComponent('BoxCollider', { isTrigger, center, size }, 'BoxCollider', [isTrigger, center, size]));
   }
-  // Text, centred on its object. It reads from the object's -Z side, like the buttons.
-  async makeLabel(name, parent, position, text, fontSize) {
-    const go = await this.makeObject(name, { parent, position });
-    const center = 1; // BS.HorizontalAlignment.Center, BS.VerticalAlignment.Center
-    const box = new BS.Vector2(2, 0.5);
-    return this.addComponent(go, this.bsComponent('Text', {
-      text, color: this.white(), fontSize, horizontalAlignment: center, verticalAlignment: center,
-      richText: false, enableWordWrapping: false, rectTransformSizeDelta: box
-    }, 'BanterText', [text, this.white(), center, center, fontSize, false, false, box]));
-  }
+
   // --------------------------------------------------------------- screen (browser or native)
   // Video and audio files play on the world's own video player (native-video.js), which plays
   // links from hosts that won't let a web page load them. Only one of it and the browser exists at
@@ -435,11 +441,9 @@ var Core = class {
     const under = [screenPos[0], screenPos[1] - yScale * 0.335, screenPos[2]];
     const position = p["button-position"] === "0 0 0" ? under : this.vec3(p["button-position"], under);
     const rotation = this.vec3(p["button-rotation"] === "0 0 0" ? p.rotation : p["button-rotation"], [0, 0, 0]);
-    this.playlistContainer = await this.makeObject('FireVPlayer_Buttons', {
-      position: this.toUnityPos(position),
-      rotation: this.toUnityEuler(rotation),
-      scale: this.toVector3(this.vec3(p["button-scale"], [1, 1, 1]))
-    });
+    // Kept (in Unity values) to work out where the Singers button is.
+    this.buttonsTransform = { position: this.toUnityPos(position), rotation: this.toUnityEuler(rotation), scale: this.toVector3(this.vec3(p["button-scale"], [1, 1, 1])) };
+    this.playlistContainer = await this.makeObject('FireVPlayer_Buttons', this.buttonsTransform);
     await this.setupPlaylistButton(this.playlistContainer);
     await this.setupVolButton(true, this.playlistContainer);
     await this.setupVolButton(false, this.playlistContainer);
@@ -478,8 +482,11 @@ var Core = class {
     }
     this.sendBrowserMessage({path: Commands.SET_VOLUME, data: this.params.volume});
   }
-  // Karaoke's Singers button and optional box trigger. Removed again by removeJoinLeaveButton()
-  // when the player switches to playlist mode.
+  /**
+   * Sets up karaoke's 3D in-world Singers button and optional trigger volume box.
+   * Cleans up automatically on mode changes or teardown.
+   * @returns {Promise<void>}
+   */
   async setupJoinLeaveButton() {
     if (!this.playlistContainer || !this.inWorld()) return;
     this.removeJoinLeaveButton();
@@ -492,23 +499,29 @@ var Core = class {
       return false;
     };
     const p = this.params;
+    const world = p["singer-button-space"] === 'world';
+    const position = this.toUnityPos(this.vec3(p["singer-button-position"], [0, 0, 0]));
+    const rotation = this.toUnityEuler(this.vec3(p["singer-button-rotation"], [0, 0, 0]));
     const button = await this.makeObject('FireVPlayer_SingerButton', {
-      parent: p["singer-button-space"] === 'world' ? null : this.playlistContainer,
-      position: this.toUnityPos(this.vec3(p["singer-button-position"], [0, 0, 0])),
-      rotation: this.toUnityEuler(this.vec3(p["singer-button-rotation"], [0, 0, 0])),
-      layer: LAYER_UI
+      parent: world ? null : this.playlistContainer, position, rotation, layer: LAYER_UI
     });
     made.push(button);
     if (!alive()) return;
-    const glb = `${this.getProtocol()}://${this.hostUrl}/assets/ButtonL.glb`;
-    // legacyRotate: the model was made for the A-Frame bridge, which faced models the other way.
-    await this.addComponent(button, this.bsComponent('GLTF', { url: glb, legacyRotate: true },
-      'BanterGLTF', [glb, false, false, false, false, false, true]));
+    // A picture on each side, so it reads from either one. Each is tracked in `made` too: if the
+    // button is removed while one is being made, it can end up with no parent, loose in the world.
+    const url = this.assetUrl('SingersButton.png');
+    await this.makeImage('FireVPlayer_SingerButtonFront', button, new BS.Vector3(0, 0, -0.005), 1, 0.3, url, { made, layer: LAYER_UI });
+    if (!alive()) return;
+    await this.makeImage('FireVPlayer_SingerButtonBack', button, new BS.Vector3(0, 0, 0.005), 1, 0.3, url,
+      { made, layer: LAYER_UI, rotation: new BS.Vector3(0, 180, 0) });
+    if (!alive()) return;
     await this.addColliderBox(button, new BS.Vector3(1, 0.3, 0.05), true);
-    button.On('click', () => this.openPlaylist());
-    if (!alive()) return;
-    await this.makeLabel('FireVPlayer_SingerButtonText', button, new BS.Vector3(0, 0.01, -0.03), 'singers', 1);
-    if (!alive()) return;
+    // Like the hand's Playlist button, it brings the panel to itself (just above it).
+    button.On('click', () => this.openPlaylist('singer'));
+    // Where it is in the world, for the panel. Unity only reports a transform when it changes, so
+    // a button that never moves is worked out from its settings (see PlaylistPanel.singerPose).
+    this.singerLayout = { world, position, rotation, parent: this.buttonsTransform };
+    this.watchSingerButton(button, token);
 
     const triggerEnter = p["box-trigger-enter-enabled"] === "true";
     const triggerExit = p["box-trigger-exit-enabled"] === "true";
@@ -530,8 +543,12 @@ var Core = class {
       this.watchBoxTrigger(boxTrigger, triggerEnter, triggerExit);
     }
   }
-  // The local player's body, head, hands and feet each enter and leave the trigger, so they count
-  // as inside until the last part has left.
+  /**
+   * Monitors avatar body part contacts with the trigger volume to auto-start or stop karaoke.
+   * @param {Object} boxTrigger - Trigger volume GameObject.
+   * @param {boolean} triggerEnter - Auto-queue song on enter.
+   * @param {boolean} triggerExit - Auto-remove and stop on exit.
+   */
   watchBoxTrigger(boxTrigger, triggerEnter, triggerExit) {
     const inside = new Set();
     const isLocal = d => {
@@ -581,8 +598,31 @@ var Core = class {
       }, 5000);
     });
   }
+  /**
+   * Tracks the world transform of the Singers button to position the playlist panel directly above it.
+   * @param {Object} button - Singers button GameObject.
+   * @param {Object} token - Cancellation token for current build lifecycle.
+   * @returns {Promise<void>}
+   */
+  async watchSingerButton(button, token) {
+    const PN = BS.PN || BS.PropertyName;
+    if (typeof button.WatchTransform !== 'function' || !PN) return;
+    try {
+      await button.WatchTransform([PN.position, PN.rotation], t => {
+        if (token === this.singerToken && t && t.position) this.singerPose = { position: t.position, rotation: t.rotation };
+      });
+    } catch (e) {
+      console.warn('[Core] Could not watch the Singers button:', e);
+    }
+  }
+
+  /**
+   * Cleans up and destroys all GameObjects associated with the karaoke Singers button and trigger.
+   */
   removeJoinLeaveButton() {
     this.singerToken = null;
+    this.singerPose = null;
+    this.singerLayout = null;
     (this.singerButtonElements || []).forEach(go => this.destroyObject(go));
     this.singerButtonElements = [];
   }
@@ -609,17 +649,40 @@ var Core = class {
       }).showToast();
     }
   }
+  /**
+   * Sets up the in-world 3D Playlist/Singers button under the video screen.
+   * @param {Object} playlistContainer - Parent container GameObject.
+   * @returns {Promise<void>}
+   */
   async setupPlaylistButton(playlistContainer) {
     const playlistIconUrl = this.params["data-playlist-icon-url"];
     // Use the isKaraoke flag to provide a context-specific text label
     const buttonText = this.isKaraoke ? 'Singers' : 'Playlist';
     const button = await this.setupButton(playlistContainer, 'Playlist', -0.633, playlistIconUrl, () => this.openPlaylist(), buttonText);
     // Kept so the label can follow a mode change.
+    this.playlistButtonHolder = button.holder;
     this.playlistButtonText = button.label;
   }
+  // The label under a button, as a picture (assets/<text>Label.png).
+  makeButtonLabel(name, holder, text) {
+    return this.makeImage(`FireVPlayer_Button${name}Text`, holder, new BS.Vector3(0, -0.15, -0.005), 0.32, 0.08, this.assetUrl(`${text}Label.png`));
+  }
+  // Swaps the Playlist button's label for the mode's (Playlist or Singers).
+  async setPlaylistLabel(karaoke) {
+    if (!this.playlistButtonHolder) return;
+    const old = this.playlistButtonText;
+    const token = this.playlistLabelToken = {};
+    const label = await this.makeButtonLabel('Playlist', this.playlistButtonHolder, karaoke ? 'Singers' : 'Playlist');
+    if (token !== this.playlistLabelToken || !this.playlistButtonHolder) { this.destroyObject(label); return; }
+    this.playlistButtonText = label;
+    this.destroyObject(old);
+  }
 
-  // inFront: the hand's Playlist button, which opens the panel in front of the player.
-  openPlaylist(inFront) {
+  /**
+   * Toggles or opens the playlist panel or web interface.
+   * @param {'front'|'singer'|undefined} [where] - Where to place the panel ('front' in front of player, 'singer' above karaoke button, or undefined for beside screen).
+   */
+  openPlaylist(where) {
     // Clicks can arrive twice in quick succession (pointer + trigger), so debounce.
     const now = Date.now();
     if (this._lastPlaylistToggle && now - this._lastPlaylistToggle < 600) return;
@@ -628,7 +691,7 @@ var Core = class {
 
     // In-world UI Toolkit panel (new SDK), when one was set up for this player.
     if (this.playlistPanel) {
-      this.playlistPanel.toggle(inFront === true);
+      this.playlistPanel.toggle(where);
       return;
     }
     this.openPlaylistPage();
@@ -830,7 +893,7 @@ var Core = class {
     this.sendMessage({ path: Commands.SET_INSTANCE_MODE, data: mode });
     // The video page only uses the mode for its skip times, and every message to it carries the
     // mode (see sendBrowserMessage), so it needs no message of its own.
-    if (this.playlistButtonText) this.playlistButtonText.text = karaoke ? 'Singers' : 'Playlist';
+    this.setPlaylistLabel(karaoke).catch(e => console.error('[Core] Could not change the Playlist button label:', e));
     if (karaoke) this.setupJoinLeaveButton().catch(e => console.error('[Core] Could not create the Singers button:', e));
     else this.removeJoinLeaveButton();
     if (this.playlistPanel) {
@@ -999,9 +1062,11 @@ var Core = class {
   }
 
   // ---------------------------------------------------------------- hand controls
-  // A small panel of buttons on the local player's left hand, laid out as in FireScreen v2.
-  // This was a great innovation by HBR, who wanted Skizot to also get credit for the original idea.
-  // The SDK drops attachments when the player leaves, so they're made again when they come back.
+  /**
+   * Sets up wrist-attached playback controls on the local player's left hand.
+   * Reattaches automatically when users rejoin or scene resets.
+   * @returns {Promise<void>}
+   */
   async setupHandControls() {
     if (this.destroyed) return;
     const scene = this.banterScene();
@@ -1048,7 +1113,7 @@ var Core = class {
         ['VolumeUp', 0.4, 0.4, "data-vol-up-icon-url", () => this.volume(true)],
         ['SkipBack', -0.4, -0.1, "data-skip-backward-icon-url", () => this.sendBrowserMessage({path: Commands.SKIP_BACK})],
         ['SkipForward', 0, -0.1, "data-skip-forward-icon-url", () => this.sendBrowserMessage({path: Commands.SKIP_FORWARD})],
-        ['Playlist', 0.4, -0.1, "data-playlist-icon-url", () => this.openPlaylist(true)]
+        ['Playlist', 0.4, -0.1, "data-playlist-icon-url", () => this.openPlaylist('front')]
       ];
       for (const [name, x, y, icon, callback] of buttons) {
         if (root !== this.handControls) return; // removed meanwhile
@@ -1081,7 +1146,7 @@ var Core = class {
     const holder = await this.makeObject(`FireVPlayer_Button${name}`, { parent: playlistContainer, position: new BS.Vector3(xOffset, 0, 0) });
     await this.makeIconButton(`FireVPlayer_Button${name}Icon`, holder, new BS.Vector3(0, 0, 0), 0.2, iconUrl, callback);
     // Just in front of the icon (toward -Z, the side it's seen from), below it.
-    const label = text ? await this.makeLabel(`FireVPlayer_Button${name}Text`, holder, new BS.Vector3(0, -0.15, -0.005), text, 0.35) : null;
+    const label = text ? await this.makeButtonLabel(name, holder, text) : null;
     return { holder, label };
   }
 
@@ -1648,6 +1713,7 @@ var Core = class {
     // Remove any global references to this instance
     this.browser = null;
     this.playlistContainer = null;
+    this.playlistButtonHolder = null;
     this.playlistButtonText = null;
     this.ws = null;
     if (window.playlistPlayerInstance) {

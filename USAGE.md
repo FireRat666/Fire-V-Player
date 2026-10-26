@@ -2,6 +2,27 @@
 
 Fire-V-Player is designed to be embedded in the **Banter** VR social platform, and in SideQuest/Altspace Creator SDK worlds (see [Snippet](#sidequest--altspace-creator-sdk-snippet)). Its behavior is configured through attributes on a single `<script>` tag, or a `<bs-snippet>` element.
 
+## Getting Started: Adding the Snippet
+
+In a SideQuest / Altspace Creator SDK world, add the player as a snippet. Its slug is **`fire-v-player`**. Only one Fire-V-Player per world is supported. There are two ways to add it.
+
+### In Unity
+
+1. Create an empty GameObject (**GameObject > Create Empty**).
+2. Make sure its Transform **Position is `0 0 0`** (and its Rotation `0 0 0`). The snippet's settings are world values: the player never sees the GameObject, so if it isn't at the origin, the Scene-view outlines won't line up with where the player really appears.
+3. **Add Component** and pick **Snippet** (`BSSnippet`).
+4. Type `fire-v-player` as the slug, then refresh / load it. The component downloads the snippet and writes it into your world's `Assets/WebRoot/index.html`.
+5. The player's settings now show in the Inspector. Change them there, or drag the handles in the Scene view to place the screen, buttons and playlist panel. See [Settings](#sidequest--altspace-creator-sdk-snippet) for what each one does.
+
+**Live preview (optional):** the SDK's outlines follow a setting's position, but not its scale or rotation. For a preview that updates as you change anything, copy [`unity/Editor/FireVPlayerSnippetPreview.cs`](unity/Editor/FireVPlayerSnippetPreview.cs) into an `Editor` folder in your project (e.g. `Assets/Editor/`). With the snippet's GameObject selected, it draws the screen, buttons and playlist panel in orange, and karaoke's Singers button in pink, where the player will put them.
+
+### On the website
+
+1. Edit your world on the website and open the **Snippets** section.
+2. Choose to show **All** snippets, then search for or scroll to **Fire-V-Player** and open it.
+3. Use **Copy & open index.html**, and paste the copied code into your world's HTML (`index.html`), between the `<!-- snippet section -->` comments if your page has them.
+4. Change the settings by editing the attributes in the pasted code. See [Settings](#sidequest--altspace-creator-sdk-snippet) for what each one does.
+
 ## Modes
 
 The player has two primary modes, determined by which script you include (or, for a snippet, its `karaoke` checkbox):
@@ -45,7 +66,7 @@ To use Karaoke mode, simply change the `src` to point to `karaoke.js`. The playe
 
 ## SideQuest / Altspace Creator SDK (Snippet)
 
-In a Creator SDK world (`Assets/WebRoot/index.html`), add the player as a snippet. `karaoke="false"` (the default) runs a shared playlist; `karaoke="true"` runs a singer queue instead. Unity's Inspector shows it as a checkbox.
+In a Creator SDK world (`Assets/WebRoot/index.html`), add the player as a snippet (see [Getting Started](#getting-started-adding-the-snippet)). This is the code it adds. `karaoke="false"` (the default) runs a shared playlist; `karaoke="true"` runs a singer queue instead. Unity's Inspector shows it as a checkbox.
 
 ```html
 <!-- snippet section -->
@@ -83,7 +104,7 @@ In a Creator SDK world (`Assets/WebRoot/index.html`), add the player as a snippe
   <bs-gizmo type="position" attribute="playlist-panel-position"/>
   <bs-gizmo type="plane" attribute="playlist-panel-position" size="1.4 1.2" rotation="0 160 0"/>
   <bs-gizmo type="position" attribute="button-position"/>
-  <bs-gizmo type="position" attribute="singer-button-position"/>
+  <bs-gizmo type="plane" attribute="button-position" size="1.6 0.35" rotation="0 180 0"/>
 </bs-snippet>
 <!-- end snippet section -->
 ```
@@ -93,7 +114,7 @@ Settings are the same as the script attributes below, except:
 - `position` and `rotation` are **Unity world values**, as for every snippet, so the Scene-view gizmo shows where the screen will be. (Script-tag values use A-Frame axes, where Z is flipped: script `position="0 1.5 -2"` is snippet `position="0 1.5 2"`.)
 - `scale` can be a single number. The screen is 1 m wide and 0.5625 m tall at scale 1, at any `resolution`, so the gizmo's `size` should be `scale × 1` by `scale × 0.5625`.
 - `karaoke` is a checkbox: ticked (`true`) is karaoke mode, unticked or empty is playlist mode. A hand-written `mode="karaoke"` works too. Both modes use the same settings; `playlist` (the default YouTube playlist) only matters in playlist mode.
-- `singer-button-position` and `singer-button-rotation` (karaoke) place the Singers button, a Unity world position and rotation like `button-position`, with its own drag handle. `0 0 0` (or empty) means the default: for the position, below and in front of the in-world buttons, placed from them; for the rotation, tilted back 30° and turned with the screen. With `controls-follow-screen="true"` they're offsets from the screen instead. They default to `0 0 0` rather than empty because Unity picks each setting's field from its value: an empty one shows as a single text box instead of X, Y and Z. The `box-trigger-*` settings from the parameter reference work too.
+- `singer-button-position` and `singer-button-rotation` (karaoke) place the Singers button, a Unity world position and rotation like `button-position`. (It has no drag handle; the [live preview](#in-unity) shows where it goes.) `0 0 0` (or empty) means the default: for the position, below and in front of the in-world buttons, placed from them; for the rotation, tilted back 30° and turned with the screen. With `controls-follow-screen="true"` they're offsets from the screen instead. They default to `0 0 0` rather than empty because Unity picks each setting's field from its value: an empty one shows as a single text box instead of X, Y and Z. The `box-trigger-*` settings from the parameter reference work too.
 - The room ID is `room`, not `instance`: Unity's BSSnippet component writes its own `instance` attribute. Without `room`, the space URL is used, so each space has its own room.
 - `playlist-panel-position` and `playlist-panel-rotation` place the in-world panel in the world (Unity values), and it has its own drag handle in the Scene view. Clear `playlist-panel-position` to put the panel beside the screen instead; `playlist-panel-rotation` is then relative to the screen.
 - `button-position` is where the in-world buttons go (Unity world position), with its own drag handle. Empty (or `0 0 0`) puts them just under the screen; an empty or `0 0 0` `button-rotation` uses the screen's.
@@ -103,7 +124,7 @@ Settings are the same as the script attributes below, except:
 
 The player builds everything in the world with the BS SDK (`BS.GameObject` and components such as `BS.Browser`), so the page needs no `<a-scene>`; one left over from older versions does no harm. Script-tag positions and rotations still use A-Frame axes (Z flipped from Unity's), as before, so existing script tags keep working.
 
-In these worlds the Playlist button opens an **in-world panel** beside the screen. The main view has playback and volume controls, the playlist (play, reorder, remove, vote) and YouTube search. Under the search box are your last five searches (kept on your device; click one to search again, **Clear** forgets them) and, in karaoke mode, **+ karaoke**, **+ lyrics** and **+ zoom karaoke**, which add that word to the search. Search also accepts a video link, or a playlist link (host only), which replaces the playlist. Beside the page number, **<** and **>** turn one page, **<<** and **>>** five (shown once there are more than five pages), and **|<** and **>|** go to the first and last page. To move the panel, grab the pill under it in VR and carry it; the panel comes with it, stays upright and stays where you let go. The hand's Playlist button opens it in front of you, and the Playlist button by the screen puts it back beside the screen. Only your own panel moves. **Refresh** fetches the latest playlist from the server; the panel also does this each time it opens. **More...** opens a second view with:
+In these worlds the Playlist button opens an **in-world panel** beside the screen. The main view has playback and volume controls, the playlist (play, reorder, remove, vote) and YouTube search. Under the search box are your last five searches (kept on your device; click one to search again, **Clear** forgets them) and, in karaoke mode, **+ karaoke**, **+ lyrics** and **+ zoom karaoke**, which add that word to the search. Search also accepts a video link, or a playlist link (host only), which replaces the playlist. Beside the page number, **<** and **>** turn one page, **<<** and **>>** five (shown once there are more than five pages), and **|<** and **>|** go to the first and last page. To move the panel, grab the pill under it in VR and carry it; the panel comes with it, stays upright and stays where you let go. The hand's Playlist button opens it in front of you, karaoke's Singers button opens it just above that button, and the Playlist button by the screen puts it back beside the screen. Only your own panel moves. **Refresh** fetches the latest playlist from the server; the panel also does this each time it opens. **More...** opens a second view with:
 
 - host controls: lock, take over, voting, clear, load the default playlist
 - seek to a time (host)

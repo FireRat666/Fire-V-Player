@@ -14,13 +14,17 @@
 // can drop the elements created at runtime. The hand's Playlist button puts it in
 // front of the player, and the pill under it can be grabbed to carry it.
 var PAGE_JUMP = 5; // pages the << and >> buttons move
+// Added to thumbnail links, new each time the space loads. Unity keeps the pictures it has
+// downloaded for as long as the client runs (UIElementBridge's texture cache) and never checks one
+// is still there, so after a rejoin a cached link can show nothing and never download again.
+var THUMB_VISIT = Date.now().toString(36);
 var FirePlaylistPanel = class {
   constructor(core) {
     this.core = core;
     this.karaoke = !!core.isKaraoke;
     this.W = 1100;            // panel resolution in pixels
     this.H = 940;
-    this.rowsPerPage = 6;
+    this.rowsPerPage = 7;
     this.tab = 'playlist';    // 'playlist' (the singer queue in karaoke mode) | 'search'
     this.page = 0;
     this.searchPage = 0;
@@ -251,6 +255,10 @@ var FirePlaylistPanel = class {
 
   // ---------------------------------------------------------------- build
 
+  /**
+   * Triggers asynchronous construction of the in-world UI Toolkit panel if not already built.
+   * @returns {Promise<void>}
+   */
   build() {
     if (!this.buildPromise) {
       this.buildPromise = this._build().catch(e => {
@@ -262,6 +270,11 @@ var FirePlaylistPanel = class {
     return this.buildPromise;
   }
 
+  /**
+   * Internal implementation that instantiates GameObjects, mover handles, and UI hierarchies.
+   * @private
+   * @returns {Promise<void>}
+   */
   async _build() {
     const p = this.core.params;
     const screenPos = this.vec3(p.position, [0, 0, 0]);
@@ -299,7 +312,9 @@ var FirePlaylistPanel = class {
       moverRot
     };
     this.moverHidden = true;
-    this.placement = 'home'; // 'home' (by the screen) | 'front' (in front of the player) | 'moved' (carried)
+    // 'home' (by the screen) | 'front' (in front of the player) | 'singer' (above karaoke's Singers
+    // button) | 'moved' (carried)
+    this.placement = 'home';
     this.shownPos = new BS.Vector3(0, this.handleDrop, 0);
     this.hiddenPos = new BS.Vector3(0, -1000, 0);
     this.mover = await this.withTimeout(new BS.GameObject({
@@ -338,7 +353,7 @@ var FirePlaylistPanel = class {
 
     // Header
     const header = await row(rootEl);
-    await this.label(header, this.karaoke ? 'Karaoke' : 'Fire-V-Player', { fontSize: '30px', fontWeight: 'bold', flexGrow: 1 });
+    await this.label(header, this.karaoke ? 'Fire-V-Player Karaoke' : 'Fire-V-Player', { fontSize: '30px', fontWeight: 'bold', flexGrow: 1 });
     this.hostLabel = await this.label(header, '', { fontSize: '20px', color: '#bbbbbb', marginRight: '12px' });
     await this.button(header, 'Refresh', () => this.refresh(true), { backgroundColor: GREY });
     this.moreBtn = await this.button(header, 'More...', () => this.setView(this.view === 'more' ? 'main' : 'more'), { backgroundColor: '#2e7d32' });
@@ -437,10 +452,10 @@ var FirePlaylistPanel = class {
     this.rows = [];
     for (let k = 0; k < this.rowsPerPage; k++) {
       const r = await this.div(list, {
-        display: 'flex', flexDirection: 'row', alignItems: 'center', height: '84px', flexShrink: 0,
-        paddingLeft: '6px', paddingRight: '6px', marginBottom: '6px', borderRadius: '10px', backgroundColor: '#2a2a33'
+        display: 'flex', flexDirection: 'row', alignItems: 'center', height: '76px', flexShrink: 0,
+        paddingLeft: '6px', paddingRight: '6px', marginBottom: '5px', borderRadius: '10px', backgroundColor: '#2a2a33'
       });
-      const thumb = await this.div(r, { width: '128px', height: '72px', flexShrink: 0, borderRadius: '6px', backgroundColor: '#000000' });
+      const thumb = await this.div(r, { width: '112px', height: '63px', flexShrink: 0, borderRadius: '6px', backgroundColor: '#000000' });
       const info = await this.div(r, { display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, minWidth: '0px', marginLeft: '12px', overflow: 'hidden' });
       const title = await this.label(info, '', { fontSize: '22px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' });
       const sub = await this.label(info, '', { fontSize: '16px', color: '#aaaaaa', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: '4px' });
@@ -662,6 +677,8 @@ var FirePlaylistPanel = class {
     this.visible = false;
     [this.tickTimer, this.renderTimer, this.statusTimer, this.searchTimer].forEach(t => { clearTimeout(t); clearInterval(t); });
     this.tickTimer = this.renderTimer = this.statusTimer = this.searchTimer = null;
+    (this.thumbTimers || []).forEach(clearTimeout);
+    this.thumbTimers = [];
     if (typeof this.core.removeMessageListener === 'function') this.core.removeMessageListener(this.onMessageFn);
     const removeObjects = () => {
       try {
@@ -678,9 +695,12 @@ var FirePlaylistPanel = class {
 
   // ---------------------------------------------------------------- show / hide
 
-  // inFront: open (or bring over) in front of the player, as the hand's Playlist button does.
-  // Otherwise it opens by the screen. Pressing the same button again closes it.
-  async toggle(inFront) {
+  /**
+   * Toggles the visibility of the in-world playlist panel or positions it.
+   * @param {'front'|'singer'|undefined} [where] - Where to place the panel ('front' in front of player, 'singer' above karaoke button, or undefined for beside screen).
+   * @returns {Promise<void>}
+   */
+  async toggle(where) {
     if (!this.built && !this.failed) console.log('[PlaylistPanel] Still building, will open when ready.');
     await this.build();
     if (this.destroyed) return;
@@ -688,8 +708,10 @@ var FirePlaylistPanel = class {
       this.core.openPlaylistPage();
       return;
     }
-    const want = inFront && this.frontPose(true) ? 'front' : 'home';
-    if (this.visible && this.placement === want && want === 'home') return this.close();
+    let want = 'home';
+    if (where === 'front' && this.frontPose(true)) want = 'front';
+    else if (where === 'singer' && this.singerPose()) want = 'singer';
+    if (this.visible && this.placement === want && want !== 'front') return this.close();
     // In front, a press while it's open in front closes it only when the player hasn't turned
     // away from it; otherwise it comes round to where they're looking.
     if (this.visible && want === 'front' && this.placement === 'front' && !this.lookedAway()) return this.close();
@@ -697,7 +719,11 @@ var FirePlaylistPanel = class {
     if (!this.visible) await this.open();
   }
 
-  // Shows (shownPos) or hides (hiddenPos) the panel above its handle.
+  /**
+   * Moves the panel root GameObject to show (shownPos) or hide (hiddenPos) it.
+   * @param {Object} pos - Local position vector.
+   * @returns {Promise<void>}
+   */
   async moveTo(pos) {
     const o = this.panelObj;
     if (!o) return;
@@ -706,12 +732,11 @@ var FirePlaylistPanel = class {
 
   // ---------------------------------------------------------------- placement
 
-  // Where the panel goes in front of the player: 0.9 m ahead of their head, at about chest
-  // height, turned to face them (only around the vertical, so it stays upright). Null until the
-  // head's position is known.
-  // fromHand (the hand's Playlist button): the player is looking at their left wrist, so the way
-  // from their head to that hand is the way they face. That needs only positions, which Unity
-  // reports reliably. Otherwise, the head's own rotation gives the way.
+  /**
+   * Calculates the target world position and yaw angle to place the panel directly in front of the local player.
+   * @param {boolean} fromHand - Whether triggered by the wrist controls button.
+   * @returns {{yaw: number, source: string, position: Object}|null}
+   */
   frontPose(fromHand) {
     const head = this.core.headPose();
     if (!head || !head.position) return null;
@@ -741,7 +766,10 @@ var FirePlaylistPanel = class {
     };
   }
 
-  // Whether the player now faces more than 45 degrees away from where the panel was put.
+  /**
+   * Checks whether the player's head has rotated more than 45 degrees away from the panel.
+   * @returns {boolean} True if player looked away.
+   */
   lookedAway() {
     const now = this.frontPose(true);
     if (!now || this.frontYaw === undefined) return false;
@@ -749,6 +777,49 @@ var FirePlaylistPanel = class {
     return diff > 45;
   }
 
+  /**
+   * Calculates the position and yaw angle to place the panel just above karaoke's Singers button.
+   * @returns {{yaw: number, position: Object}|null} Position descriptor or null.
+   */
+  singerPose() {
+    const s = this.core.singerPose || this.singerPoseFromLayout();
+    if (!s || !s.position) return null;
+    const q = s.rotation;
+    let yaw = 0;
+    if (q) {
+      // The button's forward (+Z) flattened onto the floor.
+      const fx = 2 * (q.x * q.z + q.w * q.y), fz = 1 - 2 * (q.x * q.x + q.y * q.y);
+      if (Math.abs(fx) + Math.abs(fz) > 1e-6) yaw = Math.atan2(fx, fz) * 180 / Math.PI;
+      // The panel is seen from its -Z, like the button's front. The button reads from both
+      // sides, so a player on its back (+Z) side gets the panel turned round to face them.
+      const head = this.core.headPose();
+      if (head && head.position && (head.position.x - s.position.x) * fx + (head.position.z - s.position.z) * fz > 0) yaw += 180;
+    }
+    return { yaw, position: new BS.Vector3(s.position.x, s.position.y, s.position.z) };
+  }
+
+  // The Singers button's world pose from its settings, for when Unity hasn't reported it (it
+  // only does when the button moves): its own values, or offsets from the buttons under the screen.
+  singerPoseFromLayout() {
+    const l = this.core.singerLayout;
+    if (!l || !l.position) return null;
+    const v = o => [o.x, o.y, o.z];
+    let pos = v(l.position), q = this.qEuler(l.rotation);
+    if (!l.world && l.parent) {
+      const P = l.parent, sc = v(P.scale), pq = this.qEuler(P.rotation);
+      const r = this.qRotate(pq, [pos[0] * sc[0], pos[1] * sc[1], pos[2] * sc[2]]);
+      pos = [P.position.x + r[0], P.position.y + r[1], P.position.z + r[2]];
+      q = this.qMul(pq, q);
+    }
+    return { position: { x: pos[0], y: pos[1], z: pos[2] }, rotation: { x: q[0], y: q[1], z: q[2], w: q[3] } };
+  }
+
+  /**
+   * Positions and orients the playlist panel root and mover GameObjects.
+   * @param {'front'|'singer'|'home'} where - Destination anchor location.
+   * @param {boolean} [fromHand] - Whether triggered from wrist controls.
+   * @returns {Promise<void>}
+   */
   async place(where, fromHand) {
     const root = this.root, mover = this.mover;
     if (!root || !mover) return;
@@ -765,6 +836,12 @@ var FirePlaylistPanel = class {
       // The panel is seen from -Z, so facing the same way as the player turns its front to them.
       await this.setLocal(root, pose.position, new BS.Vector3(0, pose.yaw, 0));
       await this.setLocal(mover, new BS.Vector3(0, -this.handleDrop, 0), new BS.Vector3(0, 0, 0));
+    } else if (where === 'singer') {
+      const pose = this.singerPose();
+      if (!pose) return;
+      // The grab handle sits just above the button, and the panel above the handle.
+      await this.setLocal(root, pose.position, new BS.Vector3(0, pose.yaw, 0));
+      await this.setLocal(mover, new BS.Vector3(0, 0.3, 0), new BS.Vector3(0, 0, 0));
     } else {
       const h = this.home;
       await this.setLocal(root, h.rootLocalPos, h.rootLocalRot);
@@ -776,7 +853,13 @@ var FirePlaylistPanel = class {
     await this.moveTo(this.visible ? this.shownPos : this.hiddenPos);
   }
 
-  // The root has no parent, so its local position and rotation are world ones.
+  /**
+   * Applies local position and Euler angles to a Banter GameObject.
+   * @param {Object} o - Target GameObject.
+   * @param {Object} [pos] - Local position.
+   * @param {Object} [euler] - Local Euler angles.
+   * @returns {Promise<void>}
+   */
   async setLocal(o, pos, euler) {
     if (pos) {
       if (typeof o.SetLocalPosition === 'function') await o.SetLocalPosition(pos);
@@ -788,7 +871,10 @@ var FirePlaylistPanel = class {
     }
   }
 
-  // Fetches the whole state from the server, in case the panel's list is out of date.
+  /**
+   * Re-requests full playback state from server and updates UI status message.
+   * @param {boolean} showStatus - Whether to show loading status in toast/footer.
+   */
   refresh(showStatus) {
     if (this.core.requestState()) {
       this.refreshing = showStatus;
@@ -798,6 +884,10 @@ var FirePlaylistPanel = class {
     }
   }
 
+  /**
+   * Reveals the panel, triggers render, and starts the playback ticker timer.
+   * @returns {Promise<void>}
+   */
   async open() {
     if (this.destroyed) return;
     this.visible = true;
@@ -810,12 +900,17 @@ var FirePlaylistPanel = class {
     this.render();
     // Closed, or just built (as after a mode change): it needs a place first.
     if (this.moverHidden && this.placement === 'front') await this.place('front', false);
+    if (this.moverHidden && this.placement === 'singer') await this.place('singer', false);
     if (this.moverHidden) await this.place('home', false); // also when the head isn't known
     await this.moveTo(this.shownPos);
     clearInterval(this.tickTimer);
     this.tickTimer = setInterval(() => this.updateTime(), 1000);
   }
 
+  /**
+   * Hides the panel, releases active grab holds, and stops the ticker timer.
+   * @returns {Promise<void>}
+   */
   async close() {
     if (this.held && this.mover && typeof this.mover.ReleaseGrab === 'function') {
       try { await this.mover.ReleaseGrab(); } catch (e) {}
@@ -1214,13 +1309,41 @@ var FirePlaylistPanel = class {
   thumbUrl(url, link) {
     const fromThumb = /^https?:\/\/i\d*\.ytimg\.com\/vi(?:_webp)?\/([a-zA-Z0-9_-]{11})\//.exec(String(url || ''));
     const id = (fromThumb && fromThumb[1]) || (link && this.core.getId ? this.core.getId(link) : null);
-    return id ? `https://i.ytimg.com/vi/${id}/mqdefault.jpg` : url;
+    const out = id ? `https://i.ytimg.com/vi/${id}/mqdefault.jpg` : String(url || '');
+    if (!/^https?:\/\//.test(out)) return out;
+    return `${out}${out.includes('?') ? '&' : '?'}fvp=${THUMB_VISIT}`;
   }
 
   setThumb(slot, url, link) {
     url = this.thumbUrl(url, link);
     const safe = url ? String(url).replace(/["\\\n\r]/g, '') : '';
-    this.setStyle(slot.thumb, 'backgroundImage', safe ? `url("${safe}")` : 'none');
+    const value = safe ? `url("${safe}")` : 'none';
+    if (!this._changed(slot.thumb, 'backgroundImage', value)) return;
+    // Only ever the picture itself: 'none' and then the picture straight after can leave the row
+    // blank.
+    slot.thumb.SetStyles({ backgroundImage: value });
+    this.reapplyThumbsSoon(); // also for 'none': a picture still loading from before can land later
+  }
+
+  // Unity downloads each picture and shows it when it arrives, even if the row has moved on to
+  // another page by then (UIElementBridge.SetBackgroundImage), so a late one from a page already
+  // left can replace the right one. Setting each row's picture again a little later puts the
+  // right one back (by then it's in Unity's cache, so it shows at once) and retries a failed one,
+  // a row at a time so they don't all load at once.
+  reapplyThumbsSoon() {
+    (this.thumbTimers || []).forEach(clearTimeout);
+    this.thumbTimers = [];
+    for (const delay of [1500, 5000]) {
+      (this.rows || []).forEach((slot, k) => {
+        this.thumbTimers.push(setTimeout(() => {
+          if (this.destroyed) return;
+          const c = this.cache.get(slot.thumb);
+          const value = c && c.backgroundImage;
+          if (!value) return;
+          try { slot.thumb.SetStyles({ backgroundImage: value }); } catch (e) {}
+        }, delay + k * 150));
+      });
+    }
   }
 
   setButtons(slot, defs) {

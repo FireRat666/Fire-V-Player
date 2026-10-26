@@ -10,6 +10,9 @@ const { getInnertube, getLibrary } = require('../youtube/youtubeiService.js');
 const Scraper = require('../youtube/scraper.js');
 const scraper = new Scraper();
 const media = require('../media.js');
+// The most videos a YouTube playlist import adds. The whole playlist goes to everyone on each
+// change, so this keeps that message a sensible size.
+const MAX_PLAYLIST_IMPORT = 500;
 
 /**
  * Resolves a raw URL/ID or partial video metadata object into a standardized, fully populated video object.
@@ -162,7 +165,7 @@ async function removePlaylistItem(app, ws, index) {
 }
 
 /**
- * Loads and appends up to 100 tracks from an external YouTube playlist.
+ * Loads and appends up to MAX_PLAYLIST_IMPORT tracks from an external YouTube playlist.
  * Filters out duplicate items and updates client player state.
  *
  * @param {Object} app - Express application and state controller.
@@ -189,15 +192,15 @@ async function fromPlaylist(app, ws, data) {
         let videos = [...playlist.items];
         let currentPlaylist = playlist;
 
-        while (videos.length < 100 && currentPlaylist.has_continuation) {
+        while (videos.length < MAX_PLAYLIST_IMPORT && currentPlaylist.has_continuation) {
           currentPlaylist = await currentPlaylist.getContinuation();
           const nextItems = currentPlaylist.items;
           if (!nextItems || nextItems.length === 0) break;
           videos = videos.concat(nextItems);
         }
 
-        if (videos.length > 100) {
-          videos = videos.slice(0, 100);
+        if (videos.length > MAX_PLAYLIST_IMPORT) {
+          videos = videos.slice(0, MAX_PLAYLIST_IMPORT);
         }
 
         app.resetPlaylist(ws); // Resets playlist, currentTime, currentTrack

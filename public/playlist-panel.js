@@ -14,13 +14,17 @@
 // can drop the elements created at runtime. The hand's Playlist button puts it in
 // front of the player, and the pill under it can be grabbed to carry it.
 var PAGE_JUMP = 5; // pages the << and >> buttons move
+// Added to thumbnail links, new each time the space loads. Unity keeps the pictures it has
+// downloaded for as long as the client runs (UIElementBridge's texture cache) and never checks one
+// is still there, so after a rejoin a cached link can show nothing and never download again.
+var THUMB_VISIT = Date.now().toString(36);
 var FirePlaylistPanel = class {
   constructor(core) {
     this.core = core;
     this.karaoke = !!core.isKaraoke;
     this.W = 1100;            // panel resolution in pixels
     this.H = 940;
-    this.rowsPerPage = 6;
+    this.rowsPerPage = 7;
     this.tab = 'playlist';    // 'playlist' (the singer queue in karaoke mode) | 'search'
     this.page = 0;
     this.searchPage = 0;
@@ -448,10 +452,10 @@ var FirePlaylistPanel = class {
     this.rows = [];
     for (let k = 0; k < this.rowsPerPage; k++) {
       const r = await this.div(list, {
-        display: 'flex', flexDirection: 'row', alignItems: 'center', height: '84px', flexShrink: 0,
-        paddingLeft: '6px', paddingRight: '6px', marginBottom: '6px', borderRadius: '10px', backgroundColor: '#2a2a33'
+        display: 'flex', flexDirection: 'row', alignItems: 'center', height: '76px', flexShrink: 0,
+        paddingLeft: '6px', paddingRight: '6px', marginBottom: '5px', borderRadius: '10px', backgroundColor: '#2a2a33'
       });
-      const thumb = await this.div(r, { width: '128px', height: '72px', flexShrink: 0, borderRadius: '6px', backgroundColor: '#000000' });
+      const thumb = await this.div(r, { width: '112px', height: '63px', flexShrink: 0, borderRadius: '6px', backgroundColor: '#000000' });
       const info = await this.div(r, { display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, minWidth: '0px', marginLeft: '12px', overflow: 'hidden' });
       const title = await this.label(info, '', { fontSize: '22px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' });
       const sub = await this.label(info, '', { fontSize: '16px', color: '#aaaaaa', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: '4px' });
@@ -1305,7 +1309,9 @@ var FirePlaylistPanel = class {
   thumbUrl(url, link) {
     const fromThumb = /^https?:\/\/i\d*\.ytimg\.com\/vi(?:_webp)?\/([a-zA-Z0-9_-]{11})\//.exec(String(url || ''));
     const id = (fromThumb && fromThumb[1]) || (link && this.core.getId ? this.core.getId(link) : null);
-    return id ? `https://i.ytimg.com/vi/${id}/mqdefault.jpg` : url;
+    const out = id ? `https://i.ytimg.com/vi/${id}/mqdefault.jpg` : String(url || '');
+    if (!/^https?:\/\//.test(out)) return out;
+    return `${out}${out.includes('?') ? '&' : '?'}fvp=${THUMB_VISIT}`;
   }
 
   setThumb(slot, url, link) {

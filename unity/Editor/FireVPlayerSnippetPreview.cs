@@ -160,8 +160,10 @@ namespace FireVPlayer.EditorTools
                 ? new SingerSpot
                 {
                     instanceId = snippet.InstanceId, pos = gPos, rot = gRot, follow = follow, sPos = sPos, sRot = sRot,
-                    // Hanging off buttons turned away from the screen: keep that turn once it has a position.
-                    keepRot = !sp.HasValue && !sr.HasValue && !follow && Quaternion.Angle(bRot, sRot) > 0.01f
+                    // Once it has a position the button no longer turns with the buttons, so the first
+                    // drag also saves the turn it has now, if its rotation would otherwise change.
+                    keepRot = !sp.HasValue && Quaternion.Angle(gRot,
+                        sr.HasValue && !follow ? Quaternion.Euler(sr.Value) : sRot * Quaternion.Euler(sr ?? SingerTilt)) > 0.01f
                 }
                 : null;
         }
@@ -196,19 +198,24 @@ namespace FireVPlayer.EditorTools
 
             // With controls-follow-screen it's an offset from the screen; otherwise a world position.
             var value = s.follow ? Quaternion.Inverse(s.sRot) * (world - s.sPos) : world;
-            if (value == Vector3.zero) value.y = 0.001f; // "0 0 0" would mean the default spot
             if (s.keepRot)
             {
-                var e = s.rot.eulerAngles;
-                SnippetHtmlSync.SetAttribute(s.instanceId, "singer-button-rotation", Format(e));
+                // Relative to the screen with controls-follow-screen, as the player reads it then.
+                var rot = s.follow ? Quaternion.Inverse(s.sRot) * s.rot : s.rot;
+                SnippetHtmlSync.SetAttribute(s.instanceId, "singer-button-rotation", Format(rot.eulerAngles));
                 s.keepRot = false;
             }
             SnippetHtmlSync.SetAttribute(s.instanceId, "singer-button-position", Format(value));
             s.pos = world;
         }
 
-        static string Format(Vector3 v) => string.Join(" ",
-            new[] { v.x, v.y, v.z }.Select(n => (Mathf.Round(n * 1000f) / 1000f).ToString(CultureInfo.InvariantCulture)));
+        // Rounded to 3 decimals. "0 0 0" means the default, so a value that rounds to it is nudged.
+        static string Format(Vector3 v)
+        {
+            var n = new[] { v.x, v.y, v.z }.Select(x => Mathf.Round(x * 1000f) / 1000f).ToArray();
+            if (n.All(x => x == 0)) n[1] = 0.001f;
+            return string.Join(" ", n.Select(x => x.ToString(CultureInfo.InvariantCulture)));
+        }
 
         // ---- the GameObject's own transform
 

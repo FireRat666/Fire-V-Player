@@ -1067,7 +1067,7 @@ var FirePlaylistPanel = class {
       return;
     }
     // YouTube, Twitch, Vimeo or a direct video link: the server checks it can be played.
-    if (!this.core.getId(q) && !/^https?:\/\//i.test(q)) { this.setStatus('That is not a video link.'); return; }
+    if (!this.core.getId(q) && !/^(https?|rtspt?):\/\//i.test(q)) { this.setStatus('That is not a video link.'); return; }
     this.send(Commands.ADD_TO_PLAYLIST, q);
     this.setStatus('Adding video...');
   }

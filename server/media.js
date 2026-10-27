@@ -114,8 +114,11 @@ async function resolveMediaLink(link) {
     return { title: `VDO.Ninja: ${media.name}`, thumbnail: '', duration: 0, link };
   }
 
-  // A file or stream: the player page learns its length when it loads.
-  return { title: MediaSources.nameFromLink(link), thumbnail: '', duration: 0, link };
+  // A file or stream: the player page learns its length when it loads. A VRCDN rtspt:// link is
+  // kept as its .live.ts address, which browsers can play.
+  const url = media.url || link;
+  const vrcdn = media.type === 'mpegts' && media.live && /(^|\.)vrcdn\.(live|video|cloud)$/i.test(MediaSources.parseUrl(url).hostname);
+  return { title: MediaSources.nameFromLink(link) + (vrcdn ? ' (live on VRCDN)' : ''), thumbnail: '', duration: 0, link: url };
 }
 
 /**

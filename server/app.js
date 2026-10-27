@@ -781,7 +781,7 @@ class App {
       const isUrl = /^(https?:\/\/|www\.)/i.test(term.trim());
       if (isUrl) {
         this.send(ws, Commands.SEARCH_RESULTS, []);
-        this.send(ws, Commands.ERROR, { message: "I can't play that link. Try YouTube, Twitch, Vimeo, or a direct video link (.mp4, .m3u8)." });
+        this.send(ws, Commands.ERROR, { message: "I can't play that link. Try YouTube, Twitch, Vimeo, or a direct video link (.mp4, .m3u8, VRCDN .live.ts)." });
         return;
       }
 

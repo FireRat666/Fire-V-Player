@@ -19,6 +19,7 @@ const MEDIA_STATE = { UNSTARTED: -1, ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING:
  */
 const MEDIA_SCRIPTS = {
   hls: 'https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js',
+  mpegts: 'https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.js',
   twitch: 'https://player.twitch.tv/js/embed/v1.js',
   vimeo: 'https://player.vimeo.com/api/player.js'
 };
@@ -27,7 +28,7 @@ const mediaScriptLoads = {};
 
 /**
  * Dynamically loads an external media player JavaScript SDK by name.
- * @param {'hls'|'twitch'|'vimeo'} name - Player library key.
+ * @param {'hls'|'mpegts'|'twitch'|'vimeo'} name - Player library key.
  * @returns {Promise<Event>} Resolves when script is loaded.
  */
 function loadMediaScript(name) {
@@ -83,17 +84,21 @@ class BaseMediaSource {
 }
 
 /**
- * Player adapter for direct HTML5 video/audio files (.mp4, .webm, etc.) and HLS streams (.m3u8).
+ * Player adapter for direct HTML5 video/audio files (.mp4, .webm, etc.), HLS streams (.m3u8)
+ * and MPEG-TS streams (VRCDN's .live.ts).
  * @class VideoElementSource
  * @extends {BaseMediaSource}
  */
 class VideoElementSource extends BaseMediaSource {
   /**
    * @param {Object} opts - Source configuration options.
-   * @param {boolean} [hls=false] - True if stream is HLS (.m3u8).
+   * @param {Object} media - What MediaSources.detect found: type 'file', 'hls' or 'mpegts'.
    */
-  constructor(opts, hls) {
+  constructor(opts, media) {
     super(opts);
+    const hls = media.type === 'hls';
+    // A live MPEG-TS stream has no length or position to seek to, as with a live .m3u8.
+    if (media.type === 'mpegts' && media.live) this.live = true;
     const el = this.el = document.createElement('video');
     el.playsInline = true;
     el.autoplay = true;
@@ -118,7 +123,18 @@ class VideoElementSource extends BaseMediaSource {
     el.addEventListener('error', () => opts.onError("Couldn't play this video. The link may be wrong, or the site may not allow it here."));
     this.pendingSeek = opts.start > 0 ? opts.start : null; // a seek waiting until the file can go there
 
-    if (!hls || el.canPlayType('application/vnd.apple.mpegurl')) {
+    if (media.type === 'mpegts') {
+      // Browsers can't play MPEG-TS themselves; mpegts.js feeds it to the video element.
+      loadMediaScript('mpegts').then(() => {
+        if (this.destroyed) return;
+        if (!window.mpegts || !mpegts.isSupported()) { opts.onError("This browser can't play this stream."); return; }
+        const m = this.mpegts = mpegts.createPlayer({ type: 'mpegts', isLive: !!media.live, url: media.url || opts.link },
+          { liveBufferLatencyChasing: !!media.live, lazyLoad: !media.live });
+        m.on(mpegts.Events.ERROR, () => opts.onError("Couldn't play this stream. It may be offline, or the site may not allow it here."));
+        m.attachMediaElement(el);
+        m.load();
+      }).catch(err => opts.onError(err.message));
+    } else if (!hls || el.canPlayType('application/vnd.apple.mpegurl')) {
       el.src = opts.link;
     } else {
       loadMediaScript('hls').then(() => {
@@ -196,6 +212,7 @@ class VideoElementSource extends BaseMediaSource {
       document.removeEventListener('click', this.unmuteOnClick, true);
     }
     if (this.hls) this.hls.destroy();
+    if (this.mpegts) this.mpegts.destroy();
     this.el.pause();
     this.el.removeAttribute('src');
     this.el.load();
@@ -580,7 +597,7 @@ class MediaSwitch {
     else if (media.type === 'twitchclip') this.source = new TwitchClipSource(opts, media);
     else if (media.type === 'vimeo') this.source = new VimeoSource(opts, media);
     else if (media.type === 'vdoninja') this.source = new VdoNinjaSource(opts, media);
-    else this.source = new VideoElementSource(opts, media.type === 'hls');
+    else this.source = new VideoElementSource(opts, media);
   }
 
   /** Destroys the active non-YouTube player source instance. */

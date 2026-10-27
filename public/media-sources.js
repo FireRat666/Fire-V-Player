@@ -7,13 +7,15 @@
 
 /**
  * @typedef {Object} DetectedMedia
- * @property {'youtube'|'file'|'hls'|'twitch'|'twitchclip'|'vimeo'|'vdoninja'} type - The detected media stream/source type.
+ * @property {'youtube'|'file'|'hls'|'mpegts'|'twitch'|'twitchclip'|'vimeo'|'vdoninja'} type - The detected media stream/source type.
  * @property {string} [channel] - Twitch channel name if applicable.
  * @property {string} [video] - Twitch VOD ID if applicable.
  * @property {string} [clip] - Twitch clip slug if applicable.
  * @property {string} [id] - Vimeo video ID if applicable.
  * @property {string} [hash] - Vimeo unlisted hash token if applicable.
  * @property {string} [name] - VDO.Ninja stream/room identifier if applicable.
+ * @property {boolean} [live] - True for an MPEG-TS link that is a live stream (VRCDN's .live.ts).
+ * @property {string} [url] - The address to play, when it differs from the link (a VRCDN rtspt:// link).
  */
 
 var MediaSources = (() => {
@@ -45,6 +47,10 @@ var MediaSources = (() => {
    * @returns {DetectedMedia|null} Metadata descriptor or null if unrecognized.
    */
   function detect(link) {
+    // VRCDN's PC link (rtspt://stream.vrcdn.live/live/<name>) is RTSP, which no browser plays, but
+    // the same stream is also at https://.../live/<name>.live.ts, its Quest link.
+    const rtsp = /^rtspt?:\/\/((?:[a-z0-9-]+\.)*vrcdn\.(?:live|video|cloud))(?::\d+)?\/live\/([A-Za-z0-9_-]{1,100})\/?$/i.exec(String(link || '').trim());
+    if (rtsp) return { type: 'mpegts', live: true, url: `https://${rtsp[1].toLowerCase()}/live/${rtsp[2]}.live.ts` };
     const u = parseUrl(link);
     if (!u) return null;
     const host = u.hostname.toLowerCase().replace(/^(www|m)\./, '');
@@ -101,6 +107,8 @@ var MediaSources = (() => {
     }
 
     if (/\.m3u8$/i.test(u.pathname)) return { type: 'hls' };
+    // An MPEG-TS stream over HTTP (VRCDN's .live.ts links); browsers need mpegts.js to play it.
+    if (/\.ts$/i.test(u.pathname)) return { type: 'mpegts', live: /\.live\.ts$/i.test(u.pathname) };
     if (FILE_EXT.test(u.pathname)) return { type: 'file' };
     return null;
   }
@@ -112,12 +120,13 @@ var MediaSources = (() => {
    * @returns {string} Clean human-readable fallback name.
    */
   function nameFromLink(link) {
-    const u = parseUrl(link);
+    const m = detect(link);
+    const u = parseUrl(m && m.url || link);
     if (!u) return 'Video';
     const file = u.pathname.split('/').filter(Boolean).pop() || '';
     let name = file;
     try { name = decodeURIComponent(file); } catch (e) {}
-    name = name.replace(/\.[a-z0-9]{2,5}$/i, '').replace(/[_+]+/g, ' ').trim();
+    name = name.replace(/(\.live)?\.[a-z0-9]{2,5}$/i, '').replace(/[_+]+/g, ' ').trim();
     // Streams are often called index.m3u8 or playlist.m3u8, so say where they're from instead.
     if (!name || /^(index|playlist|master|live|stream|chunklist)$/i.test(name)) name = `Stream from ${u.hostname}`;
     return name.slice(0, 120);

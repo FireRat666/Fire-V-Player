@@ -1006,11 +1006,12 @@ var FirePlaylistPanel = class {
       return !this.core.blocked && this.isHost() && !!p && !!p.playlist && p.playlist.length > 0 && p.duration > 0;
     };
     // The song the drag began on: if another starts meanwhile, the drag is dropped, as its time
-    // was for the old song.
+    // was for the old song. The play count catches the same song starting again (a restart, a
+    // one-song playlist looping, the next singer picking the same song).
     const song = () => {
       const p = this.core.player;
       const v = p && p.playlist && p.playlist[p.currentTrack];
-      return v ? `${p.currentTrack}|${v.link}` : null;
+      return v ? `${this.trackPlays || 0}|${p.currentTrack}|${v.link}` : null;
     };
     const stillOn = () => canSeek() && song() === this.dragSong;
     const cancel = () => { this.dragSeek = null; this.updateTime(); };
@@ -1200,6 +1201,8 @@ var FirePlaylistPanel = class {
         }
         break;
     }
+    // Every new play, even of the same song (see addProgressSeek).
+    if (json.path === Commands.TRACK_CHANGED) this.trackPlays = (this.trackPlays || 0) + 1;
     // Estimate the client/server clock difference so the progress bar matches the server.
     if (p && !p.paused && p.lastStartTime && [Commands.PLAYBACK_UPDATE, Commands.TRACK_CHANGED, Commands.HOST_SEEK, Commands.PAUSE_STATE_CHANGED].includes(json.path)) {
       this.clockSkew = (Date.now() / 1000) - (p.lastStartTime + (p.currentTime || 0));

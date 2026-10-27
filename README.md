@@ -1,5 +1,7 @@
 # Fire-V-Player
 
+## [Setup Guide](https://firer.at/pages/FireVPlayer/)
+
 A collaborative, embeddable YouTube video player designed for virtual worlds inside Banter VR. It allows users to create shared playlists, vote on songs, and watch together in a synchronized real-time environment.
 
 It features a persistent state using a PostgreSQL database, making it suitable for platforms like Render where instances may sleep and restart.

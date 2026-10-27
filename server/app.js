@@ -32,6 +32,16 @@ const SkipJumpTimeKaraoke = 0.25;
  */
 class App {
   /**
+   * A user for the logs: their name and UID, e.g. "Wyck (22de6bc5...)".
+   * @param {{name?: string, id?: string}|null|undefined} u - The user.
+   * @returns {string}
+   */
+  static who(u) {
+    if (!u) return 'unknown';
+    return `${u.name || 'Unknown'} (${u.id || 'no id'})`;
+  }
+
+  /**
    * Initializes application state properties.
    */
   constructor() {
@@ -205,7 +215,7 @@ class App {
           // the socket doesn't know them yet.
           const who = ws.u || (msg.path === 'instance' && msg.u) || null;
           const where = ws.i || (msg.path === 'instance' && msg.data) || 'unset';
-          console.log(`[CMD] ${msg.path} from ${who ? who.name : 'unknown'} for instance ${where}`);
+          console.log(`[CMD] ${msg.path} from ${App.who(who)} for instance ${where}`);
         }
         try {
           // Using Buffer.from to handle different message types gracefully.
@@ -253,7 +263,7 @@ class App {
   handleClose(ws, code, reason) {
     // Convert the reason buffer to a string for readable logging, handling empty reasons.
     const reasonString = reason && reason.length > 0 ? reason.toString() : 'No reason given';
-    console.log(`${ws.u ? ws.u.name : 'Unknown'} disconnected from ${ws.type || 'N/A'}. Code: ${code}, Reason: ${reasonString}`);
+    console.log(`${App.who(ws.u)} disconnected from ${ws.type || 'N/A'}. Code: ${code}, Reason: ${reasonString}`);
     const instanceId = ws.i;
     if (!instanceId || !this.videoPlayers[instanceId]) {
       return; // Socket was not in an instance, nothing to do.
@@ -361,7 +371,7 @@ class App {
           this.blacklist.seen(msg.u, msg.data);
           // Always, so a player that missed an unblock while disconnected is unfrozen.
           this.blacklist.tell(ws);
-          console.log(msg.u.name, 'connected', msg.data, "host: ", this.videoPlayers[msg.data].host.name);
+          console.log(`${App.who(msg.u)} connected ${msg.data} host: ${App.who(this.videoPlayers[msg.data].host)}`);
           this.getUserVideoPlayer(ws);
           // Takeover cancellation logic is now handled in SET_WS_TYPE,
           // as the socket type is not known at this point in the connection lifecycle.

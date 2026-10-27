@@ -1005,6 +1005,15 @@ var FirePlaylistPanel = class {
       const p = this.core.player;
       return !this.core.blocked && this.isHost() && !!p && !!p.playlist && p.playlist.length > 0 && p.duration > 0;
     };
+    // The song the drag began on: if another starts meanwhile, the drag is dropped, as its time
+    // was for the old song.
+    const song = () => {
+      const p = this.core.player;
+      const v = p && p.playlist && p.playlist[p.currentTrack];
+      return v ? `${p.currentTrack}|${v.link}` : null;
+    };
+    const stillOn = () => canSeek() && song() === this.dragSong;
+    const cancel = () => { this.dragSeek = null; this.updateTime(); };
     const at = (e) => {
       const x = e && Number.isFinite(e.clientX) ? e.clientX : 0;
       const d = this.core.player.duration;
@@ -1018,8 +1027,8 @@ var FirePlaylistPanel = class {
     const finish = () => {
       if (this.dragSeek == null) return;
       const t = this.dragSeek;
+      if (!stillOn()) { cancel(); return; }
       this.dragSeek = null;
-      if (!canSeek()) { this.updateTime(); return; }
       this.send(Commands.SET_TIME, t);
       this.setStatus(`Seeking to ${this.timeCode(t)}`);
     };
@@ -1029,17 +1038,18 @@ var FirePlaylistPanel = class {
         if (!this.core.blocked && !this.isHost()) this.setStatus('Only the host can seek.');
         return;
       }
+      this.dragSong = song();
       this.dragSeek = at(e);
       show(this.dragSeek);
     });
     el.OnMouseMove(e => {
       if (this.dragSeek == null) return;
-      if (!canSeek()) { this.dragSeek = null; this.updateTime(); return; }
+      if (!stillOn()) { cancel(); return; }
       this.dragSeek = at(e);
       show(this.dragSeek);
     });
     el.OnMouseUp(e => {
-      if (this.dragSeek != null && canSeek()) this.dragSeek = at(e);
+      if (this.dragSeek != null && stillOn()) this.dragSeek = at(e);
       finish();
     });
     el.OnMouseLeave(() => finish());

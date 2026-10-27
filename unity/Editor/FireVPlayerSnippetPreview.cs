@@ -220,7 +220,8 @@ namespace FireVPlayer.EditorTools
         // ---- the GameObject's own transform
 
         static readonly Color MovedColor = new Color(1f, 0.85f, 0.2f, 1f);
-        static string _warnedMoved;
+        // Objects already warned about in the Console, so several selected at once each warn once.
+        static readonly System.Collections.Generic.HashSet<int> _warnedMoved = new System.Collections.Generic.HashSet<int>();
 
         /// <summary>
         /// When the snippet's GameObject (with its parents) isn't at the world's origin, labels it
@@ -231,14 +232,13 @@ namespace FireVPlayer.EditorTools
         static void WarnIfMoved(Transform t)
         {
             bool moved = t.position.sqrMagnitude > 1e-6f || Quaternion.Angle(t.rotation, Quaternion.identity) > 0.01f;
-            if (!moved) { _warnedMoved = null; return; }
-            string key = t.GetInstanceID().ToString(); // once per object, not on every frame of a drag
+            int key = t.GetInstanceID(); // once per object, not on every frame of a drag
+            if (!moved) { _warnedMoved.Remove(key); return; }
 
             Handles.color = MovedColor;
             Handles.DrawDottedLine(t.position, Vector3.zero, 4f);
             Handles.Label(t.position, "Fire-V-Player ignores where this object is.\nThe orange outlines show where it really goes\n(measured from the world origin). The blue SDK\ngizmos are off by this object's position.");
-            if (key == _warnedMoved) return;
-            _warnedMoved = key;
+            if (!_warnedMoved.Add(key)) return;
             Debug.LogWarning($"[Fire-V-Player] '{t.name}' is at {t.position} (rotation {t.rotation.eulerAngles}) in the world, but the player " +
                              "never sees this object: its position, rotation and scale settings are measured from the world origin. The orange " +
                              "outlines show where it will really be; the SDK's blue gizmos are off by this object's position. To make them " +

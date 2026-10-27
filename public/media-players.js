@@ -375,16 +375,22 @@ class VdoNinjaSource extends BaseMediaSource {
   }
 
   /**
-   * Sanitizes and appends nocontrols parameter to VDO.Ninja embed URLs.
+   * Adds nocontrols and cleanoutput to a VDO.Ninja link, unless it already has them.
+   * cleanoutput also turns off VDO.Ninja's right-click menu, which the click that unlocks
+   * the sound opened on Quest (it arrives there as a long press).
    * @param {string} link - Base VDO.Ninja link.
-   * @returns {string} Embed URL with nocontrols appended.
+   * @returns {string} Embed URL.
    */
   static embedLink(link) {
     link = String(link);
     const hash = link.indexOf('#');
-    const base = hash < 0 ? link : link.slice(0, hash), tail = hash < 0 ? '' : link.slice(hash);
-    if (/[?&]nocontrols(=|&|$)/.test(base)) return link;
-    return base + (base.includes('?') ? '&' : '?') + 'nocontrols' + tail;
+    let base = hash < 0 ? link : link.slice(0, hash);
+    const tail = hash < 0 ? '' : link.slice(hash);
+    const has = (...names) => names.some(n => new RegExp(`[?&]${n}(=|&|$)`).test(base));
+    const add = name => { base += (base.includes('?') ? '&' : '?') + name; };
+    if (!has('nocontrols')) add('nocontrols');
+    if (!has('cleanoutput', 'clean', 'cleanish')) add('cleanoutput');
+    return base + tail;
   }
 
   /**

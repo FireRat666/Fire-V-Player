@@ -8,9 +8,11 @@
 //
 // Put this file in a folder named Editor in a Unity project that has the Creator SDK
 // (e.g. Assets/Editor/). Anywhere else it doesn't compile (it uses editor-only code), and the
-// Console shows errors instead. It draws while the snippet's GameObject is selected.
+// Console shows errors instead. It draws while the snippet's GameObject is selected, and with
+// karaoke on gives the Singers button a drag handle (the SDK has none for it).
 using System;
 using System.Globalization;
+using System.Linq;
 using System.Xml.Linq;
 using BS;
 using BS.SDKEditor;
@@ -51,6 +53,7 @@ namespace FireVPlayer.EditorTools
         {
             // Inspector edits and gizmo drags all go through SnippetHtmlSync, so redraw on each.
             SnippetHtmlSync.Changed += (kind, instanceId, attribute) => SceneView.RepaintAll();
+            SceneView.duringSceneGui += OnSceneGui;
         }
 
         /// <summary>
@@ -151,7 +154,61 @@ namespace FireVPlayer.EditorTools
             }
             Rect(frame, gPos, gRot, gScale, SingerSize, SingerOutline, karaoke ? SingerFill : Color.clear,
                 karaoke ? "Singers button" : "Singers button (karaoke only)");
+
+            // Remembered for the drag handle (OnSceneGui): gizmo drawing can't take mouse input.
+            _singer = karaoke && used
+                ? new SingerSpot
+                {
+                    instanceId = snippet.InstanceId, pos = gPos, rot = gRot, follow = follow, sPos = sPos, sRot = sRot,
+                    // Hanging off buttons turned away from the screen: keep that turn once it has a position.
+                    keepRot = !sp.HasValue && !sr.HasValue && !follow && Quaternion.Angle(bRot, sRot) > 0.01f
+                }
+                : null;
         }
+
+        // ---- the Singers button's drag handle
+
+        // The SDK only puts handles on positions its <bs-gizmo> lines name. The Singers button has
+        // none there, as its default ("0 0 0": hang off the buttons) would put the handle at the
+        // origin. This one sits on the button wherever it really is.
+        class SingerSpot
+        {
+            public string instanceId;
+            public Vector3 pos, sPos;
+            public Quaternion rot, sRot;
+            public bool follow, keepRot;
+        }
+
+        static SingerSpot _singer;
+
+        static void OnSceneGui(SceneView view)
+        {
+            var s = _singer;
+            if (s == null) return;
+            var go = Selection.activeGameObject;
+            var snippet = go ? go.GetComponent<BSSnippet>() : null;
+            if (snippet == null || snippet.InstanceId != s.instanceId) return;
+
+            var handleRot = Tools.pivotRotation == PivotRotation.Local ? s.rot : Quaternion.identity;
+            EditorGUI.BeginChangeCheck();
+            var world = Handles.PositionHandle(s.pos, handleRot);
+            if (!EditorGUI.EndChangeCheck()) return;
+
+            // With controls-follow-screen it's an offset from the screen; otherwise a world position.
+            var value = s.follow ? Quaternion.Inverse(s.sRot) * (world - s.sPos) : world;
+            if (value == Vector3.zero) value.y = 0.001f; // "0 0 0" would mean the default spot
+            if (s.keepRot)
+            {
+                var e = s.rot.eulerAngles;
+                SnippetHtmlSync.SetAttribute(s.instanceId, "singer-button-rotation", Format(e));
+                s.keepRot = false;
+            }
+            SnippetHtmlSync.SetAttribute(s.instanceId, "singer-button-position", Format(value));
+            s.pos = world;
+        }
+
+        static string Format(Vector3 v) => string.Join(" ",
+            new[] { v.x, v.y, v.z }.Select(n => (Mathf.Round(n * 1000f) / 1000f).ToString(CultureInfo.InvariantCulture)));
 
         // ---- the GameObject's own transform
 

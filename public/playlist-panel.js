@@ -14,6 +14,9 @@
 // can drop the elements created at runtime. The hand's Playlist button puts it in
 // front of the player, and the pill under it can be grabbed to carry it.
 var PAGE_JUMP = 5; // pages the << and >> buttons move
+// The progress bar's width in pixels: the panel (W, 1100) minus its padding and borders (42), the
+// now-playing card's padding (28), the time label (190) and the gap before the bar (10).
+var PROGRESS_WIDTH = 820;
 // Added to thumbnail links, new each time the space loads. Unity keeps the pictures it has
 // downloaded for as long as the client runs (UIElementBridge's texture cache) and never checks one
 // is still there, so after a rejoin a cached link can show nothing and never download again.
@@ -244,7 +247,12 @@ var FirePlaylistPanel = class {
       paddingLeft: '10px', paddingRight: '10px'
     });
     field.OnChange(e => {
-      if (e && e.value != null) onValue(String(e.value));
+      if (!e || e.value == null) return;
+      // The SDK only sends a new value when it differs from the last one set from here, and typing
+      // doesn't update that copy. Without this, putting back text that was set before (+ lyrics,
+      // delete it, + lyrics again) sent nothing, and the box stayed empty.
+      try { if ('_value' in field) field._value = String(e.value); } catch (_) {}
+      onValue(String(e.value));
     });
     if (typeof field.OnKeyDown === 'function') {
       field.OnKeyDown(e => {
@@ -368,10 +376,17 @@ var FirePlaylistPanel = class {
     this.nowTitle = await this.label(nowCard, 'Connecting...', {
       fontSize: '26px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
     });
-    const progRow = await this.div(nowCard, { display: 'flex', flexDirection: 'row', alignItems: 'center', marginTop: '8px' });
-    this.timeLabel = await this.label(progRow, '', { fontSize: '20px', color: '#cccccc', width: '190px' });
-    const progOuter = await this.div(progRow, { flexGrow: 1, height: '10px', backgroundColor: '#444444', borderRadius: '5px' });
+    const progRow = await this.div(nowCard, { display: 'flex', flexDirection: 'row', alignItems: 'center', marginTop: '4px' });
+    this.timeLabel = await this.label(progRow, '', { fontSize: '20px', color: '#cccccc', width: '190px', flexShrink: 0 });
+    // The bar has a fixed width, as a mouse event only says where it is inside the element
+    // (the panel is always W pixels wide). The taller clear box around it is easier to hit.
+    const progHit = await this.div(progRow, {
+      width: `${PROGRESS_WIDTH}px`, height: '36px', flexShrink: 0, marginLeft: '10px',
+      display: 'flex', flexDirection: 'column', justifyContent: 'center'
+    });
+    const progOuter = await this.div(progHit, { height: '10px', backgroundColor: '#444444', borderRadius: '5px' });
     this.progInner = await this.div(progOuter, { height: '100%', width: '0%', backgroundColor: '#e53935', borderRadius: '5px' });
+    this.addProgressSeek(progHit);
 
     // Playback + volume controls
     const controls = await row(rootEl, { marginTop: '6px' });
@@ -982,6 +997,54 @@ var FirePlaylistPanel = class {
     this.send(Commands.SET_TIME, t);
   }
 
+  // The host can click the progress bar, or press on it and drag, to move everyone to that point.
+  // While dragging, the bar and time show where it will go; letting go (or leaving the bar) seeks.
+  addProgressSeek(el) {
+    if (typeof el.OnMouseDown !== 'function') return; // an SDK without mouse events
+    const canSeek = () => {
+      const p = this.core.player;
+      return !this.core.blocked && this.isHost() && !!p && !!p.playlist && p.playlist.length > 0 && p.duration > 0;
+    };
+    const at = (e) => {
+      const x = e && Number.isFinite(e.clientX) ? e.clientX : 0;
+      const d = this.core.player.duration;
+      return Math.min(Math.max(0, x / PROGRESS_WIDTH) * d, Math.max(0, d - 1)); // the very end would end the song
+    };
+    const show = (t) => {
+      const d = this.core.player.duration;
+      this.setText(this.timeLabel, `${this.timeCode(t)} / ${this.timeCode(d)}`);
+      this.setStyle(this.progInner, 'width', `${Math.round((t / d) * 200) / 2}%`);
+    };
+    const finish = () => {
+      if (this.dragSeek == null) return;
+      const t = this.dragSeek;
+      this.dragSeek = null;
+      if (!canSeek()) { this.updateTime(); return; }
+      this.send(Commands.SET_TIME, t);
+      this.setStatus(`Seeking to ${this.timeCode(t)}`);
+    };
+    el.OnMouseDown(e => {
+      if (e && e.button) return; // the main button / trigger only
+      if (!canSeek()) {
+        if (!this.core.blocked && !this.isHost()) this.setStatus('Only the host can seek.');
+        return;
+      }
+      this.dragSeek = at(e);
+      show(this.dragSeek);
+    });
+    el.OnMouseMove(e => {
+      if (this.dragSeek == null) return;
+      if (!canSeek()) { this.dragSeek = null; this.updateTime(); return; }
+      this.dragSeek = at(e);
+      show(this.dragSeek);
+    });
+    el.OnMouseUp(e => {
+      if (this.dragSeek != null && canSeek()) this.dragSeek = at(e);
+      finish();
+    });
+    el.OnMouseLeave(() => finish());
+  }
+
   addLink(asPlaylist) {
     const q = (this.linkQuery || '').trim();
     if (!q) { this.setStatus('Paste a link first.'); return; }
@@ -1145,7 +1208,7 @@ var FirePlaylistPanel = class {
   // ---------------------------------------------------------------- render
 
   updateTime() {
-    if (!this.built) return;
+    if (!this.built || this.dragSeek != null) return; // a drag on the bar shows its own time
     const p = this.core.player;
     if (!p || !p.playlist || !p.playlist.length) {
       this.setText(this.timeLabel, '');

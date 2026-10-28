@@ -9,8 +9,8 @@ const { WebSocketServer } = require('ws');
 const express = require('express');
 const http = require('http');
 const path = require('path');
-const Youtube = require('./youtube/scraper.js');
-const youtube = new Youtube();
+const { searchVideos, videoById } = require('./youtube/search.js');
+const archive = require('./archive.js');
 const media = require('./media.js');
 const Commands = require('../public/commands.js');
 const playlistHandler = require('./handlers/playlistHandler.js');
@@ -733,24 +733,37 @@ class App {
     await this.savePlayerState(ws.i);
   }
   /**
-   * Searches for YouTube or external media items based on user search query or pasted link.
+   * Searches YouTube or the Internet Archive, or looks up a pasted media link.
    * Transmits `SEARCH_RESULTS` back to the requesting WebSocket client.
    *
-   * @param {string} term - Search query string or media URL.
+   * The SEARCH message's data is either a plain string (a YouTube search or a link) or
+   * `{ term: string, source: 'youtube' | 'archive' }`; 'archive' searches the Internet Archive's
+   * public-domain movies and TV. A pasted link is looked up whichever source is picked.
+   *
+   * @param {string|{term: string, source?: string}} data - Search text or link, optionally with a source.
    * @param {Object} ws - Client WebSocket requesting the search.
    * @returns {Promise<void>}
    */
-  async search(term, ws) {
-    // Twitch, Vimeo and direct video/stream links become a single result, as a YouTube link does.
-    if (media.detect(term) && media.detect(term).type !== 'youtube') {
+  async search(data, ws) {
+    const isObject = data && typeof data === 'object';
+    const term = String((isObject ? data.term : data) || '').trim().slice(0, 500);
+    const source = isObject && data.source === 'archive' ? 'archive' : 'youtube';
+    if (!term) {
+      this.send(ws, Commands.SEARCH_RESULTS, []);
+      return;
+    }
+    // Twitch, Vimeo, Internet Archive and direct video/stream links become results, as a YouTube
+    // link does. An Archive link lists each video in its item.
+    const detected = media.detect(term);
+    if (detected && detected.type !== 'youtube') {
       if (!media.allowedFor(ws, term)) {
         this.send(ws, Commands.SEARCH_RESULTS, []);
         this.send(ws, Commands.ERROR, { message: media.UNTRUSTED_MESSAGE });
         return;
       }
       try {
-        const video = await media.resolveMediaLink(term);
-        if (video) this.send(ws, Commands.SEARCH_RESULTS, [video]);
+        const videos = await media.resolveMediaLinks(term);
+        this.send(ws, Commands.SEARCH_RESULTS, videos);
       } catch (error) {
         this.send(ws, Commands.SEARCH_RESULTS, []);
         this.send(ws, Commands.ERROR, { message: error.message });
@@ -762,46 +775,47 @@ class App {
     if (videoId) {
       // It's a URL, fetch the single video details
       try {
-        // Reconstruct a full, canonical URL to ensure fetch works and to standardize the input.
-        const fullUrl = `https://www.youtube.com/watch?v=${videoId}`;
-        const videoDetails = await youtube.getVideoByUrl(fullUrl);
+        const videoDetails = await videoById(videoId);
         if (videoDetails) {
           // The client expects an array of videos.
           this.send(ws, Commands.SEARCH_RESULTS, [videoDetails]);
         }
       } catch (error) {
         // The error message from the scraper is user-friendly enough to send to the client.
-        console.error(`Error fetching video by URL (${JSON.stringify(String(term))}):`, error.message);
+        console.error(`Error fetching video by URL (${JSON.stringify(term)}):`, error.message);
         this.send(ws, Commands.ERROR, { message: error.message });
       }
-    } else {
-      // Check if it looks like a URL but didn't match getYoutubeId.
-      // If it starts with http://, https://, or www., we should return an error
-      // or empty results, rather than searching YouTube for the URL string.
-      const isUrl = /^(https?:\/\/|www\.)/i.test(term.trim());
-      if (isUrl) {
-        this.send(ws, Commands.SEARCH_RESULTS, []);
-        this.send(ws, Commands.ERROR, { message: "I can't play that link. Try YouTube, Twitch, Vimeo, or a direct video link (.mp4, .m3u8, VRCDN .live.ts)." });
-        return;
-      }
+      return;
+    }
+    // Check if it looks like a URL but didn't match getYoutubeId.
+    // If it starts with http://, https://, or www., we should return an error
+    // or empty results, rather than searching YouTube for the URL string.
+    if (/^(https?:\/\/|www\.)/i.test(term)) {
+      this.send(ws, Commands.SEARCH_RESULTS, []);
+      this.send(ws, Commands.ERROR, { message: "I can't play that link. Try YouTube, Twitch, Vimeo, Internet Archive, or a direct video link (.mp4, .m3u8, VRCDN .live.ts)." });
+      return;
+    }
 
-      // It's a search term, perform a regular search
-      const started = Date.now();
+    const started = Date.now();
+    if (source === 'archive') {
       try {
-        const results = await youtube.search(term, {
-          language: 'en-US',
-          searchType: 'video'
-        });
-        const videos = results.videos || [];
+        const videos = await archive.search(term);
         // JSON-encode the user's text so newlines in it can't start a fake log line.
-        console.log(`[SEARCH] ${JSON.stringify(String(term))}: ${videos.length} results in ${Date.now() - started}ms (socket type: ${ws.type || 'N/A'}).`);
+        console.log(`[SEARCH] archive ${JSON.stringify(term)}: ${videos.length} results in ${Date.now() - started}ms (socket type: ${ws.type || 'N/A'}).`);
         this.send(ws, Commands.SEARCH_RESULTS, videos);
       } catch (error) {
-        console.error(`Error searching YouTube for ${JSON.stringify(String(term))}:`, error.message);
+        console.error(`Error searching the Internet Archive for ${JSON.stringify(term)}:`, error.message);
         this.send(ws, Commands.SEARCH_RESULTS, []);
-        this.send(ws, Commands.ERROR, { message: "YouTube search failed or returned no results." });
+        this.send(ws, Commands.ERROR, { message: "Internet Archive search failed. Try again in a moment." });
       }
+      return;
     }
+
+    // It's a search term, perform a regular search
+    const { videos, via } = await searchVideos(term);
+    // JSON-encode the user's text so newlines in it can't start a fake log line.
+    console.log(`[SEARCH] ${JSON.stringify(term)}: ${videos.length} results in ${Date.now() - started}ms via ${via} (socket type: ${ws.type || 'N/A'}).`);
+    this.send(ws, Commands.SEARCH_RESULTS, videos);
   }
   /**
    * Guards an action, executing callback only if client is the host or if instance is unlocked.
@@ -962,10 +976,12 @@ class App {
     console.log(`Video '${blockedVideo.title}' is unavailable for ${ws.u.name}. Searching for alternative.`);
 
     // Search for a replacement using the title
-    const results = await youtube.search(blockedVideo.title, { searchType: 'video' });
-    if (results.videos && results.videos.length > 0) {
+    // Only YouTube videos have YouTube alternatives.
+    if (!this.getYoutubeId(blockedVideo.link)) return;
+    const { videos } = await searchVideos(blockedVideo.title);
+    if (videos.length > 0) {
       // Find the first result that is not the same as the blocked video, or default to the first one.
-      const alternative = results.videos.find(v => v.link !== blockedVideo.link) || results.videos[0];
+      const alternative = videos.find(v => v.link !== blockedVideo.link) || videos[0];
 
       console.log(`Found alternative: '${alternative.title}'. Prompting host.`);
 

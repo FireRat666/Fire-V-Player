@@ -33,6 +33,7 @@ var FirePlaylistPanel = class {
     this.searchPage = 0;
     this.searchResults = [];
     this.searchQuery = '';
+    this.searchSource = 'youtube'; // 'youtube' | 'archive' (Internet Archive movies and TV)
     // Recent searches, kept on this device (like the full playlist page did).
     this.recentKey = `recent${this.karaoke ? 'Karaoke' : 'Playlist'}Searches`;
     this.recentSearches = this.loadRecent();
@@ -433,6 +434,8 @@ var FirePlaylistPanel = class {
     const searchHint = this.karaoke ? 'Search for a song to sing, or paste a video link' : 'Search YouTube, or paste a YouTube / Twitch / Vimeo / video link';
     this.searchField = await this.textField(this.searchRow, searchHint, v => { this.searchQuery = v; }, () => this.doSearch());
     if (this.searchField) {
+      // What to search: YouTube, or the Internet Archive's public-domain movies and TV (not for karaoke).
+      if (!this.karaoke) this.sourceBtn = await this.button(this.searchRow, 'YouTube', () => this.toggleSearchSource(), { backgroundColor: '#c62828', width: '170px' });
       await this.button(this.searchRow, 'Search', () => this.doSearch(), { backgroundColor: '#1565c0' });
     } else {
       await this.label(this.searchRow, 'Search needs text input, which this client does not have.', { color: '#bbbbbb', flexGrow: 1 });
@@ -1093,6 +1096,15 @@ var FirePlaylistPanel = class {
     this.render();
   }
 
+  // Switches the search between YouTube and Internet Archive movies and TV, and searches again.
+  toggleSearchSource() {
+    this.searchSource = this.searchSource === 'archive' ? 'youtube' : 'archive';
+    this.setText(this.sourceBtn, this.searchSource === 'archive' ? 'Movies & TV' : 'YouTube');
+    this.setStyle(this.sourceBtn, 'backgroundColor', this.searchSource === 'archive' ? '#6d4c41' : '#c62828');
+    if ((this.searchQuery || '').trim().length >= 2) this.doSearch();
+    else this.setStatus(this.searchSource === 'archive' ? 'Searching Internet Archive movies and TV.' : 'Searching YouTube.');
+  }
+
   doSearch() {
     const q = (this.searchQuery || '').trim();
     if (q.length < 2) {
@@ -1110,7 +1122,7 @@ var FirePlaylistPanel = class {
         return;
       }
     }
-    this.send(Commands.SEARCH, q);
+    this.send(Commands.SEARCH, this.searchSource === 'archive' ? { term: q, source: 'archive' } : q);
     this.saveRecent(q);
     console.log(`[PlaylistPanel] Searching for "${q}"...`);
     this.setStatus('Searching...', 0);

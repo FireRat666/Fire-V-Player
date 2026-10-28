@@ -337,7 +337,10 @@ var Playlist = class {
       document.body.appendChild(myScript);
     });
   }
-  search(data) {
+  search(term) {
+    // YouTube searches send just the text; Internet Archive movies and TV say which source.
+    const source = document.querySelector('#search-source');
+    const data = source && source.value === 'archive' ? { term, source: 'archive' } : term;
     this.core.sendMessage({path: Commands.SEARCH, data });
   }
   updatePlaylist(player) {

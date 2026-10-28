@@ -7,7 +7,9 @@
 
 /**
  * @typedef {Object} DetectedMedia
- * @property {'youtube'|'file'|'hls'|'mpegts'|'twitch'|'twitchclip'|'vimeo'|'vdoninja'} type - The detected media stream/source type.
+ * @property {'youtube'|'file'|'hls'|'mpegts'|'twitch'|'twitchclip'|'vimeo'|'vdoninja'|'archive'} type - The detected media stream/source type.
+ *   'archive' is an Internet Archive page or item (or a publicdomainmovie.net page) that the server
+ *   turns into one of the item's files before it is played.
  * @property {string} [channel] - Twitch channel name if applicable.
  * @property {string} [video] - Twitch VOD ID if applicable.
  * @property {string} [clip] - Twitch clip slug if applicable.
@@ -16,6 +18,9 @@
  * @property {string} [name] - VDO.Ninja stream/room identifier if applicable.
  * @property {boolean} [live] - True for an MPEG-TS link that is a live stream (VRCDN's .live.ts).
  * @property {string} [url] - The address to play, when it differs from the link (a VRCDN rtspt:// link).
+ * @property {string} [archive] - For a 'file' on the Internet Archive: the item's identifier.
+ * @property {string} [file] - For an Internet Archive link to one of an item's video files: its name.
+ * @property {string} [page] - For a publicdomainmovie.net page: the page to read the item from.
  */
 
 var MediaSources = (() => {
@@ -106,6 +111,31 @@ var MediaSources = (() => {
       return name ? { type: 'vdoninja', name: name.slice(0, 100) } : null;
     }
 
+    // Internet Archive: archive.org/details/<id>, archive.org/embed/<id>, archive.org/download/<id>[/<file>],
+    // and its storage servers' .../items/<id>/<file>. A playable file is a file (from the Archive);
+    // anything else is an item the server picks a video file from.
+    if (host === 'archive.org' || /\.archive\.org$/.test(host)) {
+      const ID = /^[A-Za-z0-9._-]{1,200}$/;
+      let i = -1;
+      if (host === 'archive.org' && ['details', 'embed', 'download'].includes(parts[0])) i = 1;
+      else if (host !== 'archive.org' && parts.indexOf('items') !== -1) i = parts.indexOf('items') + 1;
+      const id = i > 0 ? parts[i] || '' : '';
+      if (!ID.test(id)) return null;
+      let file = '';
+      try { file = parts.slice(i + 1).map(decodeURIComponent).join('/'); } catch (e) {}
+      if (!FILE_EXT.test(file)) file = '';
+      if (parts[0] !== 'details' && file) return { type: 'file', archive: id, file };
+      return { type: 'archive', id, file };
+    }
+    // publicdomainmovie.net plays Internet Archive items: movie.php?id=<id> sends you to the file,
+    // and a movie page names its item in a movie.php link (the server reads it).
+    if (host === 'publicdomainmovie.net') {
+      const id = parts[0] === 'movie.php' ? (u.searchParams.get('id') || '') : '';
+      if (id) return /^[A-Za-z0-9._-]{1,200}$/.test(id) ? { type: 'archive', id, file: '' } : null;
+      if (parts[0] === 'movie' && parts[1]) return { type: 'archive', page: `https://publicdomainmovie.net/movie/${encodeURIComponent(parts[1])}` };
+      return null;
+    }
+
     if (/\.m3u8$/i.test(u.pathname)) return { type: 'hls' };
     // An MPEG-TS stream over HTTP (VRCDN's .live.ts links); browsers need mpegts.js to play it.
     if (/\.ts$/i.test(u.pathname)) return { type: 'mpegts', live: /\.live\.ts$/i.test(u.pathname) };
@@ -132,8 +162,12 @@ var MediaSources = (() => {
     return name.slice(0, 120);
   }
 
-  /** Set of media source types considered trusted by default. */
-  const TRUSTED = new Set(['youtube', 'twitch', 'twitchclip', 'vimeo']);
+  /**
+   * Set of media source types considered trusted by default. The Internet Archive is trusted too
+   * (its links and its files): it is a well-known library hosting public-domain and Creative
+   * Commons films, not an arbitrary server, much like Vimeo.
+   */
+  const TRUSTED = new Set(['youtube', 'twitch', 'twitchclip', 'vimeo', 'archive']);
 
   /**
    * Checks whether a detected media source is from an inherently trusted service.
@@ -142,11 +176,11 @@ var MediaSources = (() => {
    * @returns {boolean} True if media source is trusted without requiring untrusted-links override.
    */
   function isTrusted(media) {
-    return !!media && TRUSTED.has(media.type);
+    return !!media && (TRUSTED.has(media.type) || (media.type === 'file' && !!media.archive));
   }
 
   /** Rejection message displayed when untrusted direct media links are queued in restricted rooms. */
-  const UNTRUSTED_MESSAGE = 'This world only plays YouTube, Twitch and Vimeo links. Its owner can allow other links with the untrusted-links snippet setting.';
+  const UNTRUSTED_MESSAGE = 'This world only plays YouTube, Twitch, Vimeo and Internet Archive links. Its owner can allow other links with the untrusted-links snippet setting.';
 
   return { detect, nameFromLink, parseUrl, isTrusted, UNTRUSTED_MESSAGE };
 })();

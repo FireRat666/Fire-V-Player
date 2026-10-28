@@ -7,8 +7,7 @@
 
 const Commands = require('../../public/commands.js');
 const { getInnertube, getLibrary } = require('../youtube/youtubeiService.js');
-const Scraper = require('../youtube/scraper.js');
-const scraper = new Scraper();
+const { videoById } = require('../youtube/search.js');
 const media = require('../media.js');
 // The most videos a YouTube playlist import adds. The whole playlist goes to everyone on each
 // change, so this keeps that message a sensible size.
@@ -32,8 +31,7 @@ async function resolveVideoData(app, ws, v) {
       if (other) return other;
       throw new Error("Invalid YouTube URL or ID");
     }
-    const fullUrl = `https://www.youtube.com/watch?v=${videoId}`;
-    const resolved = await scraper.getVideoByUrl(fullUrl);
+    const resolved = await videoById(videoId);
     return resolved;
   }
   
@@ -44,14 +42,18 @@ async function resolveVideoData(app, ws, v) {
     if (link && !app.getYoutubeId(link)) {
       if (!media.detect(link)) throw new Error("That link can't be played here.");
       if (!media.allowedFor(ws, link)) throw new Error(media.UNTRUSTED_MESSAGE);
+      // An Internet Archive search result links to the item's page: play one of its files.
+      if (media.detect(link).type === 'archive') {
+        const file = await media.resolveMediaLink(link);
+        return { ...v, ...file, duration: file.duration || (Number(v.duration) > 0 ? Number(v.duration) : 0) };
+      }
       if (!v.title) return { ...v, ...(await media.resolveMediaLink(link)) };
       return { ...v, link, title: String(v.title).slice(0, 200), duration: Number(v.duration) > 0 ? Number(v.duration) : 0 };
     }
     if (link && (!v.title || v.title === 'Unknown Title' || !v.duration)) {
       const videoId = app.getYoutubeId(link);
       if (videoId) {
-        const fullUrl = `https://www.youtube.com/watch?v=${videoId}`;
-        const resolved = await scraper.getVideoByUrl(fullUrl);
+        const resolved = await videoById(videoId);
         return { ...v, ...resolved };
       }
     }

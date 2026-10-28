@@ -222,6 +222,18 @@ body{
   margin: 0; /* Reset margin */
 }
 
+/* YouTube or Internet Archive movies and TV, beside the search box. */
+.searchSource {
+  height: 48px;
+  font-size: 1.2em;
+  background: rgba(0,0,0,0.2);
+  color: white;
+  border: 1px solid white;
+}
+.searchSource option {
+  color: black;
+}
+
 /* A flex container to align the 'Close' and 'Submit' buttons to the right */
 .search-button-wrapper {
   display: flex;

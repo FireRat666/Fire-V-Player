@@ -20,6 +20,16 @@ var SCREEN_MAX_RESOLUTION = 3840;
 // The choices in the panel's More view, as page widths.
 var SCREEN_RESOLUTIONS = [1280, 1600, 1920];
 var RESOLUTION_PREF_KEY = 'fire-v-player-resolution';
+// Altspace (Creator SDK) space-page screen, see claimSpaceSurface. The client keeps this asset
+// reference pointed at the space page's own browser texture.
+var SPACE_BROWSER_TEXTURE = 'asset_browser_world';
+// The wire command for sizing the space page, for clients without scene.SetWorldBrowserSize.
+var SET_WORLD_BROWSER_SIZE = '!swbs!';
+// How long a size request may take to show up as the space page's own window size.
+var SPACE_SIZE_CONFIRM_MS = 5000;
+// Set to -1 to mirror the space-page screen, if a client draws the page's texture flipped.
+var SURFACE_FLIP_X = 1;
+var SURFACE_FLIP_Y = 1;
 
 var Core = class {
     constructor() {
@@ -127,11 +137,18 @@ var Core = class {
       console.log(`Player is in 2D mode. Open the playlist controls here: ${playlistUrl}`);
       return;
     }
+    // In Altspace the screen can be the space page's own browser (see claimSpaceSurface). Finding
+    // out can take a few seconds, so it runs while the buttons are made.
+    const claim = this.spaceSurface ? Promise.resolve() : this.claimSpaceSurface().catch(e => {
+      console.warn('[Core] Could not use the space page as the screen:', e);
+      this.releaseSpaceSurface();
+    });
     try {
       await this.setupBrowserUi();
     } catch (e) {
       console.error('[Core] Could not create the in-world buttons:', e);
     }
+    await claim;
     if (this.destroyed) return; // cleaned up while the buttons were being made
     // The screen itself: the browser, or the world's video player when a file is playing.
     this.screenReady = true;
@@ -290,15 +307,25 @@ var Core = class {
     // A screen still being built destroys itself when it sees this.
     browser.removed = true;
     this.destroyObject(browser.go);
+    // The space-page screen's page goes too, so it doesn't play on behind the world's video
+    // player. The space page itself stays claimed and sized for the next screen.
+    if (browser.iframe) {
+      try { browser.iframe.src = 'about:blank'; } catch (e) {}
+      browser.iframe.remove();
+      browser.iframe = null;
+    }
     this.browser = null;
     // Messages still waiting for the old page will never be answered.
     this.browserAcks = {};
   }
   // The screen: a BS Browser showing the player page. It's built in the background; actions sent
   // before it's ready wait in `queue`.
+  // In Altspace, when this player has the space page (claimSpaceSurface), the page is an iframe
+  // on it instead, and the screen draws the space page's texture.
   createBrowser(url) {
-    const browser = this.browser = { url, go: null, component: null, queue: [], removed: false };
-    browser.ready = this.buildBrowser(browser).catch(e => {
+    const browser = this.browser = { url, go: null, component: null, queue: [], removed: false, surface: this.spaceSurface || null };
+    const build = browser.surface ? this.buildSpaceScreen(browser) : this.buildBrowser(browser);
+    browser.ready = build.catch(e => {
       console.error('[Core] Could not create the browser screen:', e);
       this.showToast("Couldn't create the screen.", 6000);
     });
@@ -359,6 +386,14 @@ var Core = class {
   runBrowserActions(actions) {
     const browser = this.browser;
     if (!browser) return false;
+    if (browser.surface) {
+      // The iframe's page takes the same messages by postMessage. It can't be clicked.
+      actions.forEach(a => {
+        if (a.actionType === 'postmessage') this.postToSpaceScreen(browser, a.strParam1);
+        else console.log(`[Core] The space-page screen can't do the browser action "${a.actionType}".`);
+      });
+      return true;
+    }
     const json = JSON.stringify({ actions });
     if (browser.component) browser.component.RunActions(json);
     else browser.queue.push(json);
@@ -369,6 +404,10 @@ var Core = class {
     const browser = this.browser;
     if (!browser) return;
     browser.url = url;
+    if (browser.iframe) {
+      browser.loaded = false;
+      browser.iframe.src = this.spaceScreenUrl(url);
+    }
     if (browser.component) browser.component.url = url;
   }
   // Messages from the screen's page (window.O.sendMessage), such as the answer to a volume change.
@@ -387,6 +426,181 @@ var Core = class {
     const [w, h] = browser.size || this.screenPageSize();
     if (Number.isFinite(fx) && Number.isFinite(fy)) { x = Math.round(w * fx); y = Math.round(h * fy); }
     this.runBrowserActions([{actionType: "click2d", numParam1: x, numParam2: y}]);
+  }
+
+  // ---------------------------------------------------------------- space-page screen (Altspace)
+  //
+  // The Altspace client renders the space page (the page this script runs in) in a browser of its
+  // own that nobody sees, and lets a material draw it through the SPACE_BROWSER_TEXTURE asset. So
+  // the player page can run in an iframe laid over the whole space page, and the screen is a plane
+  // with that texture: no second browser is opened. There is one space page, so one player per
+  // space can have it (window.__vpSurfaceOwner, shared with other players that do the same); any
+  // other gets the BS Browser screen. Used only where the client can size the space page and the
+  // size shows up as this window's size, unless the `space-screen` setting turns it off.
+
+  spaceScreenSetting() {
+    const v = String(this.params['space-screen'] || 'auto').trim().toLowerCase();
+    if (v === 'false' || v === 'off' || v === 'no') return 'off';
+    return 'auto';
+  }
+  spacePageIs(w, h) {
+    return Math.abs(window.innerWidth - w) <= 2 && Math.abs(window.innerHeight - h) <= 2;
+  }
+  // Asks the client to make the space page w x h. False when it has no way to.
+  requestSpacePageSize(w, h) {
+    const scene = this.banterScene();
+    if (!scene) return false;
+    try {
+      if (typeof scene.SetWorldBrowserSize === 'function') { scene.SetWorldBrowserSize(w, h); return true; }
+      // Clients without the named call still carry the wire command: SetProp sends it as it is.
+      if (typeof scene.SetProp === 'function') { scene.SetProp(SET_WORLD_BROWSER_SIZE, { w: String(w), h: String(h) }); return true; }
+    } catch (e) {
+      console.warn('[Core] Could not size the space page:', e);
+    }
+    return false;
+  }
+  // Sizes the space page, true once this window really is that size.
+  setSpacePageSize(w, h) {
+    const surface = this.spaceSurface;
+    if (!this.requestSpacePageSize(w, h)) return Promise.resolve(false);
+    if (surface) { surface.sized = true; surface.size = [w, h]; }
+    return new Promise(resolve => {
+      if (this.spacePageIs(w, h)) { resolve(true); return; }
+      let timer = null;
+      const done = ok => {
+        window.removeEventListener('resize', onResize);
+        clearTimeout(timer);
+        if (!ok) console.warn(`[Core] The space page never became ${w} x ${h} (it's ${window.innerWidth} x ${window.innerHeight}).`);
+        resolve(ok);
+      };
+      const onResize = () => { if (this.spacePageIs(w, h)) done(true); };
+      timer = setTimeout(() => done(this.spacePageIs(w, h)), SPACE_SIZE_CONFIRM_MS);
+      window.addEventListener('resize', onResize);
+    });
+  }
+  // Takes the space page for the screen, or leaves this.spaceSurface null when it can't be used.
+  async claimSpaceSurface() {
+    if (this.spaceScreenSetting() === 'off') {
+      console.log('[Core] space-screen is off: using a browser for the screen.');
+      return null;
+    }
+    const scene = this.banterScene();
+    const named = !!scene && typeof scene.SetWorldBrowserSize === 'function';
+    if (!scene || !this.modernSdk() || typeof BS.Plane !== 'function' || typeof BS.Material !== 'function'
+      || (!named && typeof scene.SetProp !== 'function')) {
+      return null; // not a client that can share its space page (Banter)
+    }
+    if (window.__vpSurfaceOwner) {
+      console.log(`[Core] Another player (${window.__vpSurfaceOwner}) has the space page, so this one uses a browser for its screen.`);
+      return null;
+    }
+    const owner = window.__vpSurfaceOwner = `fire-v-player:${this.params.instance}`;
+    const surface = this.spaceSurface = {
+      owner, sized: false, size: null, named, layer: null, onMessage: null,
+      original: [window.innerWidth, window.innerHeight]
+    };
+    const [w, h] = this.screenPageSize();
+    let ok = true;
+    // SetProp sends the command whether or not the client knows it, so a page that already has
+    // the size proves nothing: move it off that size first and see it come back.
+    if (!named && this.spacePageIs(w, h)) ok = await this.setSpacePageSize(w, h - 16);
+    if (ok && this.spaceSurface === surface) ok = await this.setSpacePageSize(w, h);
+    if (this.destroyed || this.spaceSurface !== surface) {
+      if (this.spaceSurface === surface) this.releaseSpaceSurface();
+      return null;
+    }
+    if (!ok) {
+      console.log('[Core] This client did not size the space page, so the screen is a browser.');
+      this.releaseSpaceSurface();
+      return null;
+    }
+    // Over everything the space page shows: the whole page is the screen.
+    const layer = surface.layer = document.createElement('div');
+    layer.setAttribute('data-fire-v-player-screen', owner);
+    Object.assign(layer.style, {
+      position: 'fixed', left: '0', top: '0', width: '100vw', height: '100vh', margin: '0', padding: '0',
+      overflow: 'hidden', background: '#000', zIndex: '2147483647'
+    });
+    (document.body || document.documentElement).appendChild(layer);
+    surface.onMessage = e => this.onSpaceScreenMessage(e);
+    window.addEventListener('message', surface.onMessage);
+    console.log(`[Core] The screen is the space page (${w} x ${h}).`);
+    return surface;
+  }
+  // Gives the space page back: no layer, its own size, and no owner.
+  releaseSpaceSurface() {
+    const surface = this.spaceSurface;
+    if (!surface) return;
+    this.spaceSurface = null;
+    if (surface.onMessage) window.removeEventListener('message', surface.onMessage);
+    if (surface.layer) surface.layer.remove();
+    if (surface.sized) {
+      const scene = this.banterScene();
+      try {
+        // An empty request puts the space page back to the client's own size.
+        if (scene && typeof scene.SetProp === 'function') scene.SetProp(SET_WORLD_BROWSER_SIZE, {});
+        else if (scene && typeof scene.SetWorldBrowserSize === 'function') scene.SetWorldBrowserSize(surface.original[0], surface.original[1]);
+      } catch (e) {
+        console.warn('[Core] Could not put the space page back to its size:', e);
+      }
+    }
+    if (window.__vpSurfaceOwner === surface.owner) delete window.__vpSurfaceOwner;
+  }
+  // The player page's origin, the only one the iframe's messages are taken from or sent to.
+  playerPageOrigin() {
+    try { return new URL(this.initialUrl, location.href).origin; } catch (e) { return ''; }
+  }
+  // The player page's address in the iframe: it's told to talk to this page by postMessage.
+  spaceScreenUrl(url) {
+    let origin = '';
+    try { origin = new URL(url, location.href).origin; } catch (e) {}
+    if (!origin || origin !== this.playerPageOrigin()) return url; // some other page (SET_BROWSER_URL)
+    return `${url}${url.includes('?') ? '&' : '?'}embed=space&po=${encodeURIComponent(location.origin)}`;
+  }
+  async buildSpaceScreen(browser) {
+    const surface = browser.surface;
+    const p = this.params;
+    browser.origin = this.playerPageOrigin();
+    const iframe = browser.iframe = document.createElement('iframe');
+    iframe.allow = 'autoplay; encrypted-media; fullscreen; picture-in-picture';
+    Object.assign(iframe.style, { width: '100%', height: '100%', border: '0', display: 'block' });
+    // Messages sent before the page has loaded wait for it.
+    iframe.addEventListener('load', () => {
+      if (browser.removed || browser.iframe !== iframe) return;
+      browser.loaded = true;
+      browser.queue.splice(0).forEach(data => this.postToSpaceScreen(browser, data));
+    });
+    iframe.src = this.spaceScreenUrl(browser.url);
+    surface.layer.appendChild(iframe);
+    // A size picked while the world's video player had the screen.
+    const [w, h] = this.screenPageSize();
+    browser.size = surface.size || [w, h];
+    if (browser.size[0] !== w || browser.size[1] !== h) this.applyScreenResolution();
+    const t = this.screenTransform();
+    const [sx, sy, sz] = this.vec3(p.scale, [1, 1, 1]);
+    const go = browser.go = await this.makeObject('FireVPlayer_SpaceScreen', {
+      position: t.position, rotation: t.rotation, scale: new BS.Vector3(SURFACE_FLIP_X * sx, SURFACE_FLIP_Y * sy, sz)
+    });
+    if (browser.removed) { this.destroyObject(go); return; }
+    // The same size as the browser screen: SCREEN_WIDTH_M wide, 16:9, before the snippet's scale.
+    await this.addComponent(go, new BS.Plane({ width: SCREEN_WIDTH_M, height: SCREEN_WIDTH_M * 9 / 16 }));
+    await this.addComponent(go, new BS.Material({ shaderName: 'Unlit/Texture', texture: SPACE_BROWSER_TEXTURE, color: this.white() }));
+    if (browser.removed) return;
+    if (p.geometry && p.geometry !== "false") await this.addScreenShape(go);
+  }
+  // Sends one message (a JSON string) to the iframe's page, pinned to the player page's origin.
+  postToSpaceScreen(browser, data) {
+    if (browser.removed) return;
+    const target = browser.iframe && browser.iframe.contentWindow;
+    if (!browser.loaded || !target) { browser.queue.push(data); return; }
+    try { target.postMessage(data, browser.origin); } catch (e) { console.warn('[Core] Could not message the screen:', e); }
+  }
+  // Messages from the iframe's page, as the BS Browser's browser-message events.
+  onSpaceScreenMessage(e) {
+    const browser = this.browser;
+    if (!browser || !browser.iframe || e.source !== browser.iframe.contentWindow) return;
+    if (e.origin !== browser.origin || typeof e.data !== 'string') return;
+    this.onBrowserMessage({ detail: e.data });
   }
 
   // ---------------------------------------------------------------- screen resolution
@@ -431,6 +645,14 @@ var Core = class {
   // Resizes the page and rescales the screen, so it stays the same size in the world.
   applyScreenResolution() {
     const browser = this.browser;
+    if (browser && browser.surface) {
+      // The space page is the page: it's resized, and the screen keeps its size in metres.
+      const [w, h] = browser.size = this.screenPageSize();
+      this.setSpacePageSize(w, h).then(ok => {
+        if (ok) console.log(`[Core] Screen page is now ${w} x ${h}.`);
+      });
+      return;
+    }
     if (!browser || !browser.component) return;
     const [w, h] = browser.size = this.screenPageSize();
     browser.component.pageWidth = w;
@@ -1297,6 +1519,9 @@ var Core = class {
     this.setOrDefault("box-trigger-rotation", '0 0 0');
     this.setOrDefault("box-trigger-scale", '1 1 1');
     this.setOrDefault("resolution", '1600');
+    // Altspace: "auto" draws the screen from the space page's own browser where the client allows
+    // it (see claimSpaceSurface), "false" always opens a browser for it.
+    this.setOrDefault("space-screen", 'auto');
     // The world video player's size for files (native-video.js); empty matches the browser.
     this.setOrDefault("native-screen-size", '');
     this.setOrDefault("one-for-each-instance", "false");
@@ -1820,6 +2045,8 @@ var Core = class {
 
     // The world's objects: the screen, buttons, hand controls and anything else made here.
     this.removeBrowser();
+    // The space page goes back to how it was (Altspace's space-page screen).
+    this.releaseSpaceSurface();
     this.removeHandControls();
     this.worldObjects.slice().forEach(go => this.destroyObject(go));
     this.worldObjects = [];

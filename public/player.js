@@ -33,6 +33,29 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
 (() => {
   const playerScript = document.currentScript;
 
+  // In Altspace this page can run in an iframe on the space page instead of in a browser of its
+  // own (core.js, the `space-screen` setting). The space page then says so in the address
+  // (embed=space, po = its origin), and messages go both ways by postMessage, with that page only.
+  // Listening starts now, so messages that come before the player is set up aren't lost.
+  const spaceFrame = (() => {
+    const query = new URLSearchParams(location.search);
+    if (query.get('embed') !== 'space' || window.parent === window) return null;
+    const origin = query.get('po') || '';
+    // Where the browser says which page embeds this one, it has to be the one named.
+    const ancestors = location.ancestorOrigins;
+    if (!origin || (ancestors && ancestors.length && ancestors[0] !== origin)) {
+      console.warn('[Player] Framed by a page other than the one named, so not talking to it.');
+      return null;
+    }
+    const frame = { origin, target: origin === 'null' ? '*' : origin, buffer: [], listener: null };
+    window.addEventListener('message', e => {
+      if (e.source !== window.parent || e.origin !== origin || typeof e.data !== 'string') return;
+      if (frame.listener) frame.listener(e.data);
+      else if (frame.buffer.length < 100) frame.buffer.push(e.data);
+    });
+    return frame;
+  })();
+
   const baseScript = document.createElement("script");
   const currentScriptUrl = new URL(playerScript.src);
   baseScript.setAttribute("src", `${currentScriptUrl.origin}/base-player.js`);
@@ -108,6 +131,10 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
       };
       window.addEventListener("bsmessage", onMessage);
       window.addEventListener("bantermessage", onMessage);
+      if (spaceFrame) {
+        spaceFrame.listener = message => onMessage({ detail: { message } });
+        spaceFrame.buffer.splice(0).forEach(spaceFrame.listener);
+      }
     }
 
     /**
@@ -115,7 +142,9 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
      * @param {Object} msg - Message payload.
      */
     sendBrowserMessage(msg) {
-      if (window.O && typeof window.O.sendMessage === 'function') {
+      if (spaceFrame) {
+        window.parent.postMessage(JSON.stringify(msg), spaceFrame.target);
+      } else if (window.O && typeof window.O.sendMessage === 'function') {
         window.O.sendMessage("app", JSON.stringify(msg));
       } else if (window.bantermessage) {
         window.bantermessage(JSON.stringify(msg));

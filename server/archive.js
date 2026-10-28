@@ -264,6 +264,14 @@ async function resolveLinkAll(link) {
  * @returns {Promise<Object>} A playlist item whose link is an archive.org/download/... file.
  */
 async function resolveLink(link) {
+  const { id, file } = await identify(link);
+  if (id && !file) {
+    // The item someone picked (a search result): its first video, under the item's own title
+    // rather than that file's name, which is often an encoding note like "720p H.264 (mkv)".
+    const item = await getItem(id);
+    if (!item.files.length) throw new Error("That Internet Archive item has no video that can be played here.");
+    return toVideo(item, item.files[0], false);
+  }
   return (await resolveLinkAll(link))[0];
 }
 

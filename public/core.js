@@ -546,6 +546,25 @@ var Core = class {
     }
     if (window.__vpSurfaceOwner === surface.owner) delete window.__vpSurfaceOwner;
   }
+  // Logs anything that could make the space screen's page count as hidden to an embed that checks
+  // (Twitch won't autoplay then): what is drawn on top at the centre, and see-through or
+  // transformed elements above the iframe.
+  logSpaceScreenCover(iframe) {
+    try {
+      const describe = el => el === iframe ? 'the player' : `${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}${el.className && typeof el.className === 'string' ? '.' + el.className.split(' ')[0] : ''}`;
+      const top = document.elementsFromPoint(window.innerWidth / 2, window.innerHeight / 2).slice(0, 3).map(describe);
+      const odd = [];
+      for (let el = iframe; el; el = el.parentElement) {
+        const s = getComputedStyle(el);
+        if (Number(s.opacity) < 1 || s.transform !== 'none' || s.filter !== 'none' || s.visibility !== 'visible') {
+          odd.push(`${describe(el)} (opacity ${s.opacity}, transform ${s.transform}, filter ${s.filter}, visibility ${s.visibility})`);
+        }
+      }
+      console.log(`[Core] Space screen: on top at the centre ${top.join(' > ')}; page ${document.visibilityState}; ${odd.length ? 'styled above it: ' + odd.join(', ') : 'nothing see-through or transformed above it'}.`);
+    } catch (e) {
+      console.log('[Core] Could not check the space screen:', e);
+    }
+  }
   // The player page's origin, the only one the iframe's messages are taken from or sent to.
   playerPageOrigin() {
     try { return new URL(this.initialUrl, location.href).origin; } catch (e) { return ''; }
@@ -569,6 +588,7 @@ var Core = class {
       if (browser.removed || browser.iframe !== iframe) return;
       browser.loaded = true;
       browser.queue.splice(0).forEach(data => this.postToSpaceScreen(browser, data));
+      setTimeout(() => this.logSpaceScreenCover(iframe), 3000);
     });
     iframe.src = this.spaceScreenUrl(browser.url);
     surface.layer.appendChild(iframe);

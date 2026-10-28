@@ -236,6 +236,45 @@ function twitchParents() {
   return hosts;
 }
 
+/**
+ * What Twitch's autoplay check can see, for the log when a stream won't start: Twitch refuses to
+ * autoplay an embed it doesn't think is visible ("style visibility").
+ * @returns {string}
+ */
+function twitchVisibility() {
+  const frame = twitchEmbed.div && twitchEmbed.div.querySelector('iframe');
+  const parts = [`page ${document.visibilityState}`, `focus ${document.hasFocus()}`, `dpr ${window.devicePixelRatio}`];
+  const stage = document.getElementById('stage');
+  if (stage) parts.push(`stage transform ${getComputedStyle(stage).transform}`);
+  if (frame) {
+    const r = frame.getBoundingClientRect();
+    parts.push(`embed ${Math.round(r.width)}x${Math.round(r.height)} at ${Math.round(r.left)},${Math.round(r.top)}`);
+    for (let el = frame; el && el !== document.documentElement; el = el.parentElement) {
+      const s = getComputedStyle(el);
+      if (s.display === 'none' || s.visibility !== 'visible' || Number(s.opacity) < 1) {
+        parts.push(`hidden by ${el.id || el.tagName} (display ${s.display}, visibility ${s.visibility}, opacity ${s.opacity})`);
+      }
+    }
+  }
+  return parts.join(', ');
+}
+
+/** Logs whether the browser itself counts the embed as visible (IntersectionObserver v2). */
+function logTwitchSeen() {
+  const frame = twitchEmbed.div && twitchEmbed.div.querySelector('iframe');
+  if (!frame || typeof IntersectionObserver !== 'function') return;
+  try {
+    const io = new IntersectionObserver(entries => {
+      const e = entries[entries.length - 1];
+      console.log(`[Twitch] the browser says the embed is ${e.isVisible === undefined ? 'of unknown visibility' : e.isVisible ? 'visible' : 'not visible'} (${Math.round(e.intersectionRatio * 100)}% in view)`);
+      io.disconnect();
+    }, { trackVisibility: true, delay: 100 });
+    io.observe(frame);
+  } catch (e) {
+    console.log('[Twitch] could not ask the browser about visibility:', e.message);
+  }
+}
+
 /** Twitch's `time` parameter for a VOD start offset, e.g. 1h2m3s. */
 function twitchTime(seconds) {
   const s = Math.max(0, Math.floor(seconds || 0));
@@ -448,7 +487,8 @@ class TwitchSource extends BaseMediaSource {
       }
       if (!this.reloaded) {
         this.reloaded = true;
-        console.log('[Twitch] not playing yet, reloading the embed');
+        console.log('[Twitch] not playing yet, reloading the embed. ' + twitchVisibility());
+        logTwitchSeen();
         // A VOD can take a while to start after a reload (an ad first), so it's given time
         // before the screen is clicked.
         if (this.reloadIframe(this.live ? 0 : (this.pendingSeek || this.time()))) { this.check(10000); return; }

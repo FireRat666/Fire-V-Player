@@ -21,6 +21,10 @@ var PAGE_JUMP = 5; // pages the << and >> buttons move
 var LIST_WINDOW = 20;
 var FIRST_ROWS = 8; // rows built with the panel; the rest follow in chunks of ROW_CHUNK
 var ROW_CHUNK = 4;
+// Successful searches kept on this device: how many, and for how long.
+var SEARCH_CACHE_SIZE = 10;
+var SEARCH_CACHE_MS = 6 * 60 * 60 * 1000;
+var SEARCH_COLOR = '#00897b';
 // The progress bar's width in pixels: the panel (W, 1100) minus its padding and borders (42), the
 // now-playing card's padding (28), the time label (190) and the gap before the bar (10).
 var PROGRESS_WIDTH = 820;
@@ -52,6 +56,16 @@ var FirePlaylistPanel = class {
     // Recent searches, kept on this device (like the full playlist page did).
     this.recentKey = `recent${this.karaoke ? 'Karaoke' : 'Playlist'}Searches`;
     this.recentSearches = this.loadRecent();
+    // Results of recent successful searches, kept on this device so going back to one shows it
+    // straight away instead of searching again.
+    this.searchCacheKey = `fvpSearchCache${this.karaoke ? 'Karaoke' : ''}`;
+    this.pendingSearchKey = null;
+    this.restoreLastSearch();
+    // Lists this viewer saved from a link, kept on this device for this world.
+    this.userListsKey = `fvpSavedLists:${(core.params && core.params.instance) || ''}`;
+    this.userLists = this.loadUserLists();
+    // A pasted playlist waiting for its Replace / Add All / Save choice.
+    this.pendingList = null;
     this.visible = false;
     this.built = false;
     this.failed = false;
@@ -215,7 +229,66 @@ var FirePlaylistPanel = class {
   clearRecent() {
     this.recentSearches = [];
     try { localStorage.removeItem(this.recentKey); } catch (e) {}
+    try { localStorage.removeItem(this.searchCacheKey); } catch (e) {}
     this.render();
+  }
+
+  // ---- search results kept on this device
+
+  searchKey(query, source) {
+    return `${source || 'youtube'}:${String(query || '').trim().toLowerCase()}`;
+  }
+  readSearchCache() {
+    try {
+      const all = JSON.parse(localStorage.getItem(this.searchCacheKey) || '{}');
+      return all && typeof all === 'object' && !Array.isArray(all) ? all : {};
+    } catch (e) {
+      return {};
+    }
+  }
+  // The saved results for a search, if it was made in the last SEARCH_CACHE_MS.
+  cachedSearch(key) {
+    const hit = this.readSearchCache()[key];
+    if (!hit || !Array.isArray(hit.results) || !hit.results.length) return null;
+    if (Date.now() - (hit.at || 0) > SEARCH_CACHE_MS) return null;
+    return hit;
+  }
+  // Keeps a successful search's results, the newest SEARCH_CACHE_SIZE searches only.
+  saveSearch(key, query, results) {
+    const all = this.readSearchCache();
+    all[key] = { query, at: Date.now(), results };
+    const keys = Object.keys(all).sort((a, b) => (all[b].at || 0) - (all[a].at || 0));
+    keys.slice(SEARCH_CACHE_SIZE).forEach(k => delete all[k]);
+    try {
+      localStorage.setItem(this.searchCacheKey, JSON.stringify(all));
+    } catch (e) {
+      // Storage full: keep just this one.
+      try { localStorage.setItem(this.searchCacheKey, JSON.stringify({ [key]: all[key] })); } catch (e2) {}
+    }
+  }
+  // Opening the panel again shows the last search's results, if they were kept.
+  restoreLastSearch() {
+    const all = this.readSearchCache();
+    const newest = Object.keys(all).sort((a, b) => (all[b].at || 0) - (all[a].at || 0))[0];
+    const hit = newest && this.cachedSearch(newest);
+    if (!hit) return;
+    this.searchResults = hit.results;
+    this.searchQuery = hit.query || '';
+    if (newest.startsWith('archive:')) this.searchSource = 'archive';
+  }
+
+  // ---- lists saved from a link (Lists tab), kept on this device for this world
+
+  loadUserLists() {
+    try {
+      const list = JSON.parse(localStorage.getItem(this.userListsKey) || '[]');
+      return Array.isArray(list) ? list.filter(l => l && typeof l.id === 'string').map(l => ({ id: l.id, label: String(l.label || 'Playlist'), user: true })) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+  saveUserLists() {
+    try { localStorage.setItem(this.userListsKey, JSON.stringify(this.userLists.map(l => ({ id: l.id, label: l.label })))); } catch (e) {}
   }
 
   // Puts text in the search box (and searchQuery, which normally follows the box's OnChange).
@@ -411,7 +484,7 @@ var FirePlaylistPanel = class {
     await this.button(header, 'Close', () => this.close(), { backgroundColor: GREY });
 
     // Now playing
-    const nowCard = await this.div(rootEl, {
+    const nowCard = this.nowCard = await this.div(rootEl, {
       display: 'flex', flexDirection: 'column', flexShrink: 0, backgroundColor: '#23232d',
       borderRadius: '14px', paddingLeft: '14px', paddingRight: '14px', paddingTop: '10px', paddingBottom: '12px', marginTop: '8px'
     });
@@ -431,7 +504,7 @@ var FirePlaylistPanel = class {
     this.addProgressSeek(progHit);
 
     // Playback + volume controls
-    const controls = await row(rootEl, { marginTop: '6px' });
+    const controls = this.controlsRow = await row(rootEl, { marginTop: '6px' });
     this.prevTrackBtn = await this.button(controls, 'Prev', () => this.changeTrack(-1));
     this.rewBtn = await this.button(controls, '<< Skip', () => this.core.back());
     this.pauseBtn = await this.button(controls, 'Pause', () => this.send(Commands.TOGGLE_PAUSE));
@@ -454,6 +527,19 @@ var FirePlaylistPanel = class {
     this.replaceConfirmBtn = await this.button(this.noticeRow, 'Replace', () => this.confirmReplace(), { backgroundColor: '#2e7d32' });
     await this.button(this.noticeRow, 'Dismiss', () => this.dismissReplace(), { backgroundColor: '#c62828' });
 
+    // A pasted playlist: what to do with it.
+    this.listPromptRow = await this.div(rootEl, {
+      display: 'none', flexDirection: 'column', flexShrink: 0, marginTop: '6px', backgroundColor: '#1a237e',
+      borderRadius: '10px', paddingLeft: '12px', paddingRight: '8px', paddingTop: '6px', paddingBottom: '6px'
+    });
+    this.listPromptLabel = await this.label(this.listPromptRow, '', { fontSize: '20px', whiteSpace: 'normal' });
+    const promptBtns = await row(this.listPromptRow, { marginTop: '4px', flexWrap: 'wrap' });
+    this.promptReplaceBtn = await this.button(promptBtns, 'Replace Playlist', () => this.answerListPrompt('replace'), { backgroundColor: '#2e7d32' });
+    this.promptAppendBtn = await this.button(promptBtns, 'Add All to End', () => this.answerListPrompt('append'));
+    this.promptSaveBtn = await this.button(promptBtns, 'Save to Lists', () => this.answerListPrompt('save'), { backgroundColor: '#6a1b9a' });
+    this.promptVideoBtn = await this.button(promptBtns, 'Just This Video', () => this.answerListPrompt('video'));
+    await this.button(promptBtns, 'Cancel', () => this.answerListPrompt(null), { backgroundColor: GREY });
+
     // ---- Main view: playlist / search
     this.mainView = await this.div(rootEl, { display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, overflow: 'hidden' });
 
@@ -461,7 +547,13 @@ var FirePlaylistPanel = class {
     this.tabPlaylistBtn = await this.button(tabs, this.karaoke ? 'Singers' : 'Playlist', () => this.setTab('playlist'));
     // Saved lists (not in karaoke mode, where the first tab is the singer queue).
     this.tabListsBtn = this.karaoke ? null : await this.button(tabs, 'Lists', () => this.setTab('lists'));
-    this.tabSearchBtn = await this.button(tabs, 'Search', () => this.setTab('search'));
+    // Search opens over the whole panel (see render), so it stands out from the tabs.
+    this.tabSearchBtn = await this.button(tabs, this.karaoke ? 'Search Songs' : 'Search & Add', () => this.openSearch(), {
+      backgroundColor: SEARCH_COLOR, paddingLeft: '22px', paddingRight: '22px', fontWeight: 'bold'
+    });
+    // While searching: a title and the way back, instead of the tabs.
+    this.searchTitle = await this.label(tabs, this.karaoke ? 'Search for a song' : 'Search', { fontSize: '26px', fontWeight: 'bold', marginLeft: '6px', marginRight: '12px' });
+    this.closeSearchBtn = await this.button(tabs, this.karaoke ? 'Back to Singers' : 'Back to Playlist', () => this.closeSearch(), { backgroundColor: '#c62828' });
     await this.div(tabs, { flexGrow: 1 });
     // Page buttons: first, back 5, back 1, forward 1, forward 5, last. With a scroll view they
     // move the window of rows (see LIST_WINDOW), and Now goes back to the playing video.
@@ -482,6 +574,8 @@ var FirePlaylistPanel = class {
       // What to search: YouTube, or the Internet Archive's public-domain movies and TV (not for karaoke).
       if (!this.karaoke) this.sourceBtn = await this.button(this.searchRow, 'YouTube', () => this.toggleSearchSource(), { backgroundColor: '#c62828', width: '170px' });
       await this.button(this.searchRow, 'Search', () => this.doSearch(), { backgroundColor: '#1565c0' });
+      // The last search, when its results were kept on this device.
+      if (this.searchQuery) this.setSearchText(this.searchQuery);
     } else {
       await this.label(this.searchRow, 'Search needs text input, which this client does not have.', { color: '#bbbbbb', flexGrow: 1 });
     }
@@ -616,14 +710,10 @@ var FirePlaylistPanel = class {
     const linkSection = this.karaoke ? null : await section('Add by link');
     if (linkSection) {
       const linkRow = await row(linkSection);
-      this.linkField = await this.textField(linkRow, 'Video link, YouTube playlist, or list of links (.txt, .m3u, Google Doc, Drive folder)', v => { this.linkQuery = v; }, () => this.addLink(false));
+      this.linkField = await this.textField(linkRow, 'Video link, YouTube playlist, or list of links (.txt, .m3u, Google Doc, Drive folder)', v => { this.linkQuery = v; }, () => this.addLink());
       if (this.linkField) {
-        await this.button(linkRow, 'Add Video', () => this.addLink(false));
-        // A playlist or list of links: replace the playlist (host), add it all to the end, or
-        // open it in the Lists tab to pick from.
-        this.loadPlaylistBtn = await this.button(linkRow, 'Load Playlist', () => this.addLink('replace'), { backgroundColor: '#2e7d32' });
-        this.appendListBtn = await this.button(linkRow, 'Add All', () => this.addLink('append'));
-        await this.button(linkRow, 'Browse', () => this.addLink('browse'), { backgroundColor: GREY });
+        // A video is added; a playlist or list of links asks what to do with it.
+        await this.button(linkRow, 'Add', () => this.addLink(), { backgroundColor: '#2e7d32' });
       } else {
         await this.label(linkRow, 'Adding links needs text input, which this client does not have.', { color: '#bbbbbb', flexGrow: 1 });
       }
@@ -1175,21 +1265,89 @@ var FirePlaylistPanel = class {
 
   // mode: false (one video), 'replace' (load as the playlist), 'append' (add a whole list to the
   // end) or 'browse' (open it in the Lists tab).
-  addLink(mode) {
+  // Add by link: a video is added, a playlist or list of links asks what to do with it.
+  addLink() {
     const q = (this.linkQuery || '').trim();
     if (!q) { this.setStatus('Paste a link first.'); return; }
-    if (mode) {
-      const id = this.core.getPlaylistId(q) || (this.core.getListLink ? this.core.getListLink(q) : null);
-      if (!id) { this.setStatus('That is not a YouTube playlist or a link to a list of links.'); return; }
-      if (mode === 'browse') { this.browseList(id); return; }
-      if (mode === 'append') { this.appendList(id); return; }
-      this.replaceWithList(id);
-      return;
-    }
+    if (this.askAboutList(q)) return;
     // YouTube, Twitch, Vimeo or a direct video link: the server checks it can be played.
     if (!this.core.getId(q) && !/^(https?|rtspt?):\/\//i.test(q)) { this.setStatus('That is not a video link.'); return; }
     this.send(Commands.ADD_TO_PLAYLIST, q);
     this.setStatus('Adding video...');
+  }
+
+  // The playlist or list of links in a pasted link, or null. A link to a video in a YouTube
+  // playlist (watch?v=...&list=PL...) counts, and the prompt offers just the video too.
+  listIn(text) {
+    const q = String(text || '').trim();
+    if (!q || this.karaoke) return null;
+    const id = this.core.getPlaylistId(q) || (typeof this.core.getListLink === 'function' ? this.core.getListLink(q) : null);
+    if (!id) return null;
+    return { id, link: q, video: !!this.core.getId(q) };
+  }
+
+  // Shows the Replace / Add All / Save to Lists question for a pasted playlist. True if it was one.
+  askAboutList(text) {
+    const found = this.listIn(text);
+    if (!found) return false;
+    this.pendingList = found;
+    this.requestList(found.id, false); // its name and size, for the question
+    this.view = 'main';
+    this.render();
+    return true;
+  }
+
+  answerListPrompt(choice) {
+    const found = this.pendingList;
+    this.pendingList = null;
+    if (!found || !choice) { this.render(); return; }
+    if (choice === 'replace') { this.replaceWithList(found.id); this.closeSearch(); }
+    else if (choice === 'append') { this.appendList(found.id); this.closeSearch(); }
+    else if (choice === 'save') this.saveList(found.id);
+    else if (choice === 'video') {
+      if (!this.canAdd()) this.setStatus('The player is locked: only the host can add videos.');
+      else { this.send(Commands.ADD_TO_PLAYLIST, found.link); this.setStatus('Adding video...'); }
+    }
+    this.render();
+  }
+
+  // Keeps a list in the Lists tab on this device, and shows it there.
+  saveList(id) {
+    const snippetLists = this.savedLists || [];
+    if (!this.userLists.some(l => l.id === id) && !snippetLists.some(l => l.id === id)) {
+      const data = this.listData.get(id);
+      const label = (data && data.state === 'ready' && data.title) || (typeof this.core.listLabel === 'function' ? this.core.listLabel(id) : 'Playlist');
+      this.userLists.push({ id, label, user: true });
+      this.saveUserLists();
+    }
+    this.extraLists = this.extraLists.filter(l => l.id !== id);
+    this.setStatus('Saved to your Lists.');
+    this.view = 'main';
+    this.openListId = null;
+    this.toggleList(id);
+  }
+
+  // Takes a list this viewer saved out of the Lists tab.
+  removeList(id) {
+    this.userLists = this.userLists.filter(l => l.id !== id);
+    this.saveUserLists();
+    if (this.openListId === id) this.openListId = null;
+    this.setStatus('Removed from your Lists.');
+    this.render();
+  }
+
+  // Search covers the whole panel; Back returns to where it was opened from.
+  openSearch() {
+    if (this.tab !== 'search') this.tabBeforeSearch = this.tab;
+    this.view = 'main';
+    this.setTab('search');
+    if (this.searchField && typeof this.searchField.Focus === 'function' && !this.searchResults.length) {
+      try { this.searchField.Focus(); } catch (e) {}
+    }
+  }
+  closeSearch() {
+    if (this.tab !== 'search') return;
+    this.setTab(this.tabBeforeSearch && this.tabBeforeSearch !== 'search' ? this.tabBeforeSearch : 'playlist');
   }
 
   confirmReplace() {
@@ -1259,19 +1417,29 @@ var FirePlaylistPanel = class {
       this.setStatus('Type at least two characters to search.');
       return;
     }
-    // A YouTube playlist link or ID replaces the playlist (host only), like the full page.
-    if (!this.karaoke && (/[?&]list=/.test(q) || /^PL[A-Za-z0-9_-]{10,}$/.test(q))) {
-      const id = this.core.getPlaylistId(q);
-      if (id) {
-        if (!this.isHost()) { this.setStatus('Only the host can load a playlist.'); return; }
-        this.send(Commands.FROM_PLAYLIST, { id, shouldClear: true, fromPlaylist: true });
-        this.setStatus('Loading playlist...');
-        this.setTab('playlist');
-        return;
-      }
-    }
-    this.send(Commands.SEARCH, this.searchSource === 'archive' ? { term: q, source: 'archive' } : q);
+    // A playlist link or ID asks whether to replace the playlist, add it all, or save it to Lists.
+    if (this.askAboutList(q)) return;
     this.saveRecent(q);
+    this.tab = 'search';
+    // A search made recently on this device shows its kept results straight away. Links are
+    // always looked up again (a stream may have gone live or offline).
+    const isLink = /^(https?|rtspt?):\/\//i.test(q) || !!this.core.getId(q);
+    const key = this.searchKey(q, this.searchSource);
+    const kept = !isLink && this.cachedSearch(key);
+    if (kept) {
+      clearInterval(this.searchTimer);
+      this.searchTimer = null;
+      this.pendingSearchKey = null;
+      this.searchResults = kept.results;
+      this.searchPage = 0;
+      this.resetScroll();
+      const n = kept.results.length;
+      this.setStatus(`${n} result${n === 1 ? '' : 's'} (from your recent searches)`);
+      this.render();
+      return;
+    }
+    this.pendingSearchKey = isLink ? null : { key, query: q };
+    this.send(Commands.SEARCH, this.searchSource === 'archive' ? { term: q, source: 'archive' } : q);
     console.log(`[PlaylistPanel] Searching for "${q}"...`);
     this.setStatus('Searching...', 0);
     // The first search after the server starts can take a while, so count up instead of giving up early.
@@ -1323,7 +1491,8 @@ var FirePlaylistPanel = class {
   // The saved lists: the snippet's (see Core.getSavedLists), then any opened with Browse.
   getLists() {
     if (!this.savedLists) this.savedLists = typeof this.core.getSavedLists === 'function' ? this.core.getSavedLists() : [];
-    return this.savedLists.concat(this.extraLists);
+    const seen = new Set();
+    return this.savedLists.concat(this.userLists, this.extraLists).filter(l => !seen.has(l.id) && seen.add(l.id));
   }
 
   // The Lists tab's rows: each list, and the videos of the one that's open under it.
@@ -1362,6 +1531,9 @@ var FirePlaylistPanel = class {
     }
     const items = Array.isArray(data.items) ? data.items : [];
     this.listData.set(data.id, { state: 'ready', title: data.title || '', items, skipped: data.skipped || 0, truncated: !!data.truncated });
+    // A saved list keeps its real name for next time.
+    const mine = data.title && this.userLists.find(l => l.id === data.id);
+    if (mine && mine.label !== data.title) { mine.label = data.title; this.saveUserLists(); }
   }
 
   // Opens a list under its row (closing any other), or closes it.
@@ -1414,6 +1586,10 @@ var FirePlaylistPanel = class {
         this.searchTimer = null;
         this.searchResults = Array.isArray(json.data) ? json.data : [];
         console.log(`[PlaylistPanel] Got ${this.searchResults.length} search results.`);
+        if (this.pendingSearchKey && this.searchResults.length) {
+          this.saveSearch(this.pendingSearchKey.key, this.pendingSearchKey.query, this.searchResults);
+        }
+        this.pendingSearchKey = null;
         this.view = 'main';
         this.searchPage = 0;
         this.resetScroll(); // new results start at the top
@@ -1591,6 +1767,37 @@ var FirePlaylistPanel = class {
     if (this.karaoke && this.tab === 'lists') this.tab = 'playlist';
     const onSearch = this.tab === 'search';
     const onLists = this.tab === 'lists';
+    // Search covers the panel: no now playing or transport, and a title and Back instead of tabs.
+    const searching = onSearch && !more;
+    this.display(this.nowCard, !searching);
+    this.display(this.controlsRow, !searching);
+    this.display(this.tabPlaylistBtn, !onSearch);
+    if (this.tabListsBtn) this.display(this.tabListsBtn, !onSearch);
+    this.display(this.tabSearchBtn, !onSearch);
+    this.display(this.searchTitle, onSearch);
+    this.display(this.closeSearchBtn, onSearch);
+    if (this.sourceBtn) {
+      this.setText(this.sourceBtn, this.searchSource === 'archive' ? 'Movies & TV' : 'YouTube');
+      this.setStyle(this.sourceBtn, 'backgroundColor', this.searchSource === 'archive' ? '#6d4c41' : '#c62828');
+    }
+
+    // A pasted playlist's question.
+    const pl = this.pendingList;
+    this.display(this.listPromptRow, !!pl);
+    if (pl) {
+      const data = this.listData.get(pl.id);
+      const name = (data && data.state === 'ready' && data.title) || (typeof this.core.listLabel === 'function' ? this.core.listLabel(pl.id) : 'playlist');
+      const size = data && data.state === 'ready' ? ` (${data.items.length} videos)` : data && data.state === 'loading' ? ' (loading...)' : '';
+      const can = host ? '' : this.canAdd() ? ' Only the host can replace the playlist.' : ' The player is locked: you can save it to your Lists.';
+      const failed = data && data.state === 'error';
+      this.setText(this.listPromptLabel, failed
+        ? `That link isn't a playlist or video this player can use: ${data.error}`
+        : `That's a playlist: ${name}${size}. Replace the playlist, add it all to the end, or keep it in your Lists?${can}`);
+      this.display(this.promptReplaceBtn, host && !failed);
+      this.display(this.promptAppendBtn, this.canAdd() && !failed);
+      this.display(this.promptSaveBtn, !failed);
+      this.display(this.promptVideoBtn, pl.video && this.canAdd());
+    }
     const list = this.listItems();
     this.setText(this.tabPlaylistBtn, `${this.karaoke ? 'Singers' : 'Playlist'} (${list.length})`);
     this.setStyle(this.tabPlaylistBtn, 'backgroundColor', this.tab === 'playlist' ? '#1565c0' : '#455a64');
@@ -1599,9 +1806,7 @@ var FirePlaylistPanel = class {
       this.setText(this.tabListsBtn, lists.length ? `Lists (${lists.length})` : 'Lists');
       this.setStyle(this.tabListsBtn, 'backgroundColor', onLists ? '#1565c0' : '#455a64');
     }
-    if (this.nowBtn) this.display(this.nowBtn, !!(hasPlaylist && (this.tab !== 'playlist' || list.length > this.pageSize())));
-    if (this.appendListBtn) this.display(this.appendListBtn, this.canAdd());
-    this.setStyle(this.tabSearchBtn, 'backgroundColor', onSearch ? '#1565c0' : '#455a64');
+    if (this.nowBtn) this.display(this.nowBtn, !!(!onSearch && hasPlaylist && (this.tab !== 'playlist' || list.length > this.pageSize())));
     this.display(this.searchRow, onSearch);
     this.display(this.searchToolsRow, onSearch && !!this.searchField);
     const recent = this.recentSearches;
@@ -1634,7 +1839,7 @@ var FirePlaylistPanel = class {
 
     // Rows
     const canAdd = this.canAdd();
-    const inPlaylist = onLists ? new Set(playlist.map(v => v.link)) : null;
+    const inPlaylist = (onLists || onSearch) ? new Set(playlist.map(v => v.link)) : null;
     for (let k = 0; k < this.rows.length; k++) {
       const slot = this.rows[k];
       const i = start + k;
@@ -1645,14 +1850,14 @@ var FirePlaylistPanel = class {
         if (v.kind === 'list') this.fillListRow(slot, v.list, host, canAdd);
         else this.fillListItemRow(slot, v, host, canAdd, inPlaylist);
       }
-      else if (onSearch) this.fillSearchRow(slot, v, host);
+      else if (onSearch) this.fillSearchRow(slot, v, host, inPlaylist);
       else if (this.karaoke) this.fillSingerRow(slot, v, i, items, host);
       else this.fillPlaylistRow(slot, v, i, player, host);
     }
 
     let empty = '';
     if (!items.length) {
-      if (onLists) empty = "No saved lists. The snippet's playlist and playlists settings add them, or paste a list link in More... > Add by link and press Browse.";
+      if (onLists) empty = "No saved lists. Paste a YouTube playlist or a list of links into Search & Add (or More... > Add by link) and choose Save to Lists.";
       else if (onSearch) empty = this.karaoke ? 'Search for a song above, or paste a link.' : 'Search YouTube above, or paste a YouTube, Twitch, Vimeo or video link.';
       else if (this.karaoke) empty = host ? 'No singers yet. Use Search to pick a song and join the queue.' : 'No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first (More...).';
       else empty = 'The playlist is empty. Use Search to add videos.';
@@ -1770,19 +1975,21 @@ var FirePlaylistPanel = class {
     this.setButtons(slot, defs.slice(0, 4));
   }
 
-  fillSearchRow(slot, v, host) {
-    this.setStyle(slot.row, 'backgroundColor', '#2a2a33');
+  fillSearchRow(slot, v, host, inPlaylist) {
+    const added = !this.karaoke && inPlaylist && inPlaylist.has(v.link);
+    this.setStyle(slot.row, 'backgroundColor', added ? '#1b3a2a' : '#2a2a33');
     this.setText(slot.title, v.title || 'Untitled');
     const channel = v.channel && v.channel.name ? v.channel.name : '';
     const dur = typeof v.duration === 'number' && v.duration > 0 ? this.timeCode(v.duration / 1000) : '';
-    this.setText(slot.sub, [channel, dur].filter(Boolean).join('  -  '));
+    this.setText(slot.sub, [added ? 'In the playlist' : '', channel, dur].filter(Boolean).join('  -  '));
     this.setThumb(slot, v.thumbnail, v.link);
 
     if (this.karaoke) {
       this.setButtons(slot, this.isInQueue() ? [] : [{ text: 'Sing It', color: '#2e7d32', fn: () => this.singIt(v) }]);
       return;
     }
-    const defs = [{ text: 'Add', fn: () => { this.send(Commands.ADD_TO_PLAYLIST, v); this.setStatus(`Added "${v.title}"`); } }];
+    // Adding stays on the results, so several can be added from one search.
+    const defs = added || !this.canAdd() ? [] : [{ text: 'Add', fn: () => { this.send(Commands.ADD_TO_PLAYLIST, v); this.setStatus(`Added "${v.title}"`); } }];
     if (host) {
       defs.push({ text: 'Play Now', color: '#2e7d32', fn: () => { this.send(Commands.ADD_AND_PLAY, v); this.setTab('playlist'); } });
       defs.push({ text: 'Play Next', fn: () => { this.send(Commands.ADD_AND_PLAY_NEXT, v); this.setStatus(`"${v.title}" plays next`); } });
@@ -1815,6 +2022,8 @@ var FirePlaylistPanel = class {
       if (canAdd) defs.push({ text: 'Add All', fn: () => this.appendList(list.id) });
       if (host) defs.push({ text: 'Replace', color: '#2e7d32', fn: () => this.replaceWithList(list.id) });
     }
+    // Lists this viewer saved can be taken out again.
+    if (list.user) defs.push({ text: 'Remove', color: '#c62828', fn: () => this.removeList(list.id) });
     this.setButtons(slot, defs);
   }
 

@@ -31,6 +31,8 @@ var Commands = {
   TRACK_CHANGED: 'track-changed',
   TAKE_OVER: 'take-over',
   FROM_PLAYLIST: 'from-playlist',
+  LIST_PREVIEW: 'list-preview', // a UI -> server: what's in a saved list (YouTube playlist or list of links)
+  LIST_PREVIEW_RESULT: 'list-preview-result', // server -> that UI: { id, title, items, skipped } or { id, error }
   CLEAR_PLAYLIST: 'clear-playlist',
   USER_VIDEO_PLAYER: 'user-video-player',
   ADD_TO_PLAYERS: 'add-to-players',

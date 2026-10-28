@@ -138,7 +138,7 @@
         });
         // Pass the mode to the player iframe so it knows which skip time to use.
         const proto = this.core.hostProtocol || (this.core.hostUrl.startsWith('localhost') || this.core.hostUrl.startsWith('127.0.0.1') ? 'http' : 'https');
-        const url = `${proto}://${this.core.hostUrl}/?youtube=${encodeURIComponent(this.core.params.youtube)}&start=${this.core.params.start}&playlist=${this.core.params.playlist}&mute=${this.core.params.mute}&volume=${this.core.tempVolume}&instance=${encodeURIComponent(this.core.params.instance)}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}&mode=${mode}&captions=${core.loadCaptionsPref()}&untrusted-links=${core.allowUntrusted === true}&screen-debug=${core.params['screen-debug'] === 'true'}`;
+        const url = `${proto}://${this.core.hostUrl}/?youtube=${encodeURIComponent(this.core.params.youtube)}&start=${this.core.params.start}&playlist=${encodeURIComponent(this.core.params.playlist)}&mute=${this.core.params.mute}&volume=${this.core.tempVolume}&instance=${encodeURIComponent(this.core.params.instance)}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}&mode=${mode}&captions=${core.loadCaptionsPref()}&untrusted-links=${core.allowUntrusted === true}&screen-debug=${core.params['screen-debug'] === 'true'}`;
         // This viewer's own screen resolution, if they picked one in the panel.
         core.loadResolutionPref();
         // Files play on the world's own video player instead of the browser (native-video.js).

@@ -6,9 +6,9 @@
  */
 
 const Commands = require('../../public/commands.js');
-const { getInnertube, getLibrary } = require('../youtube/youtubeiService.js');
 const { videoById } = require('../youtube/search.js');
 const media = require('../media.js');
+const lists = require('../lists.js');
 // The most videos a YouTube playlist import adds. The whole playlist goes to everyone on each
 // change, so this keeps that message a sensible size.
 const MAX_PLAYLIST_IMPORT = 500;
@@ -36,7 +36,10 @@ async function resolveVideoData(app, ws, v) {
   }
   
   if (v && typeof v === 'object') {
-    const link = v.link || v.url;
+    let link = v.link || v.url;
+    // A Drive or Dropbox share link is kept as the address of the file itself (see media.detect).
+    const detected = link ? media.detect(link) : null;
+    if (detected && detected.type === 'file' && detected.url) link = detected.url;
     // A Twitch, Vimeo or direct link, as its search result described it. Only links the player
     // can play are accepted, and titles are kept to a sensible length.
     if (link && !app.getYoutubeId(link)) {
@@ -167,134 +170,167 @@ async function removePlaylistItem(app, ws, index) {
 }
 
 /**
- * Loads and appends up to MAX_PLAYLIST_IMPORT tracks from an external YouTube playlist.
- * Filters out duplicate items and updates client player state.
+ * Loads a playlist source for a client: a YouTube playlist, or a list (a text file of links, a
+ * Google Doc, a Drive folder or an archive.org item, see server/lists.js). Links this world
+ * doesn't allow for the client (see media.allowedFor) are left out and counted.
+ *
+ * @param {Object} ws - Client WebSocket the list is for.
+ * @param {string} id - The playlist link or id.
+ * @returns {Promise<{title: string, items: Object[], skipped: number, truncated: boolean}>}
+ * @throws {Error} With a message to show when the list can't be loaded.
+ */
+async function loadPlaylistSource(ws, id) {
+  const list = await lists.loadAny(id, MAX_PLAYLIST_IMPORT);
+  const items = list.items.filter(item => !media.detect(item.link) || media.allowedFor(ws, item.link));
+  return { title: list.title, items, skipped: list.items.length - items.length + (list.dropped || 0), truncated: !!list.truncated };
+}
+
+/** A short note about the links of a list that were left out, or ''. */
+function skippedNote(skipped) {
+  return skipped > 0 ? ` ${skipped} link${skipped === 1 ? " wasn't" : "s weren't"} added (not playable, or not allowed in this world).` : '';
+}
+
+/**
+ * Loads a playlist into the room: a YouTube playlist (up to MAX_PLAYLIST_IMPORT videos), or a list
+ * of mixed links (see server/lists.js). Duplicates are skipped.
+ *
+ * Replacing the playlist (the default) is for the host, and only happens when the playlist is
+ * empty or `shouldClear` is set. With `append`, the list's videos are added to the end instead,
+ * which anyone may do whenever they may add a video (the host, or anyone while unlocked).
  *
  * @param {Object} app - Express application and state controller.
  * @param {Object} ws - Client WebSocket requesting playlist import.
  * @param {Object} data - Playlist import configuration.
- * @param {string} data.id - YouTube playlist URL or ID.
+ * @param {string} data.id - YouTube playlist URL or ID, or a list link.
  * @param {boolean} [data.shouldClear] - Whether to clear the existing playlist before import.
+ * @param {boolean} [data.append] - Add the list to the end of the playlist instead.
  * @returns {Promise<void>}
  */
 async function fromPlaylist(app, ws, data) {
-  const playlistId = app._getPlaylistId(data.id);
-  if (!playlistId) {
-    app.send(ws, Commands.ERROR, { message: "Invalid Playlist URL or ID provided." });
+  const id = data && typeof data.id === 'string' ? data.id.trim() : '';
+  if (!id || !lists.isPlaylistSource(id)) {
+    app.send(ws, Commands.ERROR, { message: "That is not a YouTube playlist or a list of links." });
     return;
   }
-  console.log(`fromPlaylist: user=${ws.u.name}, instance=${ws.i}, id=${playlistId}`);
-  app.onlyIfHost(ws, async () => {
-    if (app.videoPlayers[ws.i] && (app.videoPlayers[ws.i].playlist.length === 0 || data.shouldClear)) {
-      const player = app.videoPlayers[ws.i];
+  const player = app.videoPlayers[ws.i];
+  if (!player) return;
+  console.log(`fromPlaylist: user=${ws.u && ws.u.name}, instance=${ws.i}, id=${id}${data.append ? ' (append)' : ''}`);
+
+  if (data.append) {
+    app.onlyIfHost(ws, async () => {
+      let list;
       try {
-        const yt = await getInnertube();
-        const playlist = await yt.getPlaylist(playlistId);
-
-        let videos = [...playlist.items];
-        let currentPlaylist = playlist;
-
-        while (videos.length < MAX_PLAYLIST_IMPORT && currentPlaylist.has_continuation) {
-          currentPlaylist = await currentPlaylist.getContinuation();
-          const nextItems = currentPlaylist.items;
-          if (!nextItems || nextItems.length === 0) break;
-          videos = videos.concat(nextItems);
-        }
-
-        if (videos.length > MAX_PLAYLIST_IMPORT) {
-          videos = videos.slice(0, MAX_PLAYLIST_IMPORT);
-        }
-
-        app.resetPlaylist(ws); // Resets playlist, currentTime, currentTrack
-
-        // --- Duplicate Video Check for bulk add ---
-        const existingVideoIds = new Set();
-        let addedCount = 0;
-        videos.forEach(v => {
-          const videoId = v.id || v.videoId || v.content_id;
-          if (videoId && !existingVideoIds.has(videoId)) {
-            const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
-            
-            // Extract title
-            let title = '';
-            if (v.title) {
-              title = typeof v.title.text === 'string' ? v.title.text : (typeof v.title === 'string' ? v.title : '');
-            } else if (v.metadata && v.metadata.title) {
-              title = typeof v.metadata.title.text === 'string' ? v.metadata.title.text : '';
-            }
-            if (!title) title = 'Unknown Title';
-
-            // Extract duration
-            let durationMs = 0;
-            let durationText = '';
-            if (v.duration) {
-              durationText = typeof v.duration.text === 'string' ? v.duration.text : (typeof v.duration === 'string' ? v.duration : '');
-            } else if (v.content_image && Array.isArray(v.content_image.overlays)) {
-              const bottomOverlay = v.content_image.overlays.find(o => o.type === 'ThumbnailBottomOverlayView');
-              if (bottomOverlay && Array.isArray(bottomOverlay.badges) && bottomOverlay.badges.length > 0) {
-                durationText = bottomOverlay.badges[0].text || '';
-              }
-            }
-
-            if (durationText) {
-              const parts = durationText.split(':').map(Number);
-              if (parts.length === 2) {
-                durationMs = (parts[0] * 60 + parts[1]) * 1000;
-              } else if (parts.length === 3) {
-                durationMs = (parts[0] * 3600 + parts[1] * 60 + parts[2]) * 1000;
-              }
-            } else if (v.duration && typeof v.duration.seconds === 'number') {
-              durationMs = v.duration.seconds * 1000;
-            }
-
-            // Extract thumbnail
-            let thumbnail_url = '';
-            if (Array.isArray(v.thumbnails) && v.thumbnails.length > 0) {
-              thumbnail_url = v.thumbnails[v.thumbnails.length - 1].url;
-            } else if (v.thumbnail && typeof v.thumbnail.url === 'string') {
-              thumbnail_url = v.thumbnail.url;
-            } else if (v.thumbnail && Array.isArray(v.thumbnail.thumbnails) && v.thumbnail.thumbnails.length > 0) {
-              thumbnail_url = v.thumbnail.thumbnails[v.thumbnail.thumbnails.length - 1].url;
-            } else if (v.content_image && Array.isArray(v.content_image.image) && v.content_image.image.length > 0) {
-              thumbnail_url = v.content_image.image[v.content_image.image.length - 1].url;
-            } else {
-              thumbnail_url = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
-            }
-
-            const itemToCreate = {
-              title,
-              thumbnail_url,
-              milis_length: durationMs,
-              url: videoUrl
-            };
-
-            player.playlist.push(app._createVideoObject(itemToCreate, ws.u, 'ytfps'));
-            existingVideoIds.add(videoId);
-            addedCount++;
-          }
-        });
-
-        const duplicateCount = videos.length - addedCount;
-        if (duplicateCount > 0) {
-          app.send(ws, Commands.ERROR, { message: `Added ${addedCount} videos. ${duplicateCount} duplicate(s) were skipped.` });
-        }
-        // --- End of Check ---
-
-        if (player.playlist.length > 0) {
-          player.lastStartTime = new Date().getTime() / 1000;
-          player.sockets.forEach(socket => {
-            app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, playlist: player.playlist });
-          });
-        } else {
-          app.updateClients(ws.i); // This is fine, sends an empty playlist.
-        }
-        await app.savePlayerState(ws.i);
+        list = await loadPlaylistSource(ws, id);
       } catch (error) {
-        console.error(`Error fetching playlist ${playlistId}:`, error);
-        app.send(ws, Commands.ERROR, { message: "Could not load playlist. It might be private or contain no videos." });
+        console.error(`Error loading playlist ${id}:`, error.message);
+        app.send(ws, Commands.ERROR, { message: lists.errorMessage(error) });
+        return;
       }
+      const wasEmpty = player.playlist.length === 0;
+      let added = 0;
+      let duplicates = 0;
+      for (const item of list.items) {
+        if (player.playlist.length >= MAX_PLAYLIST_IMPORT) break;
+        if (app._isDuplicateVideo(player, item.link)) { duplicates++; continue; }
+        player.playlist.push(app._createVideoObject(item, ws.u, 'scraper'));
+        added++;
+      }
+      const full = player.playlist.length >= MAX_PLAYLIST_IMPORT && added + duplicates < list.items.length;
+      app.send(ws, Commands.ERROR, {
+        message: `Added ${added} video${added === 1 ? '' : 's'} from "${list.title}".`
+          + (duplicates ? ` ${duplicates} already in the playlist.` : '')
+          + (full ? ` The playlist is full (${MAX_PLAYLIST_IMPORT}).` : '')
+          + skippedNote(list.skipped)
+      });
+      if (!added) return;
+      if (wasEmpty) {
+        player.currentTrack = 0;
+        player.currentTime = 0;
+        player.lastStartTime = new Date().getTime() / 1000;
+        player.sockets.forEach(socket => {
+          app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, playlist: player.playlist });
+        });
+      } else {
+        player.sockets.forEach(socket => {
+          app.send(socket, Commands.PLAYLIST_UPDATED, { playlist: player.playlist, currentTrack: player.currentTrack });
+        });
+      }
+      await app.savePlayerState(ws.i);
+    }, player.locked);
+    return;
+  }
+
+  app.onlyIfHost(ws, async () => {
+    if (!(player.playlist.length === 0 || data.shouldClear)) return;
+    let list;
+    try {
+      list = await loadPlaylistSource(ws, id);
+    } catch (error) {
+      console.error(`Error loading playlist ${id}:`, error.message);
+      app.send(ws, Commands.ERROR, { message: lists.errorMessage(error) });
+      return;
     }
+    if (!list.items.length) {
+      app.send(ws, Commands.ERROR, { message: `Nothing in "${list.title}" can be played here.${skippedNote(list.skipped)}` });
+      return;
+    }
+
+    app.resetPlaylist(ws); // Resets playlist, currentTime, currentTrack
+    for (const item of list.items) {
+      if (player.playlist.length >= MAX_PLAYLIST_IMPORT) break;
+      if (app._isDuplicateVideo(player, item.link)) continue;
+      player.playlist.push(app._createVideoObject(item, ws.u, 'scraper'));
+    }
+    if (list.skipped > 0) {
+      app.send(ws, Commands.ERROR, { message: `Loaded ${player.playlist.length} videos from "${list.title}".${skippedNote(list.skipped)}` });
+    }
+
+    if (player.playlist.length > 0) {
+      player.lastStartTime = new Date().getTime() / 1000;
+      player.sockets.forEach(socket => {
+        app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, playlist: player.playlist });
+      });
+    } else {
+      app.updateClients(ws.i); // This is fine, sends an empty playlist.
+    }
+    await app.savePlayerState(ws.i);
   });
+}
+
+/**
+ * Sends a client the contents of a playlist source without changing the room's playlist, for
+ * browsing saved lists (the Lists view). Anyone may look; adding still goes through the usual
+ * commands and their permissions.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - Client WebSocket asking.
+ * @param {Object} data
+ * @param {string} data.id - YouTube playlist URL or ID, or a list link.
+ * @returns {Promise<void>}
+ */
+async function previewList(app, ws, data) {
+  const id = data && typeof data.id === 'string' ? data.id.trim().slice(0, 2000) : '';
+  const reply = (body) => app.send(ws, Commands.LIST_PREVIEW_RESULT, { id, ...body });
+  if (!id || !lists.isPlaylistSource(id)) {
+    reply({ error: "That is not a YouTube playlist or a list of links." });
+    return;
+  }
+  // A few at a time per connection: each can mean many lookups the first time.
+  ws.listPreviews = ws.listPreviews || 0;
+  if (ws.listPreviews >= 3) {
+    reply({ error: 'Still loading other lists. Try again in a moment.' });
+    return;
+  }
+  ws.listPreviews++;
+  try {
+    const list = await loadPlaylistSource(ws, id);
+    reply({ title: list.title, items: list.items, skipped: list.skipped, truncated: list.truncated });
+  } catch (error) {
+    console.error(`Error previewing playlist ${id}:`, error.message);
+    reply({ error: lists.errorMessage(error) });
+  } finally {
+    ws.listPreviews--;
+  }
 }
 
 /**
@@ -466,18 +502,7 @@ module.exports = {
   movePlaylistItem,
   removePlaylistItem,
   fromPlaylist,
-  clearPlaylist,
-  addAndPlay,
-  addAndPlayNext,
-  setVote,
-  updateVotes
-};
-
-module.exports = {
-  addToPlaylist,
-  movePlaylistItem,
-  removePlaylistItem,
-  fromPlaylist,
+  previewList,
   clearPlaylist,
   addAndPlay,
   addAndPlayNext,

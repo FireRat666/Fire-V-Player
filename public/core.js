@@ -930,7 +930,8 @@ var Core = class {
   getPlaylistPageUrl() {
     // Determine the mode ('karaoke' or 'playlist') based on the in-world script's setting.
     const mode = this.isKaraoke ? 'karaoke' : 'playlist';
-    const playlistParam = this.params.playlist ? `&playlist=${this.params.playlist}` : "";
+    const playlistParam = (this.params.playlist ? `&playlist=${encodeURIComponent(this.params.playlist)}` : "")
+      + (this.params.playlists ? `&playlists=${encodeURIComponent(this.params.playlists)}` : "");
     // Pass the mode as a URL parameter so the UI page knows its context.
     const proto = this.getProtocol();
     return `${proto}://${this.hostUrl}/${mode}/?instance=${encodeURIComponent(this.params.instance)}${playlistParam}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}&mode=${mode}`;
@@ -1559,10 +1560,15 @@ var Core = class {
     this.setOrDefault("playlist-panel-rotation", '');
     this.setOrDefault("playlist-panel-scale", '1');
 
+    // Saved playlists for the Lists view: comma separated YouTube playlists and list links.
+    this.setOrDefault("playlists", "");
+
     if (this.params.playlist) {
-      const extractedId = this.getPlaylistId(this.params.playlist);
+      // A YouTube playlist, or a link to a list of links (a .txt or .m3u file, a Google Doc, a
+      // Drive folder, an archive.org item), which the server reads.
+      const extractedId = this.getPlaylistId(this.params.playlist) || this.getListLink(this.params.playlist);
       if (!extractedId) {
-        console.warn(`Could not extract a valid playlist ID from provided playlist parameter: "${this.params.playlist}". It will be ignored.`);
+        console.warn(`Could not extract a valid playlist ID or list link from provided playlist parameter: "${this.params.playlist}". It will be ignored.`);
       }
       this.params.playlist = extractedId || "";
     }
@@ -1919,6 +1925,48 @@ var Core = class {
 
     // Return null if no valid ID could be extracted.
     return null;
+  }
+  // A link that may be a list of links (a .txt or .m3u file, a Google Doc, a Drive folder, an
+  // archive.org item), or null. Only the server can tell for sure, as it reads the file; this
+  // only rules out what can't be one (YouTube links, single videos and streams, non-links).
+  getListLink(input) {
+    const s = String(input || '').trim();
+    if (!/^https?:\/\/[^\s]+$/i.test(s) || s.length > 2000) return null;
+    const media = window.MediaSources ? MediaSources.detect(s) : null;
+    // Drive file links play as videos, but as a playlist setting they are text files of links.
+    if (media && !media.drive) return null;
+    return s;
+  }
+  // The saved playlists for the Lists view: the default playlist (the playlist setting), then the
+  // playlists setting's comma separated YouTube playlists and list links, at most 10.
+  getSavedLists() {
+    const out = [];
+    const seen = new Set();
+    const add = (raw, isDefault) => {
+      const s = String(raw || '').trim();
+      const id = s && (this.getPlaylistId(s) || this.getListLink(s));
+      if (!id || seen.has(id) || out.length >= 10) return;
+      seen.add(id);
+      out.push({ id, label: this.listLabel(id), isDefault: !!isDefault });
+    };
+    add(this.params && this.params.playlist, true);
+    String((this.params && this.params.playlists) || '').split(/\s*,\s*(?=https?:\/\/|PL|OLAK5uy_)|\s*\n\s*/).forEach(s => add(s, false));
+    return out;
+  }
+  // A name for a saved list until the server says what it's called.
+  listLabel(id) {
+    if (this.getPlaylistId(id)) return 'YouTube playlist';
+    try {
+      const u = new URL(id);
+      if (/docs\.google\.com$/i.test(u.hostname)) return 'Google Doc';
+      if (/drive\.google\.com$/i.test(u.hostname)) return /folders|embeddedfolderview/.test(u.pathname) ? 'Google Drive folder' : 'Google Drive file';
+      if (/archive\.org$/i.test(u.hostname)) return `archive.org: ${u.pathname.split('/').filter(Boolean)[1] || 'item'}`;
+      let name = u.pathname.split('/').filter(Boolean).pop() || u.hostname;
+      try { name = decodeURIComponent(name); } catch (e) {}
+      return name.replace(/\.(txt|m3u)$/i, '') || u.hostname;
+    } catch (e) {
+      return 'Playlist';
+    }
   }
   async setupToastify() {
     if (typeof Toastify === 'undefined') {

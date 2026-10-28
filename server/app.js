@@ -432,6 +432,9 @@ class App {
       case Commands.FROM_PLAYLIST:
         await playlistHandler.fromPlaylist(this, ws, msg.data);
         break;
+      case Commands.LIST_PREVIEW:
+        await playlistHandler.previewList(this, ws, msg.data);
+        break;
       case Commands.CLEAR_PLAYLIST:
         await playlistHandler.clearPlaylist(this, ws, msg.skipUpdate);
         break;

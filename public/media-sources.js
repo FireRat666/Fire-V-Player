@@ -17,7 +17,9 @@
  * @property {string} [hash] - Vimeo unlisted hash token if applicable.
  * @property {string} [name] - VDO.Ninja stream/room identifier if applicable.
  * @property {boolean} [live] - True for an MPEG-TS link that is a live stream (VRCDN's .live.ts).
- * @property {string} [url] - The address to play, when it differs from the link (a VRCDN rtspt:// link).
+ * @property {string} [url] - The address to play, when it differs from the link (a VRCDN rtspt:// link,
+ *   a Google Drive or Dropbox share link).
+ * @property {boolean} [drive] - True for a Google Drive file.
  * @property {string} [archive] - For a 'file' on the Internet Archive: the item's identifier.
  * @property {string} [file] - For an Internet Archive link to one of an item's video files: its name.
  * @property {string} [page] - For a publicdomainmovie.net page: the page to read the item from.
@@ -135,6 +137,23 @@ var MediaSources = (() => {
       if (parts[0] === 'movie' && parts[1]) return { type: 'archive', page: `https://publicdomainmovie.net/movie/${encodeURIComponent(parts[1])}` };
       return null;
     }
+    // A Google Drive file shared with anyone who has the link: played from its download address.
+    // confirm=t skips the page Drive shows instead of a big file ("can't scan for viruses").
+    if (host === 'drive.google.com') {
+      const id = (parts[0] === 'file' && parts[1] === 'd') ? parts[2] : (/^(open|uc)$/.test(parts[0] || '') ? u.searchParams.get('id') : '');
+      return id && /^[A-Za-z0-9_-]{10,}$/.test(id) ? { type: 'file', drive: true, url: `https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t` } : null;
+    }
+    if (host === 'drive.usercontent.google.com') {
+      const id = u.searchParams.get('id') || '';
+      return parts[0] === 'download' && /^[A-Za-z0-9_-]{10,}$/.test(id) ? { type: 'file', drive: true } : null;
+    }
+    // A Dropbox share link opens Dropbox's page about the file; raw=1 gives the file itself.
+    if (host === 'dropbox.com' && FILE_EXT.test(u.pathname)) {
+      const url = new URL(u.href);
+      url.searchParams.delete('dl');
+      url.searchParams.set('raw', '1');
+      return { type: 'file', url: url.href };
+    }
 
     if (/\.m3u8$/i.test(u.pathname)) return { type: 'hls' };
     // An MPEG-TS stream over HTTP (VRCDN's .live.ts links); browsers need mpegts.js to play it.
@@ -151,6 +170,7 @@ var MediaSources = (() => {
    */
   function nameFromLink(link) {
     const m = detect(link);
+    if (m && m.drive) return 'Google Drive video';
     const u = parseUrl(m && m.url || link);
     if (!u) return 'Video';
     const file = u.pathname.split('/').filter(Boolean).pop() || '';

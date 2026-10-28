@@ -8,9 +8,11 @@
 //
 // Put this file in a folder named Editor in a Unity project that has the Creator SDK
 // (e.g. Assets/Editor/). Anywhere else it doesn't compile (it uses editor-only code), and the
-// Console shows errors instead. It draws while the snippet's GameObject is selected.
+// Console shows errors instead. It draws while the snippet's GameObject is selected, and with
+// karaoke on gives the Singers button a drag handle (the SDK has none for it).
 using System;
 using System.Globalization;
+using System.Linq;
 using System.Xml.Linq;
 using BS;
 using BS.SDKEditor;
@@ -51,6 +53,7 @@ namespace FireVPlayer.EditorTools
         {
             // Inspector edits and gizmo drags all go through SnippetHtmlSync, so redraw on each.
             SnippetHtmlSync.Changed += (kind, instanceId, attribute) => SceneView.RepaintAll();
+            SceneView.duringSceneGui += OnSceneGui;
         }
 
         /// <summary>
@@ -70,10 +73,13 @@ namespace FireVPlayer.EditorTools
             if (e == null || !IsFireVPlayer(e)) return;
             bool used = WarnAboutCopies(e);
 
-            // Like the SDK's gizmos: the object's position and rotation are the frame the values
-            // are in. (Its scale isn't used: the player never sees it.)
+            // The player never sees the snippet's GameObject (or its parents): every value is
+            // measured from the world's origin. So this draws from the origin, where the player
+            // will really be. The SDK's own blue gizmos are drawn from the object instead, so
+            // they're off by the object's position and rotation when it isn't at the origin.
             var t = snippet.transform;
-            var frame = Matrix4x4.TRS(t.position, t.rotation, Vector3.one);
+            var frame = Matrix4x4.identity;
+            WarnIfMoved(t);
 
             bool follow = Attr(e, "controls-follow-screen") == "true";
             bool karaoke = Attr(e, "karaoke").ToLowerInvariant() == "true" || Attr(e, "mode").ToLowerInvariant() == "karaoke";
@@ -148,6 +154,95 @@ namespace FireVPlayer.EditorTools
             }
             Rect(frame, gPos, gRot, gScale, SingerSize, SingerOutline, karaoke ? SingerFill : Color.clear,
                 karaoke ? "Singers button" : "Singers button (karaoke only)");
+
+            // Remembered for the drag handle (OnSceneGui): gizmo drawing can't take mouse input.
+            _singer = karaoke && used
+                ? new SingerSpot
+                {
+                    instanceId = snippet.InstanceId, pos = gPos, rot = gRot, follow = follow, sPos = sPos, sRot = sRot,
+                    // Once it has a position the button no longer turns with the buttons, so the first
+                    // drag also saves the turn it has now, if its rotation would otherwise change.
+                    keepRot = !sp.HasValue && Quaternion.Angle(gRot,
+                        sr.HasValue && !follow ? Quaternion.Euler(sr.Value) : sRot * Quaternion.Euler(sr ?? SingerTilt)) > 0.01f
+                }
+                : null;
+        }
+
+        // ---- the Singers button's drag handle
+
+        // The SDK only puts handles on positions its <bs-gizmo> lines name. The Singers button has
+        // none there, as its default ("0 0 0": hang off the buttons) would put the handle at the
+        // origin. This one sits on the button wherever it really is.
+        class SingerSpot
+        {
+            public string instanceId;
+            public Vector3 pos, sPos;
+            public Quaternion rot, sRot;
+            public bool follow, keepRot;
+        }
+
+        static SingerSpot _singer;
+
+        static void OnSceneGui(SceneView view)
+        {
+            var s = _singer;
+            if (s == null) return;
+            var go = Selection.activeGameObject;
+            var snippet = go ? go.GetComponent<BSSnippet>() : null;
+            if (snippet == null || snippet.InstanceId != s.instanceId) return;
+
+            var handleRot = Tools.pivotRotation == PivotRotation.Local ? s.rot : Quaternion.identity;
+            EditorGUI.BeginChangeCheck();
+            var world = Handles.PositionHandle(s.pos, handleRot);
+            if (!EditorGUI.EndChangeCheck()) return;
+
+            // With controls-follow-screen it's an offset from the screen; otherwise a world position.
+            var value = s.follow ? Quaternion.Inverse(s.sRot) * (world - s.sPos) : world;
+            if (s.keepRot)
+            {
+                // Relative to the screen with controls-follow-screen, as the player reads it then.
+                var rot = s.follow ? Quaternion.Inverse(s.sRot) * s.rot : s.rot;
+                SnippetHtmlSync.SetAttribute(s.instanceId, "singer-button-rotation", Format(rot.eulerAngles));
+                s.keepRot = false;
+            }
+            SnippetHtmlSync.SetAttribute(s.instanceId, "singer-button-position", Format(value));
+            s.pos = world;
+        }
+
+        // Rounded to 3 decimals. "0 0 0" means the default, so a value that rounds to it is nudged.
+        static string Format(Vector3 v)
+        {
+            var n = new[] { v.x, v.y, v.z }.Select(x => Mathf.Round(x * 1000f) / 1000f).ToArray();
+            if (n.All(x => x == 0)) n[1] = 0.001f;
+            return string.Join(" ", n.Select(x => x.ToString(CultureInfo.InvariantCulture)));
+        }
+
+        // ---- the GameObject's own transform
+
+        static readonly Color MovedColor = new Color(1f, 0.85f, 0.2f, 1f);
+        // Objects already warned about in the Console, so several selected at once each warn once.
+        static readonly System.Collections.Generic.HashSet<int> _warnedMoved = new System.Collections.Generic.HashSet<int>();
+
+        /// <summary>
+        /// When the snippet's GameObject (with its parents) isn't at the world's origin, labels it
+        /// and draws a line from it to the origin, and says once in the Console that moving it
+        /// doesn't move the player.
+        /// </summary>
+        /// <param name="t">The snippet's transform.</param>
+        static void WarnIfMoved(Transform t)
+        {
+            bool moved = t.position.sqrMagnitude > 1e-6f || Quaternion.Angle(t.rotation, Quaternion.identity) > 0.01f;
+            int key = t.GetInstanceID(); // once per object, not on every frame of a drag
+            if (!moved) { _warnedMoved.Remove(key); return; }
+
+            Handles.color = MovedColor;
+            Handles.DrawDottedLine(t.position, Vector3.zero, 4f);
+            Handles.Label(t.position, "Fire-V-Player ignores where this object is.\nThe orange outlines show where it really goes\n(measured from the world origin). The blue SDK\ngizmos are off by this object's position.");
+            if (!_warnedMoved.Add(key)) return;
+            Debug.LogWarning($"[Fire-V-Player] '{t.name}' is at {t.position} (rotation {t.rotation.eulerAngles}) in the world, but the player " +
+                             "never sees this object: its position, rotation and scale settings are measured from the world origin. The orange " +
+                             "outlines show where it will really be; the SDK's blue gizmos are off by this object's position. To make them " +
+                             "agree, put this object (and its parents) at 0 0 0 with no rotation.", t);
         }
 
         // ---- copies

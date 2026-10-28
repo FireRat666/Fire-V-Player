@@ -221,7 +221,42 @@ class VideoElementSource extends BaseMediaSource {
 }
 
 /**
+ * The hosts Twitch must be told about in its `parent` option: the player page's own, plus every
+ * page it's framed inside (the 2D fallback outside a world puts it in an iframe on another page).
+ * Twitch refuses to play if any ancestor frame's host is missing.
+ * @returns {string[]}
+ */
+function twitchParents() {
+  const hosts = [location.hostname];
+  const add = url => {
+    try { const h = new URL(url).hostname; if (h && !hosts.includes(h)) hosts.push(h); } catch (e) {}
+  };
+  if (location.ancestorOrigins) Array.from(location.ancestorOrigins).forEach(add);
+  else if (window.top !== window && document.referrer) add(document.referrer);
+  return hosts;
+}
+
+/** Twitch's `time` parameter for a VOD start offset, e.g. 1h2m3s. */
+function twitchTime(seconds) {
+  const s = Math.max(0, Math.floor(seconds || 0));
+  return `${Math.floor(s / 3600)}h${Math.floor((s % 3600) / 60)}m${s % 60}s`;
+}
+
+/**
+ * The one Twitch embed for the life of the page. Twitch.Player's constructor adds a window
+ * 'message' listener that its destroy() never removes, so every `new Twitch.Player` would leak
+ * one. It's built once, kept in the page (hidden while something else plays) and re-pointed with
+ * setChannel/setVideo, or by reloading its iframe. `owner` is the TwitchSource using it now.
+ */
+const twitchEmbed = { player: null, div: null, ready: false, owner: null, key: '' };
+
+/**
  * Player adapter for live Twitch channels and recorded Twitch VODs.
+ *
+ * After pause() the embed sits in "Idle", and neither play(), seek() nor setVideo() brings it
+ * back; reloading its iframe with autoplay=true does. So whenever playback is asked for, it gets a
+ * moment to start, and if it hasn't the iframe is reloaded. A simulated click on the screen is the
+ * last resort.
  * @class TwitchSource
  * @extends {BaseMediaSource}
  */
@@ -232,85 +267,263 @@ class TwitchSource extends BaseMediaSource {
    */
   constructor(opts, media) {
     super(opts);
+    this.media = media;
     this.live = !!media.channel;
+    this.channel = media.channel || '';
+    this.video = media.video ? 'v' + String(media.video).replace(/^v/, '') : '';
+    this.key = this.live ? 'c:' + this.channel : 'v:' + this.video;
     this.muted = !!opts.muted;
-    this.div = document.createElement('div');
-    this.div.id = 'twitch-' + Date.now();
-    Object.assign(this.div.style, { width: '100%', height: '100%' });
-    opts.container.appendChild(this.div);
-    this.pendingSeek = opts.start;
+    this.volume = opts.volume;
+    this.playing = false;
+    this.pendingSeek = this.live ? 0 : Math.max(0, opts.start || 0);
+    this.setPos(this.pendingSeek);
     loadMediaScript('twitch').then(() => {
       if (this.destroyed) return;
+      if (!window.Twitch || !Twitch.Player) throw new Error('Could not load the Twitch player.');
+      this.attach();
+    }).catch(err => { if (!this.destroyed) opts.onError(err.message); });
+  }
+
+  /** True while this source is the one using the shared embed. */
+  mine() { return !this.destroyed && twitchEmbed.owner === this; }
+  get p() { return twitchEmbed.player; }
+
+  /** Builds the shared embed, or points it at this source's channel or video. */
+  attach() {
+    const e = twitchEmbed;
+    e.owner = this;
+    if (!e.div) {
+      e.div = document.createElement('div');
+      e.div.id = 'twitch-embed';
+      Object.assign(e.div.style, { width: '100%', height: '100%' });
+    }
+    // Moving an iframe reloads it, so it's only moved if the container has changed.
+    if (e.div.parentNode !== this.opts.container) this.opts.container.appendChild(e.div);
+    e.div.style.display = '';
+    if (!e.player) {
       const o = {
-        width: '100%', height: '100%', autoplay: true, muted: !!opts.muted,
-        // Twitch only plays inside pages on the sites listed here, so this is the player page's own.
-        parent: [location.hostname]
+        width: '100%', height: '100%', autoplay: true, muted: this.muted, parent: twitchParents()
       };
-      if (media.channel) o.channel = media.channel; else o.video = media.video;
-      const p = this.p = new Twitch.Player(this.div.id, o);
-      p.addEventListener(Twitch.Player.READY, () => {
-        this.ready = true;
-        this.setVolume(opts.volume);
-        if (!this.live && this.pendingSeek > 0) p.seek(this.pendingSeek);
-        this.wantPaused ? p.pause() : p.play();
-        this.kick = setTimeout(() => this.ensurePlaying(0), 3000);
-      });
-      // isPaused() can say "playing" while Twitch is still waiting for a click, so these events
-      // are what count as playing.
-      p.addEventListener(Twitch.Player.PLAYING, () => {
-        this.playing = true;
-        if (!this.live) this.reportDuration(p.getDuration());
-      });
-      p.addEventListener(Twitch.Player.PAUSE, () => { this.playing = false; });
-      if (Twitch.Player.ENDED) p.addEventListener(Twitch.Player.ENDED, () => { this.playing = false; });
-      if (Twitch.Player.OFFLINE) p.addEventListener(Twitch.Player.OFFLINE, () => opts.onError(`${media.channel} isn't live on Twitch right now.`));
-    }).catch(err => opts.onError(err.message));
+      if (this.live) o.channel = this.channel; else o.video = this.video;
+      if (this.pendingSeek > 0) o.time = twitchTime(this.pendingSeek);
+      e.key = this.key;
+      e.player = new Twitch.Player(e.div.id, o);
+      this.listen(e.player);
+      this.ensurePlaying(6000); // a new embed takes a few seconds to load
+      return;
+    }
+    if (e.key !== this.key) {
+      e.key = this.key;
+      try { this.live ? e.player.setChannel(this.channel) : e.player.setVideo(this.video); } catch (err) {
+        console.log('[Twitch] re-point failed', err);
+      }
+    }
+    this.ready = e.ready;
+    this.applyAudio();
+    if (this.wantPaused) { try { e.player.pause(); } catch (err) {} return; }
+    try { e.player.play(); } catch (err) {}
+    this.ensurePlaying();
+  }
+
+  /** The embed's events, added once for the life of the page and passed to whichever source owns it. */
+  listen(p) {
+    const T = Twitch.Player;
+    const owner = () => twitchEmbed.owner && twitchEmbed.owner.mine() ? twitchEmbed.owner : null;
+    p.addEventListener(T.READY, () => {
+      twitchEmbed.ready = true;
+      const s = owner();
+      if (s) s.onReady();
+    });
+    // isPaused() can say "playing" while Twitch is still waiting for a click, so these events
+    // are what count as playing.
+    p.addEventListener(T.PLAYING, () => { const s = owner(); if (s) s.onPlaying(); });
+    p.addEventListener(T.PAUSE, () => { const s = owner(); if (s) s.setPlaying(false); });
+    if (T.ENDED) p.addEventListener(T.ENDED, () => { const s = owner(); if (s) { s.setPlaying(false); s.ended = true; } });
+    if (T.OFFLINE) p.addEventListener(T.OFFLINE, () => {
+      const s = owner();
+      if (s && s.live) { s.offline = true; s.opts.onError(`${s.channel} isn't live on Twitch right now.`); }
+    });
+    if (T.ONLINE) p.addEventListener(T.ONLINE, () => { const s = owner(); if (s) s.offline = false; });
+  }
+
+  onReady() {
+    this.ready = true;
+    this.applyAudio();
+    if (this.wantPaused) { try { this.p.pause(); } catch (e) {} return; }
+    try { this.p.play(); } catch (e) {}
+  }
+
+  onPlaying() {
+    this.setPlaying(true);
+    this.ended = false;
+    this.offline = false;
+    if (!this.live) {
+      try { this.reportDuration(this.p.getDuration()); } catch (e) {}
+      // setVideo() takes only an id, so a start offset is a seek once the video is running.
+      if (this.pendingSeek > 0) {
+        const t = this.pendingSeek;
+        this.pendingSeek = 0;
+        try { if (Math.abs(this.p.getCurrentTime() - t) > 2) this.p.seek(t); } catch (e) {}
+        this.setPos(t);
+      }
+    }
+    if (this.wantPaused) { try { this.p.pause(); } catch (e) {} }
+  }
+
+  // getCurrentTime() reports ~0 for VODs in some embed builds even while playing, so the position
+  // is also counted here.
+  setPos(t) { this.posBase = Math.max(0, t || 0); this.posAt = performance.now(); }
+  setPlaying(on) {
+    if (on === this.playing) return;
+    if (!on) this.posBase = this.localTime();
+    this.posAt = performance.now();
+    this.playing = on;
+  }
+  localTime() { return this.posBase + (this.playing ? (performance.now() - this.posAt) / 1000 : 0); }
+
+  applyAudio() {
+    if (!this.p) return;
+    try {
+      this.p.setVolume(Math.max(0, Math.min(1, Number(this.volume) / 100)));
+      this.p.setMuted(this.muted);
+    } catch (e) {}
   }
 
   /**
-   * Ensures the Twitch stream starts playing and unmuted after browser user gesture policies.
-   * @param {number} tries - Number of retry attempts.
+   * Reloads the embed's iframe pointed at this source, playing from `startAt`. Unlike a new
+   * Twitch.Player it adds no listener, and it's the one thing that wakes an Idle embed.
    */
-  ensurePlaying(tries) {
-    clearTimeout(this.kick);
-    if (this.destroyed || this.wantPaused || !this.p || tries > 6) return;
-    const playing = this.playing && !this.p.isPaused();
-    if (playing) {
-      if (this.muted || !this.p.getMuted()) return; // playing as it should
-      // It started muted: unmute it, then check it didn't pause because of that.
-      this.p.setMuted(false);
-    } else if (tries === 0) {
-      this.p.play();
+  reloadIframe(startAt) {
+    const frame = twitchEmbed.div && twitchEmbed.div.querySelector('iframe');
+    if (!frame || !frame.src) return false;
+    let url;
+    try { url = new URL(frame.src); } catch (e) { return false; }
+    if (this.live) {
+      url.searchParams.set('channel', this.channel);
+      url.searchParams.delete('video');
+      url.searchParams.delete('time');
     } else {
-      console.log('[Twitch] not playing yet, clicking the screen');
-      this.opts.requestClick();
+      url.searchParams.set('video', this.video);
+      url.searchParams.delete('channel');
+      if (startAt > 0) url.searchParams.set('time', twitchTime(startAt)); else url.searchParams.delete('time');
+      this.pendingSeek = startAt;
     }
-    this.kick = setTimeout(() => this.ensurePlaying(tries + 1), 2500);
+    url.searchParams.set('autoplay', 'true');
+    url.searchParams.set('muted', String(this.muted));
+    url.searchParams.delete('parent');
+    twitchParents().forEach(h => url.searchParams.append('parent', h));
+    this.setPlaying(false);
+    frame.src = url.toString();
+    return true;
+  }
+
+  /**
+   * Makes sure the stream starts, and with sound unless muted is wanted. Each step waits, then
+   * checks: play() is given ~1.5s (a newly built embed longer), then the iframe is reloaded; if
+   * that didn't work either, the screen is clicked (twice at most).
+   */
+  ensurePlaying(ms = 1500) {
+    if (this.kick) return; // already watching
+    this.step = 0;
+    this.check(ms);
+  }
+  check(ms) {
+    this.kick = setTimeout(() => {
+      this.kick = null;
+      if (!this.mine() || this.wantPaused || !this.p || this.offline || this.ended) return;
+      const step = this.step++;
+      if (step > 8) return;
+      let paused = true, muted = false;
+      try { paused = this.p.isPaused(); muted = this.p.getMuted(); } catch (e) {}
+      if (this.playing && !paused) {
+        this.pendingSeek = 0;
+        if (this.muted || !muted) return; // playing as it should
+        // It started muted (the browser wouldn't allow sound): unmute it, then check that didn't
+        // stop it.
+        console.log('[Twitch] playing muted, unmuting');
+        try { this.p.setMuted(false); } catch (e) {}
+        this.unmuted = (this.unmuted || 0) + 1;
+        if (this.unmuted <= 3) this.check(2500);
+        return;
+      }
+      if (!this.reloaded) {
+        this.reloaded = true;
+        console.log('[Twitch] not playing yet, reloading the embed');
+        // A VOD can take a while to start after a reload (an ad first), so it's given time
+        // before the screen is clicked.
+        if (this.reloadIframe(this.live ? 0 : (this.pendingSeek || this.time()))) { this.check(10000); return; }
+      }
+      if ((this.clicks || 0) < 2) {
+        this.clicks = (this.clicks || 0) + 1;
+        console.log('[Twitch] still not playing, clicking the screen');
+        try { this.p.play(); } catch (e) {}
+        this.opts.requestClick();
+        this.check(3000);
+      }
+    }, ms);
   }
 
   play() {
     this.wantPaused = false;
-    if (this.ready) { this.p.play(); this.kick = setTimeout(() => this.ensurePlaying(1), 2500); }
+    if (!this.mine() || !this.p) return;
+    if (this.playing) return;
+    try { this.p.play(); } catch (e) {}
+    // A new play after a pause gets its own reload, since the pause left the embed Idle.
+    this.reloaded = false;
+    this.ensurePlaying();
   }
-  pause() { this.wantPaused = true; clearTimeout(this.kick); if (this.ready) this.p.pause(); }
+  pause() {
+    this.wantPaused = true;
+    clearTimeout(this.kick); this.kick = null;
+    if (this.mine() && this.p) { try { this.p.pause(); } catch (e) {} }
+  }
   seek(t) {
     if (this.live) return;
-    if (!this.ready) { this.pendingSeek = t; return; }
-    this.p.seek(Math.max(0, t));
+    t = Math.max(0, t);
+    this.setPos(t);
+    // Kept until the video is seen playing, so an iframe reload (or the PLAYING after an Idle
+    // embed wakes) goes to the asked-for place rather than where the embed last was.
+    this.pendingSeek = t;
+    if (!this.ready || !this.mine()) return;
+    try { this.p.seek(t); } catch (e) {}
+    // A seek on an Idle embed does nothing either, so a seek while playing is checked too.
+    if (!this.wantPaused) this.ensurePlaying();
   }
-  time() { return this.ready ? this.p.getCurrentTime() : (this.pendingSeek || 0); }
+  time() {
+    if (this.pendingSeek > 0 && !this.playing) return this.pendingSeek;
+    let real = 0;
+    try { if (this.ready && this.mine()) real = this.p.getCurrentTime() || 0; } catch (e) {}
+    if (real > 1) { this.posBase = real; this.posAt = performance.now(); return real; }
+    return this.localTime();
+  }
   state() {
-    if (!this.ready) return MEDIA_STATE.UNSTARTED;
-    if (this.p.getEnded && this.p.getEnded()) return MEDIA_STATE.ENDED;
-    return this.p.isPaused() ? MEDIA_STATE.PAUSED : MEDIA_STATE.PLAYING;
+    if (!this.ready || !this.mine()) return MEDIA_STATE.UNSTARTED;
+    try {
+      if (this.ended || (this.p.getEnded && this.p.getEnded())) return MEDIA_STATE.ENDED;
+      if (this.playing) return MEDIA_STATE.PLAYING;
+      // Asked to play but not started yet (or being revived): buffering, so the sync code
+      // doesn't keep calling play().
+      if (!this.wantPaused && this.kick) return MEDIA_STATE.BUFFERING;
+      return this.p.isPaused() ? MEDIA_STATE.PAUSED : MEDIA_STATE.PLAYING;
+    } catch (e) { return MEDIA_STATE.UNSTARTED; }
   }
-  setVolume(v) { this.volume = v; if (this.ready) this.p.setVolume(Math.max(0, Math.min(1, Number(v) / 100))); }
-  setMuted(m) { this.muted = !!m; if (this.ready) this.p.setMuted(!!m); }
+  setVolume(v) {
+    this.volume = v;
+    if (this.mine() && this.p) { try { this.p.setVolume(Math.max(0, Math.min(1, Number(v) / 100))); } catch (e) {} }
+  }
+  setMuted(m) {
+    this.muted = !!m;
+    if (this.mine() && this.p) { try { this.p.setMuted(!!m); } catch (e) {} }
+  }
   destroy() {
+    const owned = this.mine();
     this.destroyed = true;
-    clearTimeout(this.kick);
-    try { if (this.p) this.p.pause(); } catch (e) {}
-    this.div.remove();
+    clearTimeout(this.kick); this.kick = null;
+    if (!owned) return;
+    // The embed is kept for the next Twitch link (see twitchEmbed); it's only silenced and hidden.
+    twitchEmbed.owner = null;
+    try { this.p.pause(); } catch (e) {}
+    if (twitchEmbed.div) twitchEmbed.div.style.display = 'none';
   }
 }
 
@@ -335,7 +548,7 @@ class TwitchClipSource extends BaseMediaSource {
   load() {
     if (this.frame) this.frame.remove();
     const f = this.frame = document.createElement('iframe');
-    f.src = `https://clips.twitch.tv/embed?clip=${encodeURIComponent(this.clip)}&parent=${encodeURIComponent(location.hostname)}&autoplay=true&muted=${this.muted}`;
+    f.src = `https://clips.twitch.tv/embed?clip=${encodeURIComponent(this.clip)}&${twitchParents().map(h => `parent=${encodeURIComponent(h)}`).join('&')}&autoplay=true&muted=${this.muted}`;
     f.allow = 'autoplay; fullscreen';
     Object.assign(f.style, { width: '100%', height: '100%', border: '0' });
     this.opts.container.appendChild(f);

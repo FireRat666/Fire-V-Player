@@ -140,6 +140,9 @@ var Playlist = class {
         this.autoSyncEnabled = json.data.enabled;
         this.autoSync.innerText = this.autoSyncEnabled ? "Auto Sync: On" : "Auto Sync: Off";
         break;
+      case Commands.LIST_PREVIEW_RESULT:
+        this.onListPreview(json.data);
+        break;
       case Commands.PLAYLIST_UPDATED:
         if (this.core.player) {
           this.core.player.playlist = json.data.playlist;
@@ -352,6 +355,8 @@ var Playlist = class {
     this.loadDefaultPlaylistButton.style.display = (isMe && player.playlist.length === 0 && this.core.params.playlist) ? 'inline-block' : 'none';
     this.addPlaylist.style.display = !isMe ? 'none' :  'inline-block';
     this.addVideo.style.display = !isMe ? 'none' : 'inline-block';
+    this.savedListsButton.style.display = this.getLists().length ? 'block' : 'none';
+    if (this.listsOverlay.style.display !== 'none') this.renderLists(); // permissions, "in the playlist"
     this.takeOver.style.display = (player.canTakeOver || isMe) ? 'inline-block' : 'none';
     this.skipBackwards.style.display = isMe ? 'inline-block' : 'none';
     this.skipForward.style.display = isMe ? 'inline-block' : 'none';
@@ -554,6 +559,137 @@ var Playlist = class {
       }
     })
   }  
+  // ---- Saved lists: the snippet's playlist and playlists settings, and lists opened with Browse.
+  // Each opens to show its videos, which can be added one at a time or all at once.
+
+  setupListsUI() {
+    this.listData = new Map();
+    this.extraLists = [];
+    this.openListId = null;
+    this.listsOverlay = document.querySelector('.lists-overlay');
+    this.listsContainer = document.querySelector('.lists-container');
+    this.savedListsButton = document.querySelector('#savedLists');
+    this.savedListsButton.addEventListener('click', () => this.showLists());
+    document.querySelector('#close-lists-btn').addEventListener('click', () => { this.listsOverlay.style.display = 'none'; });
+    this.listsOverlay.addEventListener('click', (event) => {
+      if (event.target === this.listsOverlay) this.listsOverlay.style.display = 'none';
+    });
+  }
+  getLists() {
+    if (!this.savedLists) this.savedLists = this.core.getSavedLists();
+    return this.savedLists.concat(this.extraLists || []);
+  }
+  isHost() {
+    return !!(this.core.player && this.core.player.host && this.core.player.host.id === window.user.id);
+  }
+  // The host, or anyone while the player is unlocked (as the server checks).
+  canAdd() {
+    return this.isHost() || !(this.core.player && this.core.player.locked);
+  }
+  showLists() {
+    this.listsOverlay.style.display = 'flex';
+    this.getLists().forEach(list => this.requestList(list.id, false));
+    this.renderLists();
+  }
+  requestList(id, force) {
+    const had = this.listData.get(id);
+    if (had && !force && (had.state === 'ready' || (had.state === 'loading' && Date.now() - had.at < 120000))) return;
+    this.listData.set(id, { state: 'loading', at: Date.now() });
+    this.core.sendMessage({ path: Commands.LIST_PREVIEW, data: { id } });
+  }
+  onListPreview(data) {
+    if (!data || typeof data.id !== 'string') return;
+    if (data.error) this.listData.set(data.id, { state: 'error', error: String(data.error) });
+    else this.listData.set(data.id, { state: 'ready', title: data.title || '', items: Array.isArray(data.items) ? data.items : [], skipped: data.skipped || 0, truncated: !!data.truncated });
+    if (this.listsOverlay.style.display !== 'none') this.renderLists();
+  }
+  appendList(id) {
+    if (!this.canAdd()) { this.core.showToast("The player is locked: only the host can add videos.", 4000); return; }
+    this.core.sendMessage({ path: Commands.FROM_PLAYLIST, data: { id, append: true, fromPlaylist: true } });
+    this.core.showToast("Adding the list to the playlist...", 3000);
+  }
+  replaceWithList(id) {
+    this.core.sendMessage({ path: Commands.FROM_PLAYLIST, data: { id, shouldClear: true, fromPlaylist: true } });
+    this.core.showToast("Loading playlist...", 3000);
+  }
+  browseList(id) {
+    if (!this.getLists().some(l => l.id === id)) this.extraLists.push({ id, label: this.core.listLabel(id), isDefault: false });
+    this.openListId = id;
+    this.requestList(id, true);
+    this.savedListsButton.style.display = 'block';
+    this.showLists();
+  }
+  renderLists() {
+    const container = this.listsContainer;
+    const scroll = container.scrollTop;
+    container.innerHTML = '';
+    const host = this.isHost();
+    const canAdd = this.canAdd();
+    const inPlaylist = new Set(((this.core.player && this.core.player.playlist) || []).map(v => v.link));
+    const button = (parent, text, cls, onClick) => {
+      const b = this.core.makeAndAddElement('div', null, parent);
+      b.className = `button slim ${cls}`;
+      b.textContent = text;
+      b.addEventListener('click', (e) => { e.stopPropagation(); onClick(); });
+      return b;
+    };
+    const lists = this.getLists();
+    if (!lists.length) {
+      const empty = this.core.makeAndAddElement('div', { padding: '10px', color: '#bbb' }, container);
+      empty.textContent = "No saved lists. The snippet's playlist and playlists settings add them, or use Add Playlist > Browse.";
+    }
+    lists.forEach(list => {
+      const data = this.listData.get(list.id) || { state: 'none' };
+      const open = this.openListId === list.id;
+      const card = this.core.makeAndAddElement('div', null, container);
+      card.className = 'list-card';
+      const head = this.core.makeAndAddElement('div', null, card);
+      head.className = 'list-card-head';
+      const text = this.core.makeAndAddElement('div', null, head);
+      text.className = 'list-card-name';
+      const name = this.core.makeAndAddElement('div', null, text);
+      name.textContent = ((data.state === 'ready' && data.title) || list.label) + (list.isDefault ? ' (default)' : '');
+      const sub = this.core.makeAndAddElement('div', null, text);
+      sub.className = 'list-card-sub';
+      if (data.state === 'loading') sub.textContent = 'Loading...';
+      else if (data.state === 'error') sub.textContent = data.error;
+      else if (data.state === 'ready') {
+        const n = data.items.length;
+        sub.textContent = `${n} video${n === 1 ? '' : 's'}${data.truncated ? ' (the first ones)' : ''}${data.skipped ? `, ${data.skipped} skipped` : ''}`;
+      }
+      button(head, open ? 'Close' : 'Open', 'grey', () => {
+        this.openListId = open ? null : list.id;
+        if (!open && data.state === 'error') this.requestList(list.id, true);
+        this.renderLists();
+      });
+      if (data.state === 'error') button(head, 'Retry', 'teal', () => { this.requestList(list.id, true); this.renderLists(); });
+      if (canAdd && data.state !== 'error') button(head, 'Add All', 'teal', () => this.appendList(list.id));
+      if (host && data.state !== 'error') button(head, 'Replace', 'green', () => this.replaceWithList(list.id));
+      if (!open || data.state !== 'ready') return;
+      data.items.forEach((v, i) => {
+        const row = this.core.makeAndAddElement('div', null, card);
+        row.className = 'list-item';
+        const img = this.core.makeAndAddElement('img', null, row);
+        if (v.thumbnail) img.src = v.thumbnail;
+        const title = this.core.makeAndAddElement('div', null, row);
+        title.className = 'list-item-title';
+        const added = inPlaylist.has(v.link);
+        const dur = v.duration ? this.durationCode(v.duration / 1000) : '';
+        title.textContent = `${i + 1}. ${v.title || 'Untitled'}${dur ? '  (' + dur + ')' : ''}${added ? '  - in the playlist' : ''}`;
+        title.title = v.link;
+        if (canAdd && !added) button(row, 'Add', 'teal', () => {
+          this.core.sendMessage({ path: Commands.ADD_TO_PLAYLIST, data: v });
+          this.core.showToast(`"${v.title}" was added to the playlist!`);
+        });
+        if (host && !added) {
+          button(row, 'Play Now', 'teal', () => this.core.sendMessage({ path: Commands.ADD_AND_PLAY, data: v }));
+          button(row, 'Play Next', 'teal', () => this.core.sendMessage({ path: Commands.ADD_AND_PLAY_NEXT, data: v }));
+        }
+      });
+    });
+    container.scrollTop = scroll;
+  }
+
   parseTimeToSeconds(timeString) {
     if (!timeString) return null;
     timeString = timeString.trim();
@@ -788,17 +924,37 @@ var Playlist = class {
       this.addItemInput.focus();
     });
 
+    // A YouTube playlist, or a link to a list of links (which the server reads and checks).
+    const playlistInput = () => {
+      const input = this.addItemInput.value.trim();
+      const id = this.core.getPlaylistId(input) || this.core.getListLink(input);
+      if (!id) this.core.showToast("That is not a YouTube playlist or a link to a list of links.", 4000);
+      return id;
+    };
     this.addItemSubmit.addEventListener('click', () => {
-      const input = this.addItemInput.value;
-      const playlistId = this.core.getPlaylistId(input);
+      const playlistId = playlistInput();
       if (playlistId) {
         this.playlistId = playlistId;
         this.playPlaylist(true);
         this.addPlaylistOverlay.style.display = 'none';
-      } else {
-        this.core.showToast("Invalid Playlist URL or ID.", 4000);
+        this.core.showToast("Loading playlist...", 3000);
       }
     });
+    document.querySelector('#append-playlist-url-btn').addEventListener('click', () => {
+      const id = playlistInput();
+      if (id) {
+        this.appendList(id);
+        this.addPlaylistOverlay.style.display = 'none';
+      }
+    });
+    document.querySelector('#browse-playlist-url-btn').addEventListener('click', () => {
+      const id = playlistInput();
+      if (id) {
+        this.addPlaylistOverlay.style.display = 'none';
+        this.browseList(id);
+      }
+    });
+    this.setupListsUI();
 
     this.addItemInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {

@@ -14,6 +14,13 @@
 // can drop the elements created at runtime. The hand's Playlist button puts it in
 // front of the player, and the pill under it can be grabbed to carry it.
 var PAGE_JUMP = 5; // pages the << and >> buttons move
+// The list scrolls (a UI Toolkit ScrollView) through this many rows at a time; the page buttons
+// move this window through longer lists. Each row is about ten UI elements, and Unity is slow to
+// make hundreds of them, so the rows are a fixed pool, built a few at a time after the panel
+// opens, and refilled as the window moves. Without a scroll view, it's pages of rowsPerPage.
+var LIST_WINDOW = 20;
+var FIRST_ROWS = 8; // rows built with the panel; the rest follow in chunks of ROW_CHUNK
+var ROW_CHUNK = 4;
 // The progress bar's width in pixels: the panel (W, 1100) minus its padding and borders (42), the
 // now-playing card's padding (28), the time label (190) and the gap before the bar (10).
 var PROGRESS_WIDTH = 820;
@@ -28,9 +35,17 @@ var FirePlaylistPanel = class {
     this.W = 1100;            // panel resolution in pixels
     this.H = 940;
     this.rowsPerPage = 7;
-    this.tab = 'playlist';    // 'playlist' (the singer queue in karaoke mode) | 'search'
+    this.tab = 'playlist';    // 'playlist' (the singer queue in karaoke mode) | 'lists' | 'search'
+    // Where each tab's rows start, as an item index (see LIST_WINDOW).
     this.page = 0;
     this.searchPage = 0;
+    this.listsPage = 0;
+    // Saved lists (the Lists tab): the snippet's playlist and playlists settings, plus links
+    // opened from Add by link this visit. listData holds what the server sent for each.
+    this.savedLists = null;
+    this.extraLists = [];
+    this.listData = new Map();
+    this.openListId = null;
     this.searchResults = [];
     this.searchQuery = '';
     this.searchSource = 'youtube'; // 'youtube' | 'archive' (Internet Archive movies and TV)
@@ -152,9 +167,35 @@ var FirePlaylistPanel = class {
     if (ms) this.statusTimer = setTimeout(() => this.setText(this.statusLabel, ''), ms);
   }
 
-  // The search tab has one row fewer, for the row of search helpers above it.
+  // Rows shown at once. Without a scroll view, the search tab has one row fewer, for the row of
+  // search helpers above it.
   pageSize() {
+    if (this.scrolling) return LIST_WINDOW;
     return this.tab === 'search' ? this.rowsPerPage - 1 : this.rowsPerPage;
+  }
+
+  // Where the current tab's rows start (an item index), and setting it.
+  tabStart() {
+    return this.tab === 'search' ? this.searchPage : this.tab === 'lists' ? this.listsPage : this.page;
+  }
+  setTabStart(start) {
+    if (this.tab === 'search') this.searchPage = start;
+    else if (this.tab === 'lists') this.listsPage = start;
+    else this.page = start;
+  }
+
+  // What the current tab lists.
+  tabItems() {
+    if (this.tab === 'search') return this.searchResults;
+    if (this.tab === 'lists') return this.listEntries();
+    return this.listItems();
+  }
+
+  // Whether this user may add to the playlist: the host, or anyone while it's unlocked (as the
+  // server checks in addToPlaylist).
+  canAdd() {
+    const p = this.core.player;
+    return this.isHost() || !(p && p.locked);
   }
 
   loadRecent() {
@@ -418,15 +459,19 @@ var FirePlaylistPanel = class {
 
     const tabs = await row(this.mainView, { marginTop: '6px' });
     this.tabPlaylistBtn = await this.button(tabs, this.karaoke ? 'Singers' : 'Playlist', () => this.setTab('playlist'));
+    // Saved lists (not in karaoke mode, where the first tab is the singer queue).
+    this.tabListsBtn = this.karaoke ? null : await this.button(tabs, 'Lists', () => this.setTab('lists'));
     this.tabSearchBtn = await this.button(tabs, 'Search', () => this.setTab('search'));
     await this.div(tabs, { flexGrow: 1 });
-    // Page buttons: first, back 5, back 1, forward 1, forward 5, last.
+    // Page buttons: first, back 5, back 1, forward 1, forward 5, last. With a scroll view they
+    // move the window of rows (see LIST_WINDOW), and Now goes back to the playing video.
     const pageBtn = { backgroundColor: GREY, paddingLeft: '12px', paddingRight: '12px' };
+    this.nowBtn = this.karaoke ? null : await this.button(tabs, 'Now', () => this.showCurrent(), pageBtn);
     this.firstPageBtn = await this.button(tabs, '|<', () => this.changePage(-Infinity), pageBtn);
     this.back5Btn = await this.button(tabs, '<<', () => this.changePage(-PAGE_JUMP), pageBtn);
-    await this.button(tabs, '<', () => this.changePage(-1), pageBtn);
-    this.pageLabel = await this.label(tabs, '1 / 1', { fontSize: '20px', width: '100px', textAlign: 'center' });
-    await this.button(tabs, '>', () => this.changePage(1), pageBtn);
+    this.prevPageBtn = await this.button(tabs, '<', () => this.changePage(-1), pageBtn);
+    this.pageLabel = await this.label(tabs, '1 / 1', { fontSize: '18px', width: '130px', textAlign: 'center' });
+    this.nextPageBtn = await this.button(tabs, '>', () => this.changePage(1), pageBtn);
     this.fwd5Btn = await this.button(tabs, '>>', () => this.changePage(PAGE_JUMP), pageBtn);
     this.lastPageBtn = await this.button(tabs, '>|', () => this.changePage(Infinity), pageBtn);
 
@@ -466,28 +511,35 @@ var FirePlaylistPanel = class {
     }
     this.clearRecentBtn = await this.button(this.searchToolsRow, 'Clear', () => this.clearRecent(), Object.assign({ backgroundColor: '#c62828' }, small));
 
-    // List rows (a fixed pool, re-filled for each page)
-    const list = await this.div(this.mainView, { display: 'flex', flexDirection: 'column', flexGrow: 1, marginTop: '6px', overflow: 'hidden' });
-    this.rows = [];
-    for (let k = 0; k < this.rowsPerPage; k++) {
-      const r = await this.div(list, {
-        display: 'flex', flexDirection: 'row', alignItems: 'center', height: '76px', flexShrink: 0,
-        paddingLeft: '6px', paddingRight: '6px', marginBottom: '5px', borderRadius: '10px', backgroundColor: '#2a2a33'
-      });
-      const thumb = await this.div(r, { width: '112px', height: '63px', flexShrink: 0, borderRadius: '6px', backgroundColor: '#000000' });
-      const info = await this.div(r, { display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, minWidth: '0px', marginLeft: '12px', overflow: 'hidden' });
-      const title = await this.label(info, '', { fontSize: '22px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' });
-      const sub = await this.label(info, '', { fontSize: '16px', color: '#aaaaaa', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: '4px' });
-      const btns = await this.div(r, { display: 'flex', flexDirection: 'row', flexShrink: 0 });
-      const slot = { row: r, thumb, title, sub, buttons: [], actions: [] };
-      for (let b = 0; b < 4; b++) {
-        const idx = b;
-        const btn = await this.button(btns, '', () => { const fn = slot.actions[idx]; if (fn) fn(); }, { fontSize: '18px', paddingLeft: '12px', paddingRight: '12px' });
-        slot.buttons.push(btn);
+    // List rows: a fixed pool, re-filled as the list or its window changes. In a scroll view when
+    // this SDK has one (as in the user's other worlds: CreateScrollView, overflow scroll, and a
+    // column inside), else pages of rowsPerPage.
+    let list = null;
+    if (typeof this.ui.CreateScrollView === 'function') {
+      try {
+        const scroller = await this.ready(this.ui.CreateScrollView(this.mainView));
+        scroller.SetStyles({
+          flexGrow: 1, flexShrink: 1, flexBasis: '0px', minHeight: '0px', marginTop: '6px',
+          overflow: 'scroll', backgroundColor: 'rgba(0,0,0,0)', backgroundImage: 'none'
+        });
+        list = await this.div(scroller, { display: 'flex', flexDirection: 'column', flexShrink: 0, paddingRight: '6px' });
+        this.scroller = scroller;
+        this.scrolling = true;
+      } catch (e) {
+        console.warn('[PlaylistPanel] Could not make a scroll view, so the list shows in pages:', e);
+        list = null;
       }
-      this.rows.push(slot);
     }
-    this.emptyLabel = await this.label(list, '', { color: '#bbbbbb', fontSize: '22px', textAlign: 'center', marginTop: '20px' });
+    if (!list) {
+      this.scrolling = false;
+      list = await this.div(this.mainView, { display: 'flex', flexDirection: 'column', flexGrow: 1, marginTop: '6px', overflow: 'hidden' });
+    }
+    this.listCol = list;
+    // First, so rows added later go after it (it only shows when there are no rows).
+    this.emptyLabel = await this.label(list, '', { color: '#bbbbbb', fontSize: '22px', textAlign: 'center', marginTop: '20px', whiteSpace: 'normal' });
+    this.rows = [];
+    const firstRows = this.scrolling ? FIRST_ROWS : this.rowsPerPage;
+    for (let k = 0; k < firstRows; k++) this.rows.push(await this.makeRow(list));
 
     // ---- More view: host controls, seek, your own player, add by link
     this.moreView = await this.div(rootEl, { display: 'none', flexDirection: 'column', flexGrow: 1, flexShrink: 1, overflow: 'hidden', marginTop: '6px' });
@@ -564,10 +616,14 @@ var FirePlaylistPanel = class {
     const linkSection = this.karaoke ? null : await section('Add by link');
     if (linkSection) {
       const linkRow = await row(linkSection);
-      this.linkField = await this.textField(linkRow, 'Video link (YouTube, Twitch, Vimeo, .mp4, .m3u8) or YouTube playlist', v => { this.linkQuery = v; }, () => this.addLink(false));
+      this.linkField = await this.textField(linkRow, 'Video link, YouTube playlist, or list of links (.txt, .m3u, Google Doc, Drive folder)', v => { this.linkQuery = v; }, () => this.addLink(false));
       if (this.linkField) {
         await this.button(linkRow, 'Add Video', () => this.addLink(false));
-        this.loadPlaylistBtn = await this.button(linkRow, 'Load Playlist', () => this.addLink(true), { backgroundColor: '#2e7d32' });
+        // A playlist or list of links: replace the playlist (host), add it all to the end, or
+        // open it in the Lists tab to pick from.
+        this.loadPlaylistBtn = await this.button(linkRow, 'Load Playlist', () => this.addLink('replace'), { backgroundColor: '#2e7d32' });
+        this.appendListBtn = await this.button(linkRow, 'Add All', () => this.addLink('append'));
+        await this.button(linkRow, 'Browse', () => this.addLink('browse'), { backgroundColor: GREY });
       } else {
         await this.label(linkRow, 'Adding links needs text input, which this client does not have.', { color: '#bbbbbb', flexGrow: 1 });
       }
@@ -599,7 +655,62 @@ var FirePlaylistPanel = class {
     this.checkAlive();
     this.built = true;
     this.render();
-    console.log('[PlaylistPanel] Ready.');
+    console.log(`[PlaylistPanel] Ready${this.scrolling ? ' (scrolling list)' : ''}.`);
+    if (this.scrolling) this.growRows();
+  }
+
+  // One list row: picture, title and a line under it, and up to four buttons.
+  async makeRow(parent) {
+    const r = await this.div(parent, {
+      display: 'flex', flexDirection: 'row', alignItems: 'center', height: '76px', flexShrink: 0,
+      paddingLeft: '6px', paddingRight: '6px', marginBottom: '5px', borderRadius: '10px', backgroundColor: '#2a2a33'
+    });
+    const thumb = await this.div(r, { width: '112px', height: '63px', flexShrink: 0, borderRadius: '6px', backgroundColor: '#000000' });
+    const info = await this.div(r, { display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, minWidth: '0px', marginLeft: '12px', overflow: 'hidden' });
+    const title = await this.label(info, '', { fontSize: '22px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' });
+    const sub = await this.label(info, '', { fontSize: '16px', color: '#aaaaaa', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: '4px' });
+    const btns = await this.div(r, { display: 'flex', flexDirection: 'row', flexShrink: 0 });
+    const slot = { row: r, thumb, title, sub, buttons: [], actions: [] };
+    for (let b = 0; b < 4; b++) {
+      const idx = b;
+      const btn = await this.button(btns, '', () => { const fn = slot.actions[idx]; if (fn) fn(); }, { fontSize: '18px', paddingLeft: '12px', paddingRight: '12px' });
+      slot.buttons.push(btn);
+    }
+    // Hidden until it has something to show, so a row built ahead of time stays out of the way.
+    this.display(r, false);
+    return slot;
+  }
+
+  // Builds the rest of the scroll view's rows (up to LIST_WINDOW) a few at a time after the panel
+  // is ready, so opening it isn't held up and Unity isn't sent hundreds of elements at once.
+  async growRows() {
+    if (this.growing) return;
+    this.growing = true;
+    try {
+      while (!this.destroyed && this.rows.length < LIST_WINDOW) {
+        await new Promise(resolve => setTimeout(resolve, 60));
+        if (this.destroyed) return;
+        for (let k = 0; k < ROW_CHUNK && this.rows.length < LIST_WINDOW; k++) this.rows.push(await this.makeRow(this.listCol));
+        this.renderSoon();
+      }
+    } catch (e) {
+      if (!this.destroyed) console.warn(`[PlaylistPanel] Stopped adding list rows at ${this.rows.length}:`, e);
+    } finally {
+      this.growing = false;
+    }
+  }
+
+  // Puts the scroll view back at the top after the rows move to another part of the list. The SDK
+  // has no call to scroll a ScrollView, so the rows are hidden for a moment: with nothing in it,
+  // UI Toolkit clamps the scroll position to the top.
+  resetScroll() {
+    if (!this.scrolling || !this.listCol) return;
+    this.display(this.listCol, false);
+    clearTimeout(this.scrollTimer);
+    this.scrollTimer = setTimeout(() => {
+      this.scrollTimer = null;
+      if (!this.destroyed && this.listCol) this.display(this.listCol, true);
+    }, 150);
   }
 
   // Makes the mover the handle players pick up to carry the panel, as in the SDK docs: a shape,
@@ -696,8 +807,8 @@ var FirePlaylistPanel = class {
     this.destroyed = true;
     this.built = false;
     this.visible = false;
-    [this.tickTimer, this.renderTimer, this.statusTimer, this.searchTimer].forEach(t => { clearTimeout(t); clearInterval(t); });
-    this.tickTimer = this.renderTimer = this.statusTimer = this.searchTimer = null;
+    [this.tickTimer, this.renderTimer, this.statusTimer, this.searchTimer, this.scrollTimer].forEach(t => { clearTimeout(t); clearInterval(t); });
+    this.tickTimer = this.renderTimer = this.statusTimer = this.searchTimer = this.scrollTimer = null;
     (this.thumbTimers || []).forEach(clearTimeout);
     this.thumbTimers = [];
     if (typeof this.core.removeMessageListener === 'function') this.core.removeMessageListener(this.onMessageFn);
@@ -913,10 +1024,11 @@ var FirePlaylistPanel = class {
     if (this.destroyed) return;
     this.visible = true;
     this.refresh(false);
-    // Start on the page holding the current track.
+    // Start at the current track.
     const player = this.core.player;
     if (this.tab === 'playlist' && !this.karaoke && player && typeof player.currentTrack === 'number') {
-      this.page = Math.floor(player.currentTrack / this.rowsPerPage);
+      this.page = this.currentStart();
+      this.resetScroll(); // also back to the top if it was scrolled before closing
     }
     this.render();
     // Closed, or just built (as after a mode change): it needs a place first.
@@ -959,7 +1071,9 @@ var FirePlaylistPanel = class {
   }
 
   setTab(tab) {
+    if (tab !== this.tab) this.resetScroll();
     this.tab = tab;
+    if (tab === 'lists') this.loadSavedLists();
     this.render();
   }
 
@@ -1059,15 +1173,17 @@ var FirePlaylistPanel = class {
     el.OnMouseLeave(() => finish());
   }
 
-  addLink(asPlaylist) {
+  // mode: false (one video), 'replace' (load as the playlist), 'append' (add a whole list to the
+  // end) or 'browse' (open it in the Lists tab).
+  addLink(mode) {
     const q = (this.linkQuery || '').trim();
     if (!q) { this.setStatus('Paste a link first.'); return; }
-    if (asPlaylist) {
-      if (!this.isHost()) { this.setStatus('Only the host can load a playlist.'); return; }
-      const id = this.core.getPlaylistId(q);
-      if (!id) { this.setStatus('That is not a YouTube playlist link.'); return; }
-      this.send(Commands.FROM_PLAYLIST, { id, shouldClear: true, fromPlaylist: true });
-      this.setStatus('Loading playlist...');
+    if (mode) {
+      const id = this.core.getPlaylistId(q) || (this.core.getListLink ? this.core.getListLink(q) : null);
+      if (!id) { this.setStatus('That is not a YouTube playlist or a link to a list of links.'); return; }
+      if (mode === 'browse') { this.browseList(id); return; }
+      if (mode === 'append') { this.appendList(id); return; }
+      this.replaceWithList(id);
       return;
     }
     // YouTube, Twitch, Vimeo or a direct video link: the server checks it can be played.
@@ -1088,11 +1204,27 @@ var FirePlaylistPanel = class {
     this.render();
   }
 
+  // The furthest a tab's rows can start: the last full window (scrolling), or the last page.
+  maxStart(total) {
+    const size = this.pageSize();
+    if (this.scrolling) return Math.max(0, total - size);
+    return Math.max(0, Math.ceil(total / size) - 1) * size;
+  }
+
+  // Moves the rows by `delta` windows (pages), or to either end with -Infinity / Infinity.
   changePage(delta) {
-    const total = this.tab === 'search' ? this.searchResults.length : this.listItems().length;
-    const pages = Math.max(1, Math.ceil(total / this.pageSize()));
-    if (this.tab === 'search') this.searchPage = Math.min(pages - 1, Math.max(0, this.searchPage + delta));
-    else this.page = Math.min(pages - 1, Math.max(0, this.page + delta));
+    const size = this.pageSize();
+    const from = this.tabStart();
+    let start = Math.min(this.maxStart(this.tabItems().length), Math.max(0, from + delta * size));
+    if (!this.scrolling) start = Math.floor(start / size) * size;
+    this.showFrom(start);
+  }
+
+  // Shows the current tab's rows from item `start`, at the top of the scroll view.
+  showFrom(start) {
+    const changed = start !== this.tabStart();
+    this.setTabStart(start);
+    if (changed) this.resetScroll();
     this.render();
   }
 
@@ -1103,6 +1235,22 @@ var FirePlaylistPanel = class {
     this.setStyle(this.sourceBtn, 'backgroundColor', this.searchSource === 'archive' ? '#6d4c41' : '#c62828');
     if ((this.searchQuery || '').trim().length >= 2) this.doSearch();
     else this.setStatus(this.searchSource === 'archive' ? 'Searching Internet Archive movies and TV.' : 'Searching YouTube.');
+  }
+
+  // Where the playing video is: its row near the top (one before it shows above), or its page.
+  currentStart() {
+    const player = this.core.player;
+    const current = player && typeof player.currentTrack === 'number' ? player.currentTrack : 0;
+    const size = this.pageSize();
+    const total = this.listItems().length;
+    if (!this.scrolling) return Math.floor(current / size) * size;
+    return Math.min(this.maxStart(total), Math.max(0, current - 1));
+  }
+
+  // The Now button: the playlist tab, at the playing video.
+  showCurrent() {
+    if (this.tab !== 'playlist') { this.tab = 'playlist'; this.resetScroll(); }
+    this.showFrom(this.currentStart());
   }
 
   doSearch() {
@@ -1170,6 +1318,92 @@ var FirePlaylistPanel = class {
     this.setTab('playlist');
   }
 
+  // ---------------------------------------------------------------- saved lists (Lists tab)
+
+  // The saved lists: the snippet's (see Core.getSavedLists), then any opened with Browse.
+  getLists() {
+    if (!this.savedLists) this.savedLists = typeof this.core.getSavedLists === 'function' ? this.core.getSavedLists() : [];
+    return this.savedLists.concat(this.extraLists);
+  }
+
+  // The Lists tab's rows: each list, and the videos of the one that's open under it.
+  listEntries() {
+    const out = [];
+    for (const list of this.getLists()) {
+      out.push({ kind: 'list', list });
+      const data = this.listData.get(list.id);
+      if (this.openListId === list.id && data && data.items) {
+        data.items.forEach((item, index) => out.push({ kind: 'item', list, item, index }));
+      }
+    }
+    return out;
+  }
+
+  // Asks the server for each saved list it hasn't sent yet, for their names and sizes.
+  loadSavedLists() {
+    this.getLists().forEach(list => this.requestList(list.id, false));
+  }
+
+  // Asks the server what's in a list (it replies with LIST_PREVIEW_RESULT).
+  requestList(id, force) {
+    const had = this.listData.get(id);
+    if (had && !force && (had.state === 'ready' || (had.state === 'loading' && Date.now() - had.at < 120000))) return;
+    this.listData.set(id, { state: 'loading', at: Date.now() });
+    this.send(Commands.LIST_PREVIEW, { id });
+    this.renderSoon();
+  }
+
+  onListPreview(data) {
+    if (!data || typeof data.id !== 'string') return;
+    if (data.error) {
+      this.listData.set(data.id, { state: 'error', error: String(data.error) });
+      if (this.openListId === data.id) this.setStatus(String(data.error), 6000);
+      return;
+    }
+    const items = Array.isArray(data.items) ? data.items : [];
+    this.listData.set(data.id, { state: 'ready', title: data.title || '', items, skipped: data.skipped || 0, truncated: !!data.truncated });
+  }
+
+  // Opens a list under its row (closing any other), or closes it.
+  toggleList(id) {
+    if (this.openListId === id) {
+      this.openListId = null;
+      this.render();
+      return;
+    }
+    this.openListId = id;
+    const data = this.listData.get(id);
+    if (!data || data.state === 'error') this.requestList(id, true);
+    // The list's own row at the top, its videos under it.
+    const at = this.listEntries().findIndex(e => e.kind === 'list' && e.list.id === id);
+    this.tab = 'lists';
+    this.showFrom(Math.max(0, Math.min(this.maxStart(this.listEntries().length), at)));
+  }
+
+  // Adds a whole list to the end of the playlist (the host, or anyone while unlocked).
+  appendList(id) {
+    if (!this.canAdd()) { this.setStatus('The player is locked: only the host can add videos.'); return; }
+    this.send(Commands.FROM_PLAYLIST, { id, append: true, fromPlaylist: true });
+    this.setStatus('Adding the list to the playlist...', 0);
+  }
+
+  // Replaces the playlist with a list (the host only).
+  replaceWithList(id) {
+    if (!this.isHost()) { this.setStatus('Only the host can load a playlist.'); return; }
+    this.send(Commands.FROM_PLAYLIST, { id, shouldClear: true, fromPlaylist: true });
+    this.setStatus('Loading playlist...', 0);
+  }
+
+  // Opens a pasted list link in the Lists tab, for this visit.
+  browseList(id) {
+    if (!this.getLists().some(l => l.id === id)) {
+      this.extraLists.push({ id, label: typeof this.core.listLabel === 'function' ? this.core.listLabel(id) : 'Playlist', isDefault: false });
+    }
+    this.view = 'main';
+    this.openListId = null;
+    this.toggleList(id);
+  }
+
   // ---------------------------------------------------------------- messages
 
   onMessage(json) {
@@ -1182,6 +1416,7 @@ var FirePlaylistPanel = class {
         console.log(`[PlaylistPanel] Got ${this.searchResults.length} search results.`);
         this.view = 'main';
         this.searchPage = 0;
+        this.resetScroll(); // new results start at the top
         this.tab = 'search';
         const n = this.searchResults.length;
         this.setStatus(n ? `${n} result${n === 1 ? '' : 's'}` : 'No results.');
@@ -1205,6 +1440,9 @@ var FirePlaylistPanel = class {
         break;
       case Commands.AUTO_SYNC_STATE_CHANGED:
         if (json.data && typeof json.data.enabled === 'boolean') this.autoSync = json.data.enabled;
+        break;
+      case Commands.LIST_PREVIEW_RESULT:
+        this.onListPreview(json.data);
         break;
       case Commands.PLAYBACK_UPDATE:
         if (json.data && json.data.type === 'initial-sync' && this.refreshing) {
@@ -1350,10 +1588,19 @@ var FirePlaylistPanel = class {
     }
 
     // Tabs
+    if (this.karaoke && this.tab === 'lists') this.tab = 'playlist';
     const onSearch = this.tab === 'search';
+    const onLists = this.tab === 'lists';
     const list = this.listItems();
     this.setText(this.tabPlaylistBtn, `${this.karaoke ? 'Singers' : 'Playlist'} (${list.length})`);
-    this.setStyle(this.tabPlaylistBtn, 'backgroundColor', onSearch ? '#455a64' : '#1565c0');
+    this.setStyle(this.tabPlaylistBtn, 'backgroundColor', this.tab === 'playlist' ? '#1565c0' : '#455a64');
+    if (this.tabListsBtn) {
+      const lists = this.getLists();
+      this.setText(this.tabListsBtn, lists.length ? `Lists (${lists.length})` : 'Lists');
+      this.setStyle(this.tabListsBtn, 'backgroundColor', onLists ? '#1565c0' : '#455a64');
+    }
+    if (this.nowBtn) this.display(this.nowBtn, !!(hasPlaylist && (this.tab !== 'playlist' || list.length > this.pageSize())));
+    if (this.appendListBtn) this.display(this.appendListBtn, this.canAdd());
     this.setStyle(this.tabSearchBtn, 'backgroundColor', onSearch ? '#1565c0' : '#455a64');
     this.display(this.searchRow, onSearch);
     this.display(this.searchToolsRow, onSearch && !!this.searchField);
@@ -1365,34 +1612,48 @@ var FirePlaylistPanel = class {
     this.display(this.recentLabel, recent.length > 0);
     this.display(this.clearRecentBtn, recent.length > 0);
 
-    const items = onSearch ? this.searchResults : list;
+    const items = onLists ? this.listEntries() : onSearch ? this.searchResults : list;
     const size = this.pageSize();
     const pages = Math.max(1, Math.ceil(items.length / size));
-    if (onSearch) this.searchPage = Math.min(this.searchPage, pages - 1);
-    else this.page = Math.min(this.page, pages - 1);
-    const page = onSearch ? this.searchPage : this.page;
-    this.setText(this.pageLabel, `${page + 1} / ${pages}`);
-    // First and last are worth showing from 3 pages, the jumps of 5 only past that.
+    const start = Math.min(this.tabStart(), this.maxStart(items.length));
+    this.setTabStart(start);
+    if (this.scrolling) {
+      // The window of rows in the scroll view: "21-40 / 300".
+      this.setText(this.pageLabel, items.length ? `${start + 1}-${Math.min(items.length, start + size)} / ${items.length}` : '0 / 0');
+    } else {
+      this.setText(this.pageLabel, `${Math.floor(start / size) + 1} / ${pages}`);
+    }
+    // Back and forward only when there's more than fits, first and last from 3 windows, the
+    // jumps of 5 only past that.
+    this.display(this.prevPageBtn, pages > 1);
+    this.display(this.nextPageBtn, pages > 1);
     this.display(this.firstPageBtn, pages > 2);
     this.display(this.lastPageBtn, pages > 2);
     this.display(this.back5Btn, pages > PAGE_JUMP);
     this.display(this.fwd5Btn, pages > PAGE_JUMP);
 
     // Rows
+    const canAdd = this.canAdd();
+    const inPlaylist = onLists ? new Set(playlist.map(v => v.link)) : null;
     for (let k = 0; k < this.rows.length; k++) {
       const slot = this.rows[k];
-      const i = page * size + k;
+      const i = start + k;
       const v = k < size ? items[i] : null;
       this.display(slot.row, !!v);
       if (!v) continue;
-      if (onSearch) this.fillSearchRow(slot, v, host);
+      if (onLists) {
+        if (v.kind === 'list') this.fillListRow(slot, v.list, host, canAdd);
+        else this.fillListItemRow(slot, v, host, canAdd, inPlaylist);
+      }
+      else if (onSearch) this.fillSearchRow(slot, v, host);
       else if (this.karaoke) this.fillSingerRow(slot, v, i, items, host);
       else this.fillPlaylistRow(slot, v, i, player, host);
     }
 
     let empty = '';
     if (!items.length) {
-      if (onSearch) empty = this.karaoke ? 'Search for a song above, or paste a link.' : 'Search YouTube above, or paste a YouTube, Twitch, Vimeo or video link.';
+      if (onLists) empty = "No saved lists. The snippet's playlist and playlists settings add them, or paste a list link in More... > Add by link and press Browse.";
+      else if (onSearch) empty = this.karaoke ? 'Search for a song above, or paste a link.' : 'Search YouTube above, or paste a YouTube, Twitch, Vimeo or video link.';
       else if (this.karaoke) empty = host ? 'No singers yet. Use Search to pick a song and join the queue.' : 'No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first (More...).';
       else empty = 'The playlist is empty. Use Search to add videos.';
     }
@@ -1434,6 +1695,8 @@ var FirePlaylistPanel = class {
       (this.rows || []).forEach((slot, k) => {
         this.thumbTimers.push(setTimeout(() => {
           if (this.destroyed) return;
+          const r = this.cache.get(slot.row);
+          if (r && r.display === 'none') return; // a row not in use
           const c = this.cache.get(slot.thumb);
           const value = c && c.backgroundImage;
           if (!value) return;
@@ -1525,6 +1788,70 @@ var FirePlaylistPanel = class {
       defs.push({ text: 'Play Next', fn: () => { this.send(Commands.ADD_AND_PLAY_NEXT, v); this.setStatus(`"${v.title}" plays next`); } });
     }
     this.setButtons(slot, defs);
+  }
+
+  // Lists tab: a saved list. Open shows its videos under it; Add All puts them all at the end of
+  // the playlist; Replace (host) makes it the playlist.
+  fillListRow(slot, list, host, canAdd) {
+    const data = this.listData.get(list.id) || { state: 'none' };
+    const open = this.openListId === list.id;
+    this.setStyle(slot.row, 'backgroundColor', open ? '#283593' : '#37474f');
+    const name = (data.state === 'ready' && data.title) || list.label;
+    this.setText(slot.title, `${open ? 'v ' : '> '}${name}${list.isDefault ? '  (default)' : ''}`);
+    let sub;
+    if (data.state === 'loading') sub = 'Loading...';
+    else if (data.state === 'error') sub = data.error;
+    else if (data.state === 'ready') {
+      const n = data.items.length;
+      sub = `${n} video${n === 1 ? '' : 's'}${data.truncated ? ' (the first ones)' : ''}${data.skipped ? `, ${data.skipped} skipped` : ''}`;
+    } else sub = 'Press Open to see what is in it';
+    this.setText(slot.sub, sub);
+    const first = data.state === 'ready' && data.items[0];
+    this.setThumb(slot, first ? first.thumbnail : '', first ? first.link : '');
+
+    const defs = [{ text: open ? 'Close' : 'Open', color: '#455a64', fn: () => this.toggleList(list.id) }];
+    if (data.state === 'error') defs.push({ text: 'Retry', fn: () => this.requestList(list.id, true) });
+    else {
+      if (canAdd) defs.push({ text: 'Add All', fn: () => this.appendList(list.id) });
+      if (host) defs.push({ text: 'Replace', color: '#2e7d32', fn: () => this.replaceWithList(list.id) });
+    }
+    this.setButtons(slot, defs);
+  }
+
+  // Lists tab: one video of the open list.
+  fillListItemRow(slot, entry, host, canAdd, inPlaylist) {
+    const v = entry.item;
+    const added = inPlaylist && inPlaylist.has(v.link);
+    this.setStyle(slot.row, 'backgroundColor', entry.index % 2 === 0 ? '#2a2a33' : '#31313c');
+    this.setText(slot.title, `    ${entry.index + 1}. ${v.title || 'Untitled'}`);
+    const dur = v.duration ? this.timeCode(v.duration / 1000) : '';
+    this.setText(slot.sub, [added ? 'In the playlist' : '', this.sourceName(v.link), dur].filter(Boolean).join('  -  '));
+    this.setThumb(slot, v.thumbnail, v.link);
+
+    const defs = [];
+    if (canAdd && !added) defs.push({ text: 'Add', fn: () => { this.send(Commands.ADD_TO_PLAYLIST, v); this.setStatus(`Added "${v.title}"`); } });
+    if (host && added) {
+      // Already queued: play it where it is.
+      defs.push({ text: 'Play', color: '#2e7d32', fn: () => {
+        const p = this.core.player;
+        const i = p && p.playlist ? p.playlist.findIndex(x => x.link === v.link) : -1;
+        if (i >= 0) this.send(Commands.SET_TRACK, { index: i, link: v.link });
+      } });
+    } else if (host) {
+      defs.push({ text: 'Play Now', color: '#2e7d32', fn: () => { this.send(Commands.ADD_AND_PLAY, v); this.setStatus(`Playing "${v.title}"`); } });
+      defs.push({ text: 'Play Next', fn: () => { this.send(Commands.ADD_AND_PLAY_NEXT, v); this.setStatus(`"${v.title}" plays next`); } });
+    }
+    this.setButtons(slot, defs);
+  }
+
+  // Where a video is from, for the line under its title.
+  sourceName(link) {
+    const m = window.MediaSources ? MediaSources.detect(link) : null;
+    if (!m) return '';
+    if (m.drive) return 'Google Drive';
+    if (/dropbox/i.test(String(link))) return 'Dropbox';
+    if (/archive\.org/i.test(String(link))) return 'archive.org';
+    return ({ youtube: 'YouTube', twitch: 'Twitch', twitchclip: 'Twitch clip', vimeo: 'Vimeo', vdoninja: 'VDO.Ninja', hls: 'Stream', mpegts: 'Stream', file: 'File' })[m.type] || '';
   }
 };
 window.FirePlaylistPanel = FirePlaylistPanel;

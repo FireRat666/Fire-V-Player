@@ -76,6 +76,7 @@ In a Creator SDK world (`Assets/WebRoot/index.html`), add the player as a snippe
   room=""
   karaoke="false"
   playlist="PLZWiw-xxQ4SPDmADhvme7-pU2bx3s7nKX"
+  playlists=""
   youtube=""
   volume="10"
   mute="false"
@@ -125,12 +126,12 @@ Settings are the same as the script attributes below, except:
 
 The player builds everything in the world with the BS SDK (`BS.GameObject` and components such as `BS.Browser`), so the page needs no `<a-scene>`; one left over from older versions does no harm. Script-tag positions and rotations still use A-Frame axes (Z flipped from Unity's), as before, so existing script tags keep working.
 
-In these worlds the Playlist button opens an **in-world panel** beside the screen. The main view has playback and volume controls, the playlist (play, reorder, remove, vote) and YouTube search. Under the search box are your last five searches (kept on your device; click one to search again, **Clear** forgets them) and, in karaoke mode, **+ karaoke**, **+ lyrics** and **+ zoom karaoke**, which add that word to the search. Search also accepts a video link, or a playlist link (host only), which replaces the playlist. Beside the page number, **<** and **>** turn one page, **<<** and **>>** five (shown once there are more than five pages), and **|<** and **>|** go to the first and last page. To move the panel, grab the pill under it in VR and carry it; the panel comes with it, stays upright and stays where you let go. The hand's Playlist button opens it in front of you, karaoke's Singers button opens it just above that button, and the Playlist button by the screen puts it back beside the screen. Only your own panel moves. **Refresh** fetches the latest playlist from the server; the panel also does this each time it opens. **More...** opens a second view with:
+In these worlds the Playlist button opens an **in-world panel** beside the screen. The main view has playback and volume controls, the playlist (play, reorder, remove, vote), the saved **Lists** (see [Saved lists](#saved-lists)) and YouTube search. Under the search box are your last five searches (kept on your device; click one to search again, **Clear** forgets them) and, in karaoke mode, **+ karaoke**, **+ lyrics** and **+ zoom karaoke**, which add that word to the search. Search also accepts a video link, or a playlist link (host only), which replaces the playlist. The list scrolls (thumbstick, or drag it), 20 rows at a time; the panel opens at the video that's playing. Beside the tabs, **21-40 / 300** says which rows are shown, **<** and **>** move to the next or last 20, **<<** and **>>** move 100, **|<** and **>|** go to the start and end, and **Now** goes back to the video that's playing. (On a client without scroll views, the list shows in pages of 7 and the same buttons turn the pages.) To move the panel, grab the pill under it in VR and carry it; the panel comes with it, stays upright and stays where you let go. The hand's Playlist button opens it in front of you, karaoke's Singers button opens it just above that button, and the Playlist button by the screen puts it back beside the screen. Only your own panel moves. **Refresh** fetches the latest playlist from the server; the panel also does this each time it opens. **More...** opens a second view with:
 
 - host controls: lock, take over, voting, clear, load the default playlist
 - seek to a time (host)
 - your player only: skip back/forward, Auto Sync, Captions (closed captions on or off for you, remembered on your device) and Resolution (steps your screen's page through 1280 x 720, 1600 x 900 and 1920 x 1080, then back to the snippet's `resolution`; remembered on your device)
-- add by link: a video (YouTube, Twitch, Vimeo or a direct link, see [Links from other sites](#links-from-other-sites)), or a YouTube playlist (host)
+- add by link: a video (YouTube, Twitch, Vimeo or a direct link, see [Links from other sites](#links-from-other-sites)), or a YouTube playlist or list of links (see [Playlists of links](#playlists-of-links)): **Load Playlist** replaces the playlist with it (host), **Add All** adds it all to the end, and **Browse** opens it in the Lists tab to pick from
 - space admins only: **Admin Take Over** (see [Admin Take Over](#admin-take-over)) and the mode switch between playlist and karaoke (see [Switching mode in world](#switching-mode-in-world))
 
 The Creator SDK client currently doesn't open the 2D playlist page, so the panel has no button for it.
@@ -145,6 +146,41 @@ In karaoke mode the Singers button (and the Join/Leave Queue button) opens the s
 - **More...** has the host controls (lock, take over, Auto Advance, which starts the next singer when a song ends), seek, and your own player's skip, Auto Sync and Captions.
 
 Whoever runs the karaoke should take over the player first, as only the host can start other people's songs.
+
+### Saved lists
+
+The panel's **Lists** tab (and **More... > Saved Lists** on the 2D playlist page) shows the snippet's playlists: the default `playlist` first, then each one in `playlists`, a comma separated list of YouTube playlists and [playlists of links](#playlists-of-links), up to 10 in all:
+
+```html
+playlists="PLZWiw-xxQ4SPDmADhvme7-pU2bx3s7nKX, https://docs.google.com/document/d/<id>/edit, https://example.com/friday.m3u"
+```
+
+Each shows its name and how many videos it has. **Open** lists its videos under it, each with **Add** (and, for the host, **Play Now** and **Play Next**, or **Play** when it's already in the playlist). **Add All** adds every video to the end of the playlist, skipping ones already in it, and **Replace** (host) makes the list the playlist. Adding follows the usual rules: anyone can add while the player is unlocked, only the host while it's locked. A list link pasted into **More... > Add by link** and opened with **Browse** joins the tab until you leave.
+
+The server keeps what it read from a list for 5 minutes, so a change to the file shows after that.
+
+### Playlists of links
+
+`playlist`, `playlists` and **Load Playlist** also take a link to a list of videos from anywhere, instead of a YouTube playlist:
+
+- **A text file of links**, one per line, as a `.txt` or `.m3u` file at a direct link, on Dropbox (its share link), on Google Drive (its share link), or as a Google Doc (its share link; the server reads it as text). It must be shared so anyone with the link can see it.
+- **A Google Drive folder** shared with anyone who has the link: every video directly inside it, sorted by name. Subfolders are skipped.
+- **An archive.org item** (`https://archive.org/details/<id>`): its videos (an MP4 of each when there is one).
+
+A list file can mix every source the player plays: YouTube videos, YouTube playlists (each is expanded), Twitch, Vimeo, VDO.Ninja, HLS and VRCDN streams, video and audio files, Google Drive and Dropbox files, and archive.org items. Blank lines and lines starting with `#` are ignored. Text after a link on the same line, or an m3u `#EXTINF:<seconds>,<title>` line above it, becomes that video's title, and `#PLAYLIST:<name>` names the list (otherwise it's named after the file).
+
+```text
+#PLAYLIST:Friday night
+https://youtu.be/aqz-KE-bpKQ
+https://www.youtube.com/playlist?list=PLZWiw-xxQ4SPDmADhvme7-pU2bx3s7nKX
+https://www.dropbox.com/scl/fi/<id>/opening.mp4?rlkey=<key>&dl=0 Opening night
+#EXTINF:0,Q&A
+https://drive.google.com/file/d/<id>/view
+https://www.twitch.tv/<channel>
+https://archive.org/details/Popeye_forPresident
+```
+
+A list gives at most 300 videos (500 for a YouTube playlist), from at most 300 lines, and the file can be up to 256 KB. Lines that can't be played (a deleted video, a web page, a Vimeo video that can't be embedded) are skipped, and so are links from other sites when `untrusted-links` is off (see [Links from other sites](#links-from-other-sites)); the panel says how many. The first load of a list with many YouTube links takes a while, as each one is looked up for its title and length. Links to the server's own network (`localhost`, private addresses) are refused.
 
 ### Links from other sites
 
@@ -164,6 +200,8 @@ These only work with `untrusted-links="true"` in the snippet, as they can come f
 | Link | Example | Notes |
 |---|---|---|
 | Video or audio file | `https://.../movie.mp4` (also .webm, .mov, .m4v, .mp3, .m4a, .ogg) | Plays on the world's own video player, which takes the browser screen's place while it plays (see below). Stays in sync to within about a second. |
+| Google Drive file | `https://drive.google.com/file/d/<id>/view` | Shared with anyone who has the link. Played from Drive's download address, like a file. |
+| Dropbox file | `https://www.dropbox.com/scl/fi/<id>/movie.mp4?rlkey=<key>&dl=0` | Its share link. Played like a file (the link is changed to give the file itself). |
 | HLS stream | `https://.../index.m3u8` | Live streams play until someone skips; recorded ones stay in sync. The server must allow other sites to load it (CORS). |
 | VRCDN stream | `https://stream.vrcdn.live/live/NAME.live.ts` or `rtspt://stream.vrcdn.live/live/NAME` | Plays in the browser for everyone, PC and Quest. The PC `rtspt://` link is turned into the `.live.ts` one, since browsers and the world's video player can't play RTSP. Plays until someone skips. VRCDN's always-on test stream is `https://stream.vrcdn.live/live/vrcdn.live.ts`. |
 | VDO.Ninja | `https://vdo.ninja/?view=<stream id>`, or `?room=<room>&scene` for a whole room | Shown as VDO.Ninja's own page and plays until someone skips. Volume and mute work; there's no pause or seek. Its video controls (picture-in-picture, fullscreen) are hidden, as fullscreen would blank the screen. Links that would join a room or send video (`?push=`, `?room=` without `scene`) aren't accepted. |
@@ -213,7 +251,8 @@ All parameters are optional unless marked as **(Required)**.
 | :--- | :--- | :--- |
 | `src` | **(Required)** The URL to your running Fire-V-Player instance's `playlist.js` or `karaoke.js` file. | N/A |
 | `instance` | **(Required)** A unique ID for the player instance. All users with the same ID will see the same player. | The current page URL |
-| `playlist` | The ID of a YouTube playlist (e.g., `PL...`) to load by default if the instance is empty. | `""` |
+| `playlist` | The playlist to load by default if the instance is empty: a YouTube playlist ID (e.g., `PL...`) or link, or a link to a list of links (a `.txt` or `.m3u` file, a Google Doc, a Drive folder or an archive.org item; see [Playlists of links](#playlists-of-links)). | `""` |
+| `playlists` | Saved playlists for the Lists tab: comma separated YouTube playlists and links to lists of links, up to 10 with `playlist`. See [Saved lists](#saved-lists). | `""` |
 | `youtube` | The URL of a single YouTube video to use as the default "silent" video when nothing is playing. | A silent visual video |
 | `volume` | The initial volume, from `0` to `100`. | `40` |
 | `mute` | Whether the player should start muted. | `false` |

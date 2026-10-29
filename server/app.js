@@ -332,10 +332,11 @@ class App {
    * @param {Object} socket - Target WebSocket connection.
    * @param {string} path - Command action path (e.g. from Commands constants).
    * @param {any} [data] - Command payload data.
+   * @param {Object} [extra] - More top-level fields for the message (e.g. a search's `searchId`).
    * @returns {void}
    */
-  send(socket, path, data) {
-    const payload = JSON.stringify({ path, data });
+  send(socket, path, data, extra) {
+    const payload = JSON.stringify(extra ? { path, data, ...extra } : { path, data });
     if (process.env.NODE_ENV !== 'production') {
       console.log(`[SEND] user: ${socket.u ? socket.u.name : 'N/A'}, instance: ${socket.i || 'N/A'}, type: ${socket.type || 'N/A'}, path: ${path}, payload_size: ${payload.length}`);
     }
@@ -747,10 +748,12 @@ class App {
    * Transmits `SEARCH_RESULTS` back to the requesting WebSocket client.
    *
    * The SEARCH message's data is either a plain string (a YouTube search or a link) or
-   * `{ term: string, source: 'youtube' | 'archive' }`; 'archive' searches the Internet Archive's
-   * public-domain movies and TV. A pasted link is looked up whichever source is picked.
+   * `{ term: string, source: 'youtube' | 'archive', searchId?: string|number }`; 'archive' searches
+   * the Internet Archive's public-domain movies and TV. A pasted link is looked up whichever source
+   * is picked. A `searchId` comes back on the SEARCH_RESULTS reply (and on the search's ERROR), so
+   * a client can tell which of its searches a reply answers. Every search gets one SEARCH_RESULTS.
    *
-   * @param {string|{term: string, source?: string}} data - Search text or link, optionally with a source.
+   * @param {string|{term: string, source?: string, searchId?: string|number}} data - Search text or link, optionally with a source and ID.
    * @param {Object} ws - Client WebSocket requesting the search.
    * @returns {Promise<void>}
    */
@@ -758,8 +761,16 @@ class App {
     const isObject = data && typeof data === 'object';
     const term = String((isObject ? data.term : data) || '').trim().slice(0, 500);
     const source = isObject && data.source === 'archive' ? 'archive' : 'youtube';
+    const rawId = isObject ? data.searchId : undefined;
+    const tag = (typeof rawId === 'number' && Number.isFinite(rawId)) || (typeof rawId === 'string' && rawId.length <= 64)
+      ? { searchId: rawId } : undefined;
+    const results = videos => this.send(ws, Commands.SEARCH_RESULTS, videos, tag);
+    const fail = message => {
+      results([]);
+      this.send(ws, Commands.ERROR, { message }, tag);
+    };
     if (!term) {
-      this.send(ws, Commands.SEARCH_RESULTS, []);
+      results([]);
       return;
     }
     // Twitch, Vimeo, Internet Archive and direct video/stream links become results, as a YouTube
@@ -767,16 +778,13 @@ class App {
     const detected = media.detect(term);
     if (detected && detected.type !== 'youtube') {
       if (!media.allowedFor(ws, term)) {
-        this.send(ws, Commands.SEARCH_RESULTS, []);
-        this.send(ws, Commands.ERROR, { message: media.UNTRUSTED_MESSAGE });
+        fail(media.UNTRUSTED_MESSAGE);
         return;
       }
       try {
-        const videos = await media.resolveMediaLinks(term);
-        this.send(ws, Commands.SEARCH_RESULTS, videos);
+        results(await media.resolveMediaLinks(term));
       } catch (error) {
-        this.send(ws, Commands.SEARCH_RESULTS, []);
-        this.send(ws, Commands.ERROR, { message: error.message });
+        fail(error.message);
       }
       return;
     }
@@ -784,17 +792,15 @@ class App {
     const videoId = source === 'archive' && !/^(https?:\/\/|www\.)/i.test(term) ? false : this.getYoutubeId(term);
 
     if (videoId) {
-      // It's a URL, fetch the single video details. Every search gets one SEARCH_RESULTS reply,
-      // even when it fails, as clients count the replies to know which searches are answered.
+      // It's a URL, fetch the single video details. A failure still gets an (empty) results reply.
       try {
         const videoDetails = await videoById(videoId);
         // The client expects an array of videos.
-        this.send(ws, Commands.SEARCH_RESULTS, videoDetails ? [videoDetails] : []);
+        results(videoDetails ? [videoDetails] : []);
       } catch (error) {
         // The error message from the scraper is user-friendly enough to send to the client.
         console.error(`Error fetching video by URL (${JSON.stringify(term)}):`, error.message);
-        this.send(ws, Commands.SEARCH_RESULTS, []);
-        this.send(ws, Commands.ERROR, { message: error.message });
+        fail(error.message);
       }
       return;
     }
@@ -802,8 +808,7 @@ class App {
     // If it starts with http://, https://, or www., we should return an error
     // or empty results, rather than searching YouTube for the URL string.
     if (/^(https?:\/\/|www\.)/i.test(term)) {
-      this.send(ws, Commands.SEARCH_RESULTS, []);
-      this.send(ws, Commands.ERROR, { message: "I can't play that link. Try YouTube, Twitch, Vimeo, Internet Archive, or a direct video link (.mp4, .m3u8, VRCDN .live.ts)." });
+      fail("I can't play that link. Try YouTube, Twitch, Vimeo, Internet Archive, or a direct video link (.mp4, .m3u8, VRCDN .live.ts).");
       return;
     }
 
@@ -813,11 +818,10 @@ class App {
         const videos = await archive.search(term);
         // JSON-encode the user's text so newlines in it can't start a fake log line.
         console.log(`[SEARCH] archive ${JSON.stringify(term)}: ${videos.length} results in ${Date.now() - started}ms (socket type: ${ws.type || 'N/A'}).`);
-        this.send(ws, Commands.SEARCH_RESULTS, videos);
+        results(videos);
       } catch (error) {
         console.error(`Error searching the Internet Archive for ${JSON.stringify(term)}:`, error.message);
-        this.send(ws, Commands.SEARCH_RESULTS, []);
-        this.send(ws, Commands.ERROR, { message: "Internet Archive search failed. Try again in a moment." });
+        fail("Internet Archive search failed. Try again in a moment.");
       }
       return;
     }
@@ -826,7 +830,7 @@ class App {
     const { videos, via } = await searchVideos(term);
     // JSON-encode the user's text so newlines in it can't start a fake log line.
     console.log(`[SEARCH] ${JSON.stringify(term)}: ${videos.length} results in ${Date.now() - started}ms via ${via} (socket type: ${ws.type || 'N/A'}).`);
-    this.send(ws, Commands.SEARCH_RESULTS, videos);
+    results(videos);
   }
   /**
    * Guards an action, executing callback only if client is the host or if instance is unlocked.

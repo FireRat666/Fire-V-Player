@@ -58,7 +58,7 @@ var FirePlaylistPanel = class {
     this.listQueue = []; // list ids waiting to be asked for (see pumpLists)
     this.listsOut = new Map(); // list id -> when it was asked for, still waiting for a reply
     this.listsSocket = null;
-    this.searchesSent = []; // when each search still waiting for results was sent (see doSearch)
+    this.searchId = 0; // the latest search's ID: only its reply is shown (see doSearch)
     this.openListId = null;
     this.searchResults = [];
     this.searchQuery = '';
@@ -1471,6 +1471,7 @@ var FirePlaylistPanel = class {
     if (kept) {
       clearInterval(this.searchTimer);
       this.searchTimer = null;
+      this.searchId++; // a search still waiting doesn't replace these when it's answered
       this.pendingSearchKey = null;
       this.searchResults = kept.results;
       this.searchPage = 0;
@@ -1480,14 +1481,13 @@ var FirePlaylistPanel = class {
       this.render();
       return;
     }
-    // Replies don't say which search they answer, so results are only kept on the device when no
-    // other search was still waiting: otherwise the earlier one's could be kept under this one's words.
-    const now = Date.now();
-    this.searchesSent = this.searchesSent.filter(t => now - t < 120000);
-    const overlapping = this.searchesSent.length > 0;
-    this.searchesSent.push(now);
-    this.pendingSearchKey = isLink || overlapping ? null : { key, query: q };
-    this.send(Commands.SEARCH, this.searchSource === 'archive' ? { term: q, source: 'archive' } : q);
+    // Each search has an ID that comes back on its reply, so an earlier search answered late is
+    // neither shown nor kept under this one's words.
+    const searchId = ++this.searchId;
+    this.pendingSearchKey = isLink ? null : { key, query: q };
+    const data = { term: q, searchId };
+    if (this.searchSource === 'archive') data.source = 'archive';
+    this.send(Commands.SEARCH, data);
     console.log(`[PlaylistPanel] Searching for "${q}"...`);
     this.setStatus('Searching...', 0);
     // The first search after the server starts can take a while, so count up instead of giving up early.
@@ -1668,10 +1668,11 @@ var FirePlaylistPanel = class {
     const p = this.core.player;
     switch (json.path) {
       case Commands.SEARCH_RESULTS:
+        // An earlier search's reply: that search is done, but a newer one replaced it.
+        if (json.searchId !== undefined && json.searchId !== this.searchId) break;
         clearInterval(this.searchTimer);
         this.searchTimer = null;
         this.searchResults = Array.isArray(json.data) ? json.data : [];
-        this.searchesSent.shift();
         console.log(`[PlaylistPanel] Got ${this.searchResults.length} search results.`);
         if (this.pendingSearchKey && this.searchResults.length) {
           this.saveSearch(this.pendingSearchKey.key, this.pendingSearchKey.query, this.searchResults);
@@ -1685,6 +1686,7 @@ var FirePlaylistPanel = class {
         this.setStatus(n ? `${n} result${n === 1 ? '' : 's'}` : 'No results.');
         break;
       case Commands.ERROR: {
+        if (json.searchId !== undefined && json.searchId !== this.searchId) break; // an earlier search's
         const m = json.data && json.data.message ? json.data.message : (typeof json.data === 'string' ? json.data : "I can't let you do that...");
         // A failed search sends empty results and then an error; stop the "Searching..." counter
         // anyway so it doesn't overwrite the error. Results that still arrive later are shown as usual.

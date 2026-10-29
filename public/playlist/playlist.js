@@ -107,9 +107,12 @@ var Playlist = class {
         }
         break;
       case Commands.SEARCH_RESULTS:
+        // Only the latest search's reply is shown; an earlier one answered late is dropped.
+        if (json.searchId !== undefined && json.searchId !== this.searchId) break;
         this.loadVideos(json.data);
         break;
       case Commands.ERROR:
+        if (json.searchId !== undefined && json.searchId !== this.searchId) break; // an earlier search's
         const errorMessage = json.data && json.data.message ? json.data.message : "I can't let you do that...";
         this.core.showToast(errorMessage, 4000);
         break;
@@ -348,9 +351,11 @@ var Playlist = class {
     });
   }
   search(term) {
-    // YouTube searches send just the text; Internet Archive movies and TV say which source.
+    // Internet Archive movies and TV say which source. The ID comes back on the reply.
     const source = document.querySelector('#search-source');
-    const data = source && source.value === 'archive' ? { term, source: 'archive' } : term;
+    this.searchId = (this.searchId || 0) + 1;
+    const data = { term, searchId: this.searchId };
+    if (source && source.value === 'archive') data.source = 'archive';
     this.core.sendMessage({path: Commands.SEARCH, data });
   }
   updatePlaylist(player) {

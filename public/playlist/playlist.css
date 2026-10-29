@@ -164,6 +164,9 @@ body{
 .green{
   background: green;
 }
+.purple{
+  background: #6a1b9a;
+}
 .extra-padding{
   padding: 5px 10px;
 }
@@ -419,10 +422,12 @@ body{
 .list-card-head {
   display: flex;
   align-items: center;
+  flex-wrap: wrap; /* the buttons go under the name when there isn't room */
   gap: 8px;
 }
 .list-card-name {
   flex-grow: 1;
+  flex-basis: 220px;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

@@ -12,6 +12,7 @@ const lists = require('../lists.js');
 // The most videos a YouTube playlist import adds. The whole playlist goes to everyone on each
 // change, so this keeps that message a sensible size.
 const MAX_PLAYLIST_IMPORT = 500;
+const MAX_SAVED_LISTS = 50; // shared Lists per room
 
 /**
  * Resolves a raw URL/ID or partial video metadata object into a standardized, fully populated video object.
@@ -333,6 +334,77 @@ async function previewList(app, ws, data) {
   }
 }
 
+/** Tells everyone in the room the shared Lists changed. */
+function broadcastLists(app, player) {
+  player.sockets.forEach(socket => app.send(socket, Commands.LISTS_UPDATED, { lists: player.lists }));
+}
+
+/**
+ * Adds a list to the room's shared Lists, which everyone in the room sees and which is saved with
+ * the playlist. The list is loaded first, so only lists that work are saved and they get their
+ * real title and size. Saving the same link again moves it to the top with the new title.
+ * Allowed for the host, or anyone while the room is unlocked (as for adding a video).
+ *
+ * @param {Object} app
+ * @param {Object} ws
+ * @param {{link: string}} data
+ */
+async function saveList(app, ws, data) {
+  const link = data && typeof data.link === 'string' ? data.link.trim().slice(0, 2000) : '';
+  const player = app.videoPlayers[ws.i];
+  if (!player) return;
+  if (!link || !lists.isPlaylistSource(link)) {
+    app.send(ws, Commands.ERROR, { message: "That is not a YouTube playlist or a list of links." });
+    return;
+  }
+  app.onlyIfHost(ws, async () => {
+    let list;
+    try {
+      list = await loadPlaylistSource(ws, link);
+    } catch (error) {
+      app.send(ws, Commands.ERROR, { message: lists.errorMessage(error) });
+      return;
+    }
+    if (!list.items.length) {
+      app.send(ws, Commands.ERROR, { message: `Nothing in "${list.title}" can be played here.` });
+      return;
+    }
+    player.lists = (player.lists || []).filter(l => l.link !== link);
+    player.lists.unshift({
+      id: Math.random().toString(36).slice(2, 10),
+      link,
+      title: String(list.title || 'Playlist').slice(0, 120),
+      count: list.items.length,
+      by: ws.u && ws.u.id ? { id: ws.u.id, name: String(ws.u.name || '').slice(0, 60) } : null,
+      at: Date.now()
+    });
+    player.lists = player.lists.slice(0, MAX_SAVED_LISTS);
+    broadcastLists(app, player);
+    app.send(ws, Commands.ERROR, { message: `Saved "${player.lists[0].title}" to Lists for everyone here.` });
+    await app.savePlayerState(ws.i);
+  }, player.locked);
+}
+
+/**
+ * Removes one of the room's shared Lists. Same rule as saving.
+ *
+ * @param {Object} app
+ * @param {Object} ws
+ * @param {{id: string}} data
+ */
+async function removeList(app, ws, data) {
+  const id = data && typeof data.id === 'string' ? data.id : '';
+  const player = app.videoPlayers[ws.i];
+  if (!player || !id) return;
+  app.onlyIfHost(ws, async () => {
+    const before = (player.lists || []).length;
+    player.lists = (player.lists || []).filter(l => l.id !== id);
+    if (player.lists.length === before) return;
+    broadcastLists(app, player);
+    await app.savePlayerState(ws.i);
+  }, player.locked);
+}
+
 /**
  * Clears all items from the current instance's playlist.
  *
@@ -503,6 +575,8 @@ module.exports = {
   removePlaylistItem,
   fromPlaylist,
   previewList,
+  saveList,
+  removeList,
   clearPlaylist,
   addAndPlay,
   addAndPlayNext,

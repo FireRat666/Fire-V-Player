@@ -536,7 +536,8 @@ var FirePlaylistPanel = class {
     const promptBtns = await row(this.listPromptRow, { marginTop: '4px', flexWrap: 'wrap' });
     this.promptReplaceBtn = await this.button(promptBtns, 'Replace Playlist', () => this.answerListPrompt('replace'), { backgroundColor: '#2e7d32' });
     this.promptAppendBtn = await this.button(promptBtns, 'Add All to End', () => this.answerListPrompt('append'));
-    this.promptSaveBtn = await this.button(promptBtns, 'Save to Lists', () => this.answerListPrompt('save'), { backgroundColor: '#6a1b9a' });
+    this.promptShareBtn = await this.button(promptBtns, 'Save for Everyone', () => this.answerListPrompt('share'), { backgroundColor: '#6a1b9a' });
+    this.promptSaveBtn = await this.button(promptBtns, 'Save for Me', () => this.answerListPrompt('save'), { backgroundColor: '#4a148c' });
     this.promptVideoBtn = await this.button(promptBtns, 'Just This Video', () => this.answerListPrompt('video'));
     await this.button(promptBtns, 'Cancel', () => this.answerListPrompt(null), { backgroundColor: GREY });
 
@@ -1303,6 +1304,7 @@ var FirePlaylistPanel = class {
     if (!found || !choice) { this.render(); return; }
     if (choice === 'replace') { this.replaceWithList(found.id); this.closeSearch(); }
     else if (choice === 'append') { this.appendList(found.id); this.closeSearch(); }
+    else if (choice === 'share') this.shareList(found.id);
     else if (choice === 'save') this.saveList(found.id);
     else if (choice === 'video') {
       if (!this.canAdd()) this.setStatus('The player is locked: only the host can add videos.');
@@ -1311,7 +1313,37 @@ var FirePlaylistPanel = class {
     this.render();
   }
 
-  // Keeps a list in the Lists tab on this device, and shows it there.
+  // The room's shared lists, from the server (see playlistHandler.saveList), as Lists tab entries.
+  sharedLists() {
+    const p = this.core.player;
+    const raw = p && Array.isArray(p.lists) ? p.lists : [];
+    return raw.filter(l => l && typeof l.link === 'string' && typeof l.id === 'string').map(l => ({
+      id: l.link,
+      label: String(l.title || 'Playlist'),
+      shared: l.id,
+      by: l.by && l.by.name ? String(l.by.name) : ''
+    }));
+  }
+
+  // Saves a list to the room's shared Lists, for everyone here (the host, or anyone while unlocked).
+  // The server checks the list works first, and replies with LISTS_UPDATED and a message.
+  shareList(id) {
+    if (!this.canAdd()) { this.setStatus('The player is locked: only the host can save lists for everyone. Use Save for Me.'); return; }
+    this.send(Commands.SAVE_LIST, { link: id });
+    this.setStatus('Saving the list for everyone...', 0);
+    this.view = 'main';
+    this.tab = 'lists';
+  }
+
+  // Takes a list out of the room's shared Lists (same rule as saving).
+  unshareList(list) {
+    if (!this.canAdd()) { this.setStatus('The player is locked: only the host can remove shared lists.'); return; }
+    this.send(Commands.REMOVE_LIST, { id: list.shared });
+    if (this.openListId === list.id) this.openListId = null;
+    this.setStatus('Removed from the shared Lists.');
+  }
+
+  // Keeps a list in the Lists tab on this device ("My lists"), and shows it there.
   saveList(id) {
     const snippetLists = this.savedLists || [];
     if (!this.userLists.some(l => l.id === id) && !snippetLists.some(l => l.id === id)) {
@@ -1321,7 +1353,7 @@ var FirePlaylistPanel = class {
       this.saveUserLists();
     }
     this.extraLists = this.extraLists.filter(l => l.id !== id);
-    this.setStatus('Saved to your Lists.');
+    this.setStatus('Saved to your own Lists, on this device.');
     this.view = 'main';
     this.openListId = null;
     this.toggleList(id);
@@ -1332,7 +1364,7 @@ var FirePlaylistPanel = class {
     this.userLists = this.userLists.filter(l => l.id !== id);
     this.saveUserLists();
     if (this.openListId === id) this.openListId = null;
-    this.setStatus('Removed from your Lists.');
+    this.setStatus('Removed from your own Lists.');
     this.render();
   }
 
@@ -1488,11 +1520,12 @@ var FirePlaylistPanel = class {
 
   // ---------------------------------------------------------------- saved lists (Lists tab)
 
-  // The saved lists: the snippet's (see Core.getSavedLists), then any opened with Browse.
+  // The saved lists: the snippet's fixed ones (see Core.getSavedLists), the room's shared ones,
+  // this viewer's own (My lists), then any opened for this visit.
   getLists() {
     if (!this.savedLists) this.savedLists = typeof this.core.getSavedLists === 'function' ? this.core.getSavedLists() : [];
     const seen = new Set();
-    return this.savedLists.concat(this.userLists, this.extraLists).filter(l => !seen.has(l.id) && seen.add(l.id));
+    return this.savedLists.concat(this.sharedLists(), this.userLists, this.extraLists).filter(l => !seen.has(l.id) && seen.add(l.id));
   }
 
   // The Lists tab's rows: each list, and the videos of the one that's open under it.
@@ -1619,6 +1652,9 @@ var FirePlaylistPanel = class {
         break;
       case Commands.LIST_PREVIEW_RESULT:
         this.onListPreview(json.data);
+        break;
+      case Commands.LISTS_UPDATED:
+        this.loadSavedLists(); // names and sizes of any new ones
         break;
       case Commands.PLAYBACK_UPDATE:
         if (json.data && json.data.type === 'initial-sync' && this.refreshing) {
@@ -1788,13 +1824,14 @@ var FirePlaylistPanel = class {
       const data = this.listData.get(pl.id);
       const name = (data && data.state === 'ready' && data.title) || (typeof this.core.listLabel === 'function' ? this.core.listLabel(pl.id) : 'playlist');
       const size = data && data.state === 'ready' ? ` (${data.items.length} videos)` : data && data.state === 'loading' ? ' (loading...)' : '';
-      const can = host ? '' : this.canAdd() ? ' Only the host can replace the playlist.' : ' The player is locked: you can save it to your Lists.';
+      const can = host ? '' : this.canAdd() ? ' Only the host can replace the playlist.' : ' The player is locked: you can save it for yourself.';
       const failed = data && data.state === 'error';
       this.setText(this.listPromptLabel, failed
         ? `That link isn't a playlist or video this player can use: ${data.error}`
-        : `That's a playlist: ${name}${size}. Replace the playlist, add it all to the end, or keep it in your Lists?${can}`);
+        : `That's a playlist: ${name}${size}. Replace the playlist, add it all to the end, or save it to Lists (for everyone here, or just for you)?${can}`);
       this.display(this.promptReplaceBtn, host && !failed);
       this.display(this.promptAppendBtn, this.canAdd() && !failed);
+      this.display(this.promptShareBtn, this.canAdd() && !failed);
       this.display(this.promptSaveBtn, !failed);
       this.display(this.promptVideoBtn, pl.video && this.canAdd());
     }
@@ -1857,7 +1894,7 @@ var FirePlaylistPanel = class {
 
     let empty = '';
     if (!items.length) {
-      if (onLists) empty = "No saved lists. Paste a YouTube playlist or a list of links into Search & Add (or More... > Add by link) and choose Save to Lists.";
+      if (onLists) empty = "No saved lists. Paste a YouTube playlist or a list of links into Search & Add (or More... > Add by link) and choose Save for Everyone or Save for Me.";
       else if (onSearch) empty = this.karaoke ? 'Search for a song above, or paste a link.' : 'Search YouTube above, or paste a YouTube, Twitch, Vimeo or video link.';
       else if (this.karaoke) empty = host ? 'No singers yet. Use Search to pick a song and join the queue.' : 'No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first (More...).';
       else empty = 'The playlist is empty. Use Search to add videos.';
@@ -2004,7 +2041,8 @@ var FirePlaylistPanel = class {
     const open = this.openListId === list.id;
     this.setStyle(slot.row, 'backgroundColor', open ? '#283593' : '#37474f');
     const name = (data.state === 'ready' && data.title) || list.label;
-    this.setText(slot.title, `${open ? 'v ' : '> '}${name}${list.isDefault ? '  (default)' : ''}`);
+    const tag = list.isDefault ? '  (default)' : list.shared ? '  (shared)' : list.user ? '  (mine)' : '';
+    this.setText(slot.title, `${open ? 'v ' : '> '}${name}${tag}`);
     let sub;
     if (data.state === 'loading') sub = 'Loading...';
     else if (data.state === 'error') sub = data.error;
@@ -2012,6 +2050,7 @@ var FirePlaylistPanel = class {
       const n = data.items.length;
       sub = `${n} video${n === 1 ? '' : 's'}${data.truncated ? ' (the first ones)' : ''}${data.skipped ? `, ${data.skipped} skipped` : ''}`;
     } else sub = 'Press Open to see what is in it';
+    if (list.shared && list.by) sub += `  -  saved by ${list.by}`;
     this.setText(slot.sub, sub);
     const first = data.state === 'ready' && data.items[0];
     this.setThumb(slot, first ? first.thumbnail : '', first ? first.link : '');
@@ -2020,10 +2059,17 @@ var FirePlaylistPanel = class {
     if (data.state === 'error') defs.push({ text: 'Retry', fn: () => this.requestList(list.id, true) });
     else {
       if (canAdd) defs.push({ text: 'Add All', fn: () => this.appendList(list.id) });
-      if (host) defs.push({ text: 'Replace', color: '#2e7d32', fn: () => this.replaceWithList(list.id) });
+      // A row has 4 buttons: a viewer's own list uses the last two for Share and Remove.
+      if (host && !list.user) defs.push({ text: 'Replace', color: '#2e7d32', fn: () => this.replaceWithList(list.id) });
     }
-    // Lists this viewer saved can be taken out again.
-    if (list.user) defs.push({ text: 'Remove', color: '#c62828', fn: () => this.removeList(list.id) });
+    // Shared lists can be taken out by whoever may add (the host, or anyone while unlocked); a
+    // viewer's own list can be shared, or taken out again.
+    if (list.shared) {
+      if (canAdd) defs.push({ text: 'Remove', color: '#c62828', fn: () => this.unshareList(list) });
+    } else if (list.user) {
+      if (canAdd && data.state !== 'error') defs.push({ text: 'Share', color: '#6a1b9a', fn: () => this.shareList(list.id) });
+      defs.push({ text: 'Remove', color: '#c62828', fn: () => this.removeList(list.id) });
+    }
     this.setButtons(slot, defs);
   }
 

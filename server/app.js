@@ -112,7 +112,8 @@ class App {
         autoAdvance: player.autoAdvance,
         isKaraoke: player.isKaraoke,
         savedPlaylist: savedPlaylist,
-        paused: player.paused
+        paused: player.paused,
+        lists: player.lists || []
       };
 
       // Use Sequelize's "upsert" method to insert or update the record.
@@ -434,6 +435,12 @@ class App {
         break;
       case Commands.LIST_PREVIEW:
         await playlistHandler.previewList(this, ws, msg.data);
+        break;
+      case Commands.SAVE_LIST:
+        await playlistHandler.saveList(this, ws, msg.data);
+        break;
+      case Commands.REMOVE_LIST:
+        await playlistHandler.removeList(this, ws, msg.data);
         break;
       case Commands.CLEAR_PLAYLIST:
         await playlistHandler.clearPlaylist(this, ws, msg.skipUpdate);
@@ -1148,7 +1155,8 @@ class App {
         lastStartTime: new Date().getTime() / 1000,
         saveStateTimeout: null, // For debouncing database writes
         lastSyncTime: 0,
-        paused: false
+        paused: false,
+        lists: [] // the room's shared saved lists (see playlistHandler.saveList)
       };
 
       if (existingState) {
@@ -1156,6 +1164,9 @@ class App {
         // Ensure the singers array exists if loading older state from the DB.
         if (!this.videoPlayers[instanceId].singers) {
           this.videoPlayers[instanceId].singers = [];
+        }
+        if (!Array.isArray(this.videoPlayers[instanceId].lists)) {
+          this.videoPlayers[instanceId].lists = [];
         }
       }
 
@@ -1255,6 +1266,7 @@ class App {
 
       if (includePlaylist) {
         videoObject.playlist = player.playlist;
+        videoObject.lists = player.lists || [];
       }
 
       // Optionally include the singer list for karaoke mode.

@@ -1858,6 +1858,9 @@ var Core = class {
           if (track) this.player.duration = track.duration / 1000;
         }
         break;
+      case Commands.LISTS_UPDATED:
+        if (this.player && json.data && Array.isArray(json.data.lists)) this.player.lists = json.data.lists;
+        break;
       case Commands.PLAYLIST_UPDATED:
         if (this.player) {
           this.player.playlist = json.data.playlist;

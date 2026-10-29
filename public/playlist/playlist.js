@@ -143,6 +143,11 @@ var Playlist = class {
       case Commands.LIST_PREVIEW_RESULT:
         this.onListPreview(json.data);
         break;
+      case Commands.LISTS_UPDATED:
+        if (this.core.player && json.data && Array.isArray(json.data.lists)) this.core.player.lists = json.data.lists;
+        this.savedListsButton.style.display = this.getLists().length ? 'block' : 'none';
+        if (this.listsOverlay.style.display !== 'none') this.showLists();
+        break;
       case Commands.PLAYLIST_UPDATED:
         if (this.core.player) {
           this.core.player.playlist = json.data.playlist;
@@ -575,9 +580,25 @@ var Playlist = class {
       if (event.target === this.listsOverlay) this.listsOverlay.style.display = 'none';
     });
   }
+  // The snippet's fixed lists, the room's shared ones (saved on the server), then any opened with Browse.
   getLists() {
     if (!this.savedLists) this.savedLists = this.core.getSavedLists();
-    return this.savedLists.concat(this.extraLists || []);
+    const raw = (this.core.player && Array.isArray(this.core.player.lists)) ? this.core.player.lists : [];
+    const shared = raw.filter(l => l && typeof l.link === 'string' && typeof l.id === 'string')
+      .map(l => ({ id: l.link, label: String(l.title || 'Playlist'), shared: l.id, by: l.by && l.by.name ? String(l.by.name) : '' }));
+    const seen = new Set();
+    return this.savedLists.concat(shared, this.extraLists || []).filter(l => !seen.has(l.id) && seen.add(l.id));
+  }
+  // Saves a list to the room's shared lists (the host, or anyone while unlocked). The server checks it works.
+  shareList(id) {
+    if (!this.canAdd()) { this.core.showToast("The player is locked: only the host can save lists.", 4000); return; }
+    this.core.sendMessage({ path: Commands.SAVE_LIST, data: { link: id } });
+    this.core.showToast("Saving the list for everyone...", 3000);
+  }
+  unshareList(list) {
+    if (!this.canAdd()) { this.core.showToast("The player is locked: only the host can remove lists.", 4000); return; }
+    this.core.sendMessage({ path: Commands.REMOVE_LIST, data: { id: list.shared } });
+    if (this.openListId === list.id) this.openListId = null;
   }
   isHost() {
     return !!(this.core.player && this.core.player.host && this.core.player.host.id === window.user.id);
@@ -613,7 +634,7 @@ var Playlist = class {
     this.core.showToast("Loading playlist...", 3000);
   }
   browseList(id) {
-    if (!this.getLists().some(l => l.id === id)) this.extraLists.push({ id, label: this.core.listLabel(id), isDefault: false });
+    if (!this.getLists().some(l => l.id === id)) this.extraLists.push({ id, label: this.core.listLabel(id), isDefault: false, extra: true });
     this.openListId = id;
     this.requestList(id, true);
     this.savedListsButton.style.display = 'block';
@@ -636,7 +657,7 @@ var Playlist = class {
     const lists = this.getLists();
     if (!lists.length) {
       const empty = this.core.makeAndAddElement('div', { padding: '10px', color: '#bbb' }, container);
-      empty.textContent = "No saved lists. The snippet's playlist and playlists settings add them, or use Add Playlist > Browse.";
+      empty.textContent = "No saved lists. Use Add Playlist > Save to Lists to keep one here for everyone in this room.";
     }
     lists.forEach(list => {
       const data = this.listData.get(list.id) || { state: 'none' };
@@ -648,7 +669,7 @@ var Playlist = class {
       const text = this.core.makeAndAddElement('div', null, head);
       text.className = 'list-card-name';
       const name = this.core.makeAndAddElement('div', null, text);
-      name.textContent = ((data.state === 'ready' && data.title) || list.label) + (list.isDefault ? ' (default)' : '');
+      name.textContent = ((data.state === 'ready' && data.title) || list.label) + (list.isDefault ? ' (default)' : list.shared ? ' (shared)' : '');
       const sub = this.core.makeAndAddElement('div', null, text);
       sub.className = 'list-card-sub';
       if (data.state === 'loading') sub.textContent = 'Loading...';
@@ -657,6 +678,7 @@ var Playlist = class {
         const n = data.items.length;
         sub.textContent = `${n} video${n === 1 ? '' : 's'}${data.truncated ? ' (the first ones)' : ''}${data.skipped ? `, ${data.skipped} skipped` : ''}`;
       }
+      if (list.shared && list.by) sub.textContent += `${sub.textContent ? '  -  ' : ''}saved by ${list.by}`;
       button(head, open ? 'Close' : 'Open', 'grey', () => {
         this.openListId = open ? null : list.id;
         if (!open && data.state === 'error') this.requestList(list.id, true);
@@ -665,6 +687,8 @@ var Playlist = class {
       if (data.state === 'error') button(head, 'Retry', 'teal', () => { this.requestList(list.id, true); this.renderLists(); });
       if (canAdd && data.state !== 'error') button(head, 'Add All', 'teal', () => this.appendList(list.id));
       if (host && data.state !== 'error') button(head, 'Replace', 'green', () => this.replaceWithList(list.id));
+      if (list.shared && canAdd) button(head, 'Remove', 'red', () => this.unshareList(list));
+      else if (list.extra && canAdd && data.state !== 'error') button(head, 'Save', 'purple', () => this.shareList(list.id));
       if (!open || data.state !== 'ready') return;
       data.items.forEach((v, i) => {
         const row = this.core.makeAndAddElement('div', null, card);
@@ -944,6 +968,13 @@ var Playlist = class {
       const id = playlistInput();
       if (id) {
         this.appendList(id);
+        this.addPlaylistOverlay.style.display = 'none';
+      }
+    });
+    document.querySelector('#save-playlist-url-btn').addEventListener('click', () => {
+      const id = playlistInput();
+      if (id) {
+        this.shareList(id);
         this.addPlaylistOverlay.style.display = 'none';
       }
     });

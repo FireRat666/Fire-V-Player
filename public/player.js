@@ -15,6 +15,7 @@ const SkipJumpTimeKaraoke = 0.25; // 250ms for karaoke, to allow for more precis
 // --- Adaptive Sync Constants ---
 /** @constant {number} Fast sync interval in ms used when drift is high or after track changes */
 const SYNC_INTERVAL_FAST = 800;    // Sync every 0.8s when drift is high or after a change.
+const DEFAULT_VIDEO_WAIT_MS = 8000; // The longest the world's track waits for the default video to play.
 /** @constant {number} Normal sync interval in ms for moderate drift */
 const SYNC_INTERVAL_NORMAL = 2000;   // Sync every 2s for moderate drift.
 /** @constant {number} Slow sync interval in ms when player is well-synchronized */
@@ -302,25 +303,7 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
           onStateChange: event => {
             if (event.data === YT.PlayerState.PLAYING) {
               this.applyCaptions(); // each new video loads with the player's caption default
-              if (!this.readyToPlay) {
-                this.readyToPlay = true;
-                // First time player is playing. Check for pending changes or initial sync.
-                if (this.pendingTrackChange && this.playerData) {
-                  // A track change was received before we were ready. Apply it now.
-                  const data = this.pendingTrackChange;
-                  this.pendingTrackChange = null; // Clear the cached message
-                  this.applyTrackChange(data);
-                } else if (this.playerData && this.playerData.playlist && this.playerData.playlist.length > 0 && !this.initialSyncComplete) {
-                  // This handles rejoining an instance that already has a playlist.
-                  this.playVidya(this.playerData.currentTrack, this.playerData.currentTime, true);
-                  this.initialSyncComplete = true;
-                  // This is the first sync, so we should start with a fast interval.
-                  if (this.autoSync) {
-                    this.syncIntervalMs = SYNC_INTERVAL_FAST;
-                    this.scheduleNextSync();
-                  }
-                }
-              }
+              this.startPlaying();
             } // The aggressive `playVideo()` call on non-playing states has been removed.
               // The auto-sync logic is the robust way to handle unexpected pauses or buffering
               // by correcting the resulting time drift.
@@ -336,6 +319,9 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
               }
             }
             console.log("YT Player Error:", event.data);
+            // The default video failed (YouTube may want this viewer to sign in): go on to the
+            // world's track anyway, or the screen would stay on the error.
+            this.startPlaying();
           },
           onApiChange: async event => {
           },
@@ -345,6 +331,13 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
             this.setMute();
             this.player.playVideo(); // Explicitly start playback.
             this.drainBrowserMessages();
+            // The track waits for the default video to play, but YouTube can block it for some
+            // viewers ("Sign in to confirm you're not a bot") without an error, so not for long.
+            setTimeout(() => {
+              if (this.readyToPlay) return;
+              console.log('[PLAYER] The default video never played, so starting the world\'s track.');
+              this.startPlaying();
+            }, DEFAULT_VIDEO_WAIT_MS);
             // setTimeout(() => this.startPlayerOrNot(), 500);
           }
         }
@@ -360,6 +353,35 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
         // won't start on their own until someone does.
         requestClick: () => this.clickMiddle()
       }) : this.yt;
+    }
+
+    /**
+     * The first time the player can play: plays the world's track, which waited for this.
+     * Runs once the default video plays, fails, or takes too long (see onYouTubeIframeAPIReady).
+     */
+    startPlaying() {
+      if (this.readyToPlay) return;
+      this.readyToPlay = true;
+      if (this.pendingTrackChange && this.playerData) {
+        // A track change was received before we were ready. Apply it now.
+        const data = this.pendingTrackChange;
+        this.pendingTrackChange = null;
+        this.applyTrackChange(data);
+      } else {
+        this.playInitialSync();
+      }
+    }
+
+    /** Plays where the world is (joining, or rejoining, an instance that has a playlist), once. */
+    playInitialSync() {
+      if (!this.playerData || !this.playerData.playlist || !this.playerData.playlist.length || this.initialSyncComplete) return;
+      this.playVidya(this.playerData.currentTrack, this.playerData.currentTime, true);
+      this.initialSyncComplete = true;
+      // This is the first sync, so we should start with a fast interval.
+      if (this.autoSync) {
+        this.syncIntervalMs = SYNC_INTERVAL_FAST;
+        this.scheduleNextSync();
+      }
     }
 
     /** Runs the world's messages that came before the player was ready (see setupBrowserMessaging). */
@@ -471,7 +493,8 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
         if (json.data.type === "stop" && this.readyToPlay) {
           this.player.loadVideoById(this.core.getId("https://www.youtube.com/watch?v=GiwStUzx8fg"), 0);
         }
-        // The initial sync is now handled by the onStateChange event when the player is ready.
+        // The initial sync waits for the player (startPlaying), unless the player was first.
+        if (json.data.type === 'initial-sync' && this.readyToPlay) this.playInitialSync();
         break;
       case Commands.PLAYLIST_UPDATED:
         // This message is sent when the playlist order changes (e.g., move up/down).

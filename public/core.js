@@ -175,8 +175,11 @@ var Core = class {
     // The screen itself: the browser, or the world's video player when a file is playing.
     this.screenReady = true;
     this.updateScreen();
-    // Second screens in the Unity scene may still be loading: look again in a while.
-    [3000, 10000].forEach(ms => setTimeout(() => { if (!this.destroyed) this.syncSecondScreens(); }, ms));
+    // Second screens in the Unity scene may still be loading, or come later: keep looking.
+    // A scan with nothing to change touches nothing.
+    if (!this.secondScreenTimer) {
+      this.secondScreenTimer = setInterval(() => { if (!this.destroyed) this.syncSecondScreens(); }, 5000);
+    }
   }
 
   // ---------------------------------------------------------------- world objects (BS SDK)
@@ -714,14 +717,30 @@ var Core = class {
     });
     return Array.from(known);
   }
+  // What the page can see of the scene's materials, for the log: says why no second screen was found.
+  secondScreenSummary() {
+    try {
+      const scene = this.banterScene();
+      if (!this.modernSdk() || !BS.CT || BS.CT.Material == null) return '(this client has no BS.CT.Material)';
+      const objects = Object.values((scene && scene.objects) || {});
+      const textures = [];
+      objects.forEach(go => {
+        const material = go && go.GetComponent && go.GetComponent(BS.CT.Material);
+        if (material) textures.push(`${go.name || '?'}: "${material.texture || ''}"`);
+      });
+      return `(${objects.length} objects, ${textures.length} BS Materials${textures.length ? ': ' + textures.slice(0, 12).join(', ') : ''})`;
+    } catch (e) {
+      return `(could not list materials: ${e && e.message})`;
+    }
+  }
   // Points every second screen at the screen's texture (or black). Safe to call often: a screen
   // already showing the right thing isn't touched.
   syncSecondScreens() {
     if (!this.inWorld()) return;
     const screens = this.findSecondScreens();
-    if (screens.length !== (this.secondScreenCount || 0)) {
+    if (screens.length !== this.secondScreenCount) {
       this.secondScreenCount = screens.length;
-      console.log(`[Core] ${screens.length} second screen(s) in the scene.`);
+      console.log(`[Core] ${screens.length} second screen(s) in the scene. ${this.secondScreenSummary()}`);
     }
     const texture = this.secondScreenTexture();
     screens.forEach(material => {
@@ -2442,6 +2461,7 @@ var Core = class {
     clearTimeout(this.handRejoinTimer);
     clearTimeout(this.headRejoinTimer);
     clearInterval(this.blockedTimer);
+    clearInterval(this.secondScreenTimer);
     this.blockedTimer = null;
     clearTimeout(this.adminWriteTimer);
     this.adminWriteTimer = null;

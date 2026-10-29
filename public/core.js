@@ -729,9 +729,17 @@ var Core = class {
   askMaterialTextures(scene, materials) {
     if (!materials.length || typeof BS.ComponentQuery !== 'function' || !BS.PN || BS.PN.texture == null ||
         typeof scene.QueryComponents !== 'function') return;
-    const query = new BS.ComponentQuery();
-    materials.forEach(material => { material.__fvpAsked = true; query.Add(material, [BS.PN.texture]); });
-    Promise.resolve(scene.QueryComponents(query))
+    // Optional: a client whose query throws just goes without, and never breaks the screen build.
+    let asked;
+    try {
+      const query = new BS.ComponentQuery();
+      materials.forEach(material => { material.__fvpAsked = true; query.Add(material, [BS.PN.texture]); });
+      asked = scene.QueryComponents(query);
+    } catch (e) {
+      console.warn('[Core] Could not ask for the scene\'s material textures:', e);
+      return;
+    }
+    Promise.resolve(asked)
       .then(() => {
         if (this.destroyed) return;
         this.syncSecondScreens();

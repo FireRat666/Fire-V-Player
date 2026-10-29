@@ -7,6 +7,7 @@
 
 const MediaSources = require('../public/media-sources.js');
 const archive = require('./archive.js');
+const streaming = require('./streaming.js');
 
 const FETCH_TIMEOUT_MS = 5000;
 
@@ -120,6 +121,9 @@ async function resolveMediaLink(link) {
     } catch (e) { /* played as a plain file below */ }
   }
 
+  // Tubi and NASA+ pages keep their page link; the player asks for the stream (/api/stream).
+  if (media.type === 'tubi' || media.type === 'nasa') return streaming.resolveLink(link);
+
   if (media.type === 'vdoninja') {
     return { title: `VDO.Ninja: ${media.name}`, thumbnail: '', duration: 0, link };
   }
@@ -141,6 +145,8 @@ async function resolveMediaLink(link) {
 async function resolveMediaLinks(link) {
   const media = MediaSources.detect(link);
   if (media && media.type === 'archive') return archive.resolveLinkAll(String(link).trim());
+  // A Tubi series lists its episodes.
+  if (media && media.type === 'tubi') return streaming.resolveLinks(String(link).trim());
   const one = await resolveMediaLink(link);
   return one ? [one] : [];
 }

@@ -27,6 +27,54 @@ const MEDIA_SCRIPTS = {
 const mediaScriptLoads = {};
 
 /**
+ * An hls.js loader that loads with fetch and sends no Referer, for streams whose servers refuse
+ * requests from other sites' pages (NASA+). hls.js's own loader uses XHR, which always sends one.
+ */
+class NoReferrerLoader {
+  constructor() {
+    this.stats = { aborted: false, loaded: 0, retry: 0, total: 0, chunkCount: 0, bwEstimate: 0,
+      loading: { start: 0, first: 0, end: 0 }, parsing: { start: 0, end: 0 }, buffering: { start: 0, first: 0, end: 0 } };
+    this.controller = null;
+  }
+  load(context, config, callbacks) {
+    const stats = this.stats;
+    stats.loading.start = performance.now();
+    const controller = this.controller = new AbortController();
+    const headers = {};
+    if (context.rangeEnd) headers.Range = `bytes=${context.rangeStart || 0}-${context.rangeEnd - 1}`;
+    const timer = setTimeout(() => {
+      controller.abort();
+      if (!stats.aborted) callbacks.onTimeout(stats, context, null);
+    }, (config && config.timeout) || 20000);
+    fetch(context.url, { referrerPolicy: 'no-referrer', credentials: 'omit', signal: controller.signal, headers })
+      .then(res => {
+        stats.loading.first = Math.max(performance.now(), stats.loading.start);
+        if (!res.ok) {
+          clearTimeout(timer);
+          callbacks.onError({ code: res.status, text: res.statusText }, context, res, stats);
+          return null;
+        }
+        return (context.responseType === 'arraybuffer' ? res.arrayBuffer() : res.text()).then(data => {
+          clearTimeout(timer);
+          if (stats.aborted) return;
+          stats.loading.end = Math.max(performance.now(), stats.loading.first);
+          stats.loaded = stats.total = typeof data === 'string' ? data.length : data.byteLength;
+          callbacks.onSuccess({ url: res.url, data, code: res.status }, stats, context, res);
+        });
+      })
+      .catch(err => {
+        clearTimeout(timer);
+        if (!stats.aborted) callbacks.onError({ code: 0, text: err.message }, context, null, stats);
+      });
+  }
+  abort() {
+    this.stats.aborted = true;
+    if (this.controller) this.controller.abort();
+  }
+  destroy() { this.abort(); }
+}
+
+/**
  * Dynamically loads an external media player JavaScript SDK by name.
  * @param {'hls'|'mpegts'|'twitch'|'vimeo'} name - Player library key.
  * @returns {Promise<Event>} Resolves when script is loaded.
@@ -96,7 +144,8 @@ class VideoElementSource extends BaseMediaSource {
    */
   constructor(opts, media) {
     super(opts);
-    const hls = media.type === 'hls';
+    // A Tubi or NASA+ page: its HLS stream comes from the server first (see loadStream).
+    const hls = media.type === 'hls' || !!media.stream;
     // A live MPEG-TS stream has no length or position to seek to, as with a live .m3u8.
     if (media.type === 'mpegts' && media.live) this.live = true;
     const el = this.el = document.createElement('video');
@@ -123,29 +172,60 @@ class VideoElementSource extends BaseMediaSource {
     el.addEventListener('error', () => opts.onError("Couldn't play this video. The link may be wrong, or the site may not allow it here."));
     this.pendingSeek = opts.start > 0 ? opts.start : null; // a seek waiting until the file can go there
 
+    if (media.stream) {
+      this.loadStream(opts, el);
+      return;
+    }
+    this.load(opts, media, el, opts.link);
+  }
+
+  /** Asks the server for a Tubi or NASA+ page's stream, then plays it as an HLS stream. */
+  loadStream(opts, el) {
+    fetch(`/api/stream?link=${encodeURIComponent(opts.link)}`)
+      .then(res => res.json().catch(() => ({})).then(body => {
+        if (!res.ok || !body.url) throw new Error(body.error || "Couldn't find this video's stream.");
+        return body;
+      }))
+      .then(body => {
+        if (this.destroyed) return;
+        if (body.live) this.live = true;
+        this.load(opts, { type: 'hls', noReferrer: !!body.noReferrer }, el, body.url);
+      })
+      .catch(err => { if (!this.destroyed) opts.onError(err.message); });
+  }
+
+  /** Starts loading `url` into the video element, as the media's type needs. */
+  load(opts, media, el, url) {
+    const hls = media.type === 'hls';
     if (media.type === 'mpegts') {
       // Browsers can't play MPEG-TS themselves; mpegts.js feeds it to the video element.
       loadMediaScript('mpegts').then(() => {
         if (this.destroyed) return;
         if (!window.mpegts || !mpegts.isSupported()) { opts.onError("This browser can't play this stream."); return; }
-        const m = this.mpegts = mpegts.createPlayer({ type: 'mpegts', isLive: !!media.live, url: media.url || opts.link },
+        const m = this.mpegts = mpegts.createPlayer({ type: 'mpegts', isLive: !!media.live, url: media.url || url },
           { liveBufferLatencyChasing: !!media.live, lazyLoad: !media.live });
         m.on(mpegts.Events.ERROR, () => opts.onError("Couldn't play this stream. It may be offline, or the site may not allow it here."));
         m.attachMediaElement(el);
         m.load();
       }).catch(err => opts.onError(err.message));
-    } else if (!hls || el.canPlayType('application/vnd.apple.mpegurl')) {
-      el.src = opts.link;
+    } else if (!hls) {
+      el.src = url;
     } else {
+      // hls.js wherever it runs: some browsers say they "maybe" play HLS themselves and then can't
+      // (streams with separate audio, like Tubi's). The browser's own player is the fallback (Safari, iOS).
       loadMediaScript('hls').then(() => {
         if (this.destroyed) return;
-        if (!window.Hls || !Hls.isSupported()) { el.src = opts.link; return; }
-        const h = this.hls = new Hls({ liveDurationInfinity: true });
+        if (!window.Hls || !Hls.isSupported()) { el.src = url; return; }
+        const h = this.hls = new Hls(media.noReferrer ? { liveDurationInfinity: true, loader: NoReferrerLoader } : { liveDurationInfinity: true });
         h.on(Hls.Events.LEVEL_LOADED, (e, data) => { if (data.details && data.details.live) this.live = true; });
         h.on(Hls.Events.ERROR, (e, data) => { if (data.fatal) opts.onError("Couldn't play this stream. It may be offline, or the site may not allow it here."); });
-        h.loadSource(opts.link);
+        h.loadSource(url);
         h.attachMedia(el);
-      }).catch(err => opts.onError(err.message));
+      }).catch(err => {
+        if (this.destroyed) return;
+        if (el.canPlayType('application/vnd.apple.mpegurl')) el.src = url;
+        else opts.onError(err.message);
+      });
     }
   }
 

@@ -11,7 +11,9 @@ const http = require('http');
 const path = require('path');
 const { searchVideos, videoById } = require('./youtube/search.js');
 const archive = require('./archive.js');
+const streaming = require('./streaming.js');
 const media = require('./media.js');
+const MediaSources = require('../public/media-sources.js');
 const Commands = require('../public/commands.js');
 const playlistHandler = require('./handlers/playlistHandler.js');
 const karaokeHandler = require('./handlers/karaokeHandler.js');
@@ -194,6 +196,17 @@ class App {
     // page's wrong-password limit.
     this.app.set('trust proxy', 1);
     this.blacklist.setupRoutes(this.app);
+    // The stream to play for a Tubi or NASA+ link, asked for by the player page when it plays one
+    // (Tubi's stream links expire, so the playlist keeps the page's link). Only those sites' pages
+    // are looked up, from the id in the link.
+    this.app.get('/api/stream', async (req, res) => {
+      const link = String(req.query.link || '').slice(0, 500);
+      try {
+        res.set('Cache-Control', 'no-store').json(await streaming.streamFor(link));
+      } catch (e) {
+        res.status(422).json({ error: e.message || "Couldn't find that video's stream." });
+      }
+    });
     this.app.use(express.static(path.join(__dirname, '..', 'public')));
   }
   /**
@@ -748,8 +761,9 @@ class App {
    * Transmits `SEARCH_RESULTS` back to the requesting WebSocket client.
    *
    * The SEARCH message's data is either a plain string (a YouTube search or a link) or
-   * `{ term: string, source: 'youtube' | 'archive', searchId?: string|number }`; 'archive' searches
-   * the Internet Archive's public-domain movies and TV. A pasted link is looked up whichever source
+   * `{ term: string, source: 'youtube' | 'archive' | 'tubi' | 'nasa', searchId?: string|number }`;
+   * 'archive' searches the Internet Archive's public-domain movies and TV, 'tubi' the titles in Tubi's
+   * categories and 'nasa' NASA+ (see server/streaming.js). A pasted link is looked up whichever source
    * is picked. A `searchId` comes back on the SEARCH_RESULTS reply (and on the search's ERROR), so
    * a client can tell which of its searches a reply answers. Every search gets one SEARCH_RESULTS.
    *
@@ -760,7 +774,7 @@ class App {
   async search(data, ws) {
     const isObject = data && typeof data === 'object';
     const term = String((isObject ? data.term : data) || '').trim().slice(0, 500);
-    const source = isObject && data.source === 'archive' ? 'archive' : 'youtube';
+    const source = isObject && ['archive', 'tubi', 'nasa'].includes(data.source) ? data.source : 'youtube';
     const rawId = isObject ? data.searchId : undefined;
     const tag = (typeof rawId === 'number' && Number.isFinite(rawId)) || (typeof rawId === 'string' && rawId.length <= 64)
       ? { searchId: rawId } : undefined;
@@ -788,8 +802,8 @@ class App {
       }
       return;
     }
-    // A bare 11-character word is a video ID only for YouTube; an Archive search for it searches.
-    const videoId = source === 'archive' && !/^(https?:\/\/|www\.)/i.test(term) ? false : this.getYoutubeId(term);
+    // A bare 11-character word is a video ID only for YouTube; another source's search for it searches.
+    const videoId = source !== 'youtube' && !/^(https?:\/\/|www\.)/i.test(term) ? false : this.getYoutubeId(term);
 
     if (videoId) {
       // It's a URL, fetch the single video details. A failure still gets an (empty) results reply.
@@ -813,6 +827,18 @@ class App {
     }
 
     const started = Date.now();
+    if (source === 'tubi' || source === 'nasa') {
+      const name = source === 'tubi' ? 'Tubi' : 'NASA+';
+      try {
+        const videos = source === 'tubi' ? await streaming.searchTubi(term) : await streaming.searchNasa(term);
+        console.log(`[SEARCH] ${source} ${JSON.stringify(term)}: ${videos.length} results in ${Date.now() - started}ms (socket type: ${ws.type || 'N/A'}).`);
+        results(videos);
+      } catch (error) {
+        console.error(`Error searching ${name} for ${JSON.stringify(term)}:`, error.message);
+        fail(`${name} search failed. Try again in a moment.`);
+      }
+      return;
+    }
     if (source === 'archive') {
       try {
         const videos = await archive.search(term);
@@ -1063,14 +1089,7 @@ class App {
    * @returns {string|false} 11-char ID or false if invalid.
    */
   getYoutubeId(url) {
-    if (!url) return false;
-    url = url.trim();
-    if (url.length === 11 && /^[a-zA-Z0-9_-]{11}$/.test(url)) {
-      return url;
-    }
-    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|shorts\/|watch\?v=|\&v=)([^#\&\?]*).*/;
-    const match = url.match(regExp);
-    return (match && match[2].length === 11) ? match[2] : false;
+    return MediaSources.youtubeId(url);
   }
   /**
    * Initializes or reconnects to an instance room player.

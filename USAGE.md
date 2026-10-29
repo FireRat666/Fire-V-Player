@@ -155,6 +155,14 @@ The panel's **Lists** tab (and **More... > Saved Lists** on the 2D playlist page
 playlists="PLZWiw-xxQ4SPDmADhvme7-pU2bx3s7nKX, https://docs.google.com/document/d/<id>/edit, https://example.com/friday.m3u"
 ```
 
+A YouTube playlist can be its ID or any link with `list=` in it, including a video in a playlist (`https://www.youtube.com/watch?v=...&list=PL...` loads the whole playlist). Playlists (`PL...`), albums (`OLAK5uy_...`) and a channel's uploads (`UU...`) work; mixes (`RD...`) don't, as they have no fixed list.
+
+`playlists` can also hold single videos and streams, each shown as a list of one, which is handy for examples such as a YouTube live stream or a VRCDN stream:
+
+```html
+playlists="PLZWiw-xxQ4SPDmADhvme7-pU2bx3s7nKX, https://www.youtube.com/watch?v=jfKfPfyJRdk, https://stream.vrcdn.live/live/vrcdn.live.ts"
+```
+
 Each shows its name and how many videos it has. **Open** lists its videos under it, each with **Add** (and, for the host, **Play Now** and **Play Next**, or **Play** when it's already in the playlist). **Add All** adds every video to the end of the playlist, skipping ones already in it, and **Replace** (host) makes the list the playlist. Adding follows the usual rules: anyone can add while the player is unlocked, only the host while it's locked.
 
 Lists can also be saved from inside the world. Pasting a YouTube playlist or a list of links into **Search & Add** or **More... > Add by link** asks what to do with it: **Replace Playlist** (host), **Add All to End**, **Save for Everyone**, **Save for Me**, or **Just This Video** for a video link inside a playlist.
@@ -193,6 +201,10 @@ A list gives at most 300 videos (500 for a YouTube playlist), from at most 300 l
 
 Search (and add by link) takes more than YouTube links. Paste one and it shows as a single result to add or play.
 
+The search source button beside the search box (the drop-down on the 2D page) picks what to search: **YouTube**, **Archive Films** (the Internet Archive's public-domain films and TV), **Tubi** or **NASA+**. Tubi has no public search, so a Tubi search looks through the titles in Tubi's categories (a couple of thousand); the first one after the server starts takes several seconds while it reads them, and later ones are instant for six hours. A Tubi series in the results adds its first episode; paste the series link to see every episode.
+
+Tubi categories (`https://tubitv.com/category/westerns`), Tubi series and NASA+ series (`https://plus.nasa.gov/video_series/<name>/`) work as lists in `playlist`, `playlists`, **Load Playlist** and list files (see [Playlists of links](#playlists-of-links)), so they can be browsed from the Lists tab. A category list has its films, not its series.
+
 These always work, as the sites moderate what's on them:
 
 | Link | Example | Notes |
@@ -201,6 +213,9 @@ These always work, as the sites moderate what's on them:
 | Twitch video (VOD) | `https://www.twitch.tv/videos/<id>` | Stays in sync like YouTube. |
 | Twitch clip | `https://www.twitch.tv/<channel>/clip/<id>` or `https://clips.twitch.tv/<id>` | Twitch's clip player can't be controlled, so clips aren't kept in sync, volume, mute and the `spatial` fade don't change them, and each gets 60 seconds (the longest a clip can be) before the playlist moves on. |
 | Vimeo | `https://vimeo.com/<id>` | Only videos whose owner allows embedding on other sites. |
+| Tubi movie or episode | `https://tubitv.com/movies/<id>/<name>`, `https://tubitv.com/tv-shows/<id>/<name>` | Free films and TV, with Tubi's ads left out. Stays in sync like YouTube. Titles Tubi only offers with copy protection (DRM) or to signed-in viewers say so instead of playing. Tubi's catalogue depends on the country the server is in. |
+| Tubi series | `https://tubitv.com/series/<id>/<name>` | Pasted into search, lists every episode. As a list (see below) it opens its episodes. |
+| NASA+ video | `https://plus.nasa.gov/video/<name>/` | NASA's own videos. Stays in sync like YouTube. |
 
 These only work with `untrusted-links="true"` in the snippet, as they can come from any site:
 
@@ -259,11 +274,11 @@ All parameters are optional unless marked as **(Required)**.
 | `src` | **(Required)** The URL to your running Fire-V-Player instance's `playlist.js` or `karaoke.js` file. | N/A |
 | `instance` | **(Required)** A unique ID for the player instance. All users with the same ID will see the same player. | The current page URL |
 | `playlist` | The playlist to load by default if the instance is empty: a YouTube playlist ID (e.g., `PL...`) or link, or a link to a list of links (a `.txt` or `.m3u` file, a Google Doc, a Drive folder or an archive.org item; see [Playlists of links](#playlists-of-links)). | `""` |
-| `playlists` | Saved playlists for the Lists tab: comma separated YouTube playlists and links to lists of links, up to 10 with `playlist`. See [Saved lists](#saved-lists). | `""` |
+| `playlists` | Saved playlists for the Lists tab: comma separated YouTube playlists (IDs or links), links to lists of links, and single video or stream links, up to 10 with `playlist`. See [Saved lists](#saved-lists). | `""` |
 | `youtube` | The URL of a single YouTube video to use as the default "silent" video when nothing is playing. | A silent visual video |
 | `volume` | The initial volume, from `0` to `100`. | `40` |
 | `mute` | Whether the player should start muted. | `false` |
-| `untrusted-links` | Whether links from any site (video files, `.m3u8` streams, VRCDN, VDO.Ninja) can be played, as well as YouTube, Twitch and Vimeo. Off by default, as those links aren't moderated. Each viewer's own world must allow them for them to play on their screen. See [Links from other sites](#links-from-other-sites). | `false` |
+| `untrusted-links` | Whether links from any site (video files, `.m3u8` streams, VRCDN, VDO.Ninja) can be played, as well as YouTube, Twitch, Vimeo, Tubi, NASA+ and the Internet Archive. Off by default, as those links aren't moderated. Each viewer's own world must allow them for them to play on their screen. See [Links from other sites](#links-from-other-sites). | `false` |
 | `captions` | Whether closed captions start on. Each viewer can turn them on or off in the panel's More view, and their choice is remembered on their device. | `true` |
 | `resolution` | The width in pixels of the screen's page, which is 16:9 (`1600` is 1600 x 900). Higher is sharper, and YouTube and Twitch lay out as for a bigger window, but each frame costs more to draw, especially on Quest. The screen stays the same size in the world whatever the resolution. Each viewer can pick another for their own screen in the panel's More view. From 640 to 3840. | `1600` |
 | `space-screen` | Altspace (SideQuest Creator SDK) only. `auto`: the screen draws the space page's own browser, with the player page laid over that page, so no second browser is opened. It's used when the client can resize the space page (its `SetWorldBrowserSize` call or the `!swbs!` command) and the page really takes the size within 5 seconds; otherwise, and for a second player in the same space (only one can have the space page), the screen is a browser as before. The space page goes back to its own size when the player is removed. This screen can't be clicked, so players that need a click to start (Twitch) may need one more step. `false`: always open a browser for the screen. Banter is unaffected. | `auto` |

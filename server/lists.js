@@ -18,6 +18,7 @@ const zlib = require('zlib');
 const { Readable } = require('stream');
 const MediaSources = require('../public/media-sources.js');
 const media = require('./media.js');
+const streaming = require('./streaming.js');
 const { getInnertube } = require('./youtube/youtubeiService.js');
 const Scraper = require('./youtube/scraper.js');
 const scraper = new Scraper();
@@ -145,12 +146,7 @@ function youtubePlaylistId(input) {
 
 /** The 11-character id of a YouTube video link (or a bare id), or null. */
 function youtubeVideoId(input) {
-  const s = String(input || '').trim();
-  if (/^[A-Za-z0-9_-]{11}$/.test(s)) return s;
-  const m = MediaSources.detect(s);
-  if (!m || m.type !== 'youtube') return null;
-  const match = /^.*(youtu\.be\/|v\/|u\/\w\/|embed\/|shorts\/|live\/|watch\?v=|&v=)([^#&?/]*)/.exec(s);
-  return match && /^[A-Za-z0-9_-]{11}$/.test(match[2]) ? match[2] : null;
+  return MediaSources.youtubeId(input) || null;
 }
 
 /**
@@ -167,6 +163,9 @@ function listSource(input) {
   const host = u.hostname.toLowerCase().replace(/^www\./, '');
   const parts = u.pathname.split('/').filter(Boolean);
   if (MediaSources.detect(s) && MediaSources.detect(s).type === 'youtube') return null;
+  // A Tubi category or series, or a NASA+ series.
+  const site = streaming.listSource(u);
+  if (site) return site;
 
   if (host === 'docs.google.com' && parts[0] === 'document' && parts[1] === 'd' && parts[2]) {
     return { kind: 'file', url: `https://docs.google.com/document/d/${encodeURIComponent(parts[2])}/export?format=txt`, name: 'Google Doc' };
@@ -550,6 +549,7 @@ async function resolveEntry(entry, limit) {
     }
   }
   const source = listSource(input);
+  if (source && source.kind === 'streaming') return (await streaming.loadList(source)).items.slice(0, limit);
   if (source && source.kind === 'archive') {
     const item = await archiveItem(source.id, limit);
     return item.items.length === 1 ? [titled(item.items[0])] : item.items;
@@ -599,6 +599,11 @@ function loadList(src, limit = MAX_ITEMS) {
   return listCache.remember(`list:${limit}:${src}`, LIST_TTL, async () => {
     if (source.kind === 'drivefolder') return { dropped: 0, ...(await driveFolder(source.id, limit)) };
     if (source.kind === 'archive') return { dropped: 0, ...(await archiveItem(source.id, limit)) };
+    if (source.kind === 'streaming') {
+      const list = await streaming.loadList(source);
+      if (!list.items.length) throw new ListError('That list has nothing in it that can play here.');
+      return { title: list.title, items: list.items.slice(0, limit), truncated: list.items.length > limit, dropped: 0 };
+    }
     const { text, name } = await fetchListText(source.url);
     const parsed = parseLinkList(text);
     const entries = parsed.entries.slice(0, MAX_ITEMS);
@@ -619,12 +624,33 @@ function loadAny(src, youtubeMax = 500) {
   const s = String(src || '').trim();
   const playlistId = youtubePlaylistId(s);
   if (playlistId) return youtubePlaylist(playlistId, youtubeMax);
+  if (isSingleLink(s)) return loadSingle(s);
   return loadList(s);
 }
 
-/** Whether the player can load this as a playlist (a YouTube playlist or a list). */
+/**
+ * Whether this is one video or stream link (a YouTube video, a Twitch channel, a .m3u8 or VRCDN
+ * stream...), not a playlist or a list. The playlists setting can hold these as examples: each
+ * loads as a list of just that video.
+ */
+function isSingleLink(src) {
+  const s = String(src || '').trim();
+  if (!MediaSources.parseUrl(s) || youtubePlaylistId(s) || isListSource(s)) return false;
+  return !!youtubeVideoId(s) || !!MediaSources.detect(s);
+}
+
+/** A single video or stream link as a list of one. */
+function loadSingle(src, limit = MAX_ITEMS) {
+  return listCache.remember(`single:${src}`, LIST_TTL, async () => {
+    const { items } = await resolveEntries([{ input: src }], limit);
+    if (!items.length) throw new ListError("That video or stream can't be found or played.");
+    return { title: clean(items.length === 1 ? items[0].title : src, 120) || 'Video', items, truncated: false, dropped: 0 };
+  });
+}
+
+/** Whether the player can load this as a playlist (a YouTube playlist, a list, or one video). */
 function isPlaylistSource(src) {
-  return !!youtubePlaylistId(src) || isListSource(src);
+  return !!youtubePlaylistId(src) || isListSource(src) || isSingleLink(src);
 }
 
 /** A message for an error from loading a list: its own, or a general one. */
@@ -638,6 +664,7 @@ module.exports = {
   listSource,
   isListSource,
   isPlaylistSource,
+  isSingleLink,
   youtubePlaylistId,
   youtubePlaylist,
   loadList,

@@ -263,6 +263,13 @@ var Core = class {
     const media = MediaSources.detect(link);
     return !!media && media.type === 'file' && this.allowUntrusted === true;
   }
+  // Twitch won't start until someone clicks its player, and the space-page screen can't be clicked
+  // (it's a picture of a page nobody can reach), so Twitch gets a BS Browser screen, as on clients
+  // without the space page.
+  needsClickableScreen(link) {
+    const media = link && window.MediaSources ? MediaSources.detect(link) : null;
+    return !!media && (media.type === 'twitch' || media.type === 'twitchclip');
+  }
   currentLink() {
     const p = this.player;
     const track = p && Array.isArray(p.playlist) && p.playlist.length ? p.playlist[p.currentTrack] : null;
@@ -299,7 +306,13 @@ var Core = class {
       this.nativeScreen.destroy();
       this.nativeScreen = null;
     }
-    if (!this.browser) this.createBrowser(this.browserUrl());
+    // The space page when this player has it, unless the track needs clicking.
+    const surface = this.spaceSurface && !this.needsClickableScreen(link) ? this.spaceSurface : null;
+    if (this.browser && (this.browser.surface || null) !== surface) {
+      console.log(surface ? '[Core] Back to the space-page screen.' : '[Core] This needs clicking, so the screen is a browser for now.');
+      this.removeBrowser();
+    }
+    if (!this.browser) this.createBrowser(this.browserUrl(), surface);
   }
   removeBrowser() {
     const browser = this.browser;
@@ -322,8 +335,8 @@ var Core = class {
   // before it's ready wait in `queue`.
   // In Altspace, when this player has the space page (claimSpaceSurface), the page is an iframe
   // on it instead, and the screen draws the space page's texture.
-  createBrowser(url) {
-    const browser = this.browser = { url, go: null, component: null, queue: [], removed: false, surface: this.spaceSurface || null };
+  createBrowser(url, surface = this.spaceSurface) {
+    const browser = this.browser = { url, go: null, component: null, queue: [], removed: false, surface: surface || null };
     const build = browser.surface ? this.buildSpaceScreen(browser) : this.buildBrowser(browser);
     browser.ready = build.catch(e => {
       console.error('[Core] Could not create the browser screen:', e);
@@ -582,7 +595,10 @@ var Core = class {
     browser.origin = this.playerPageOrigin();
     const iframe = browser.iframe = document.createElement('iframe');
     iframe.allow = 'autoplay; encrypted-media; fullscreen; picture-in-picture';
-    Object.assign(iframe.style, { width: '100%', height: '100%', border: '0', display: 'block' });
+    // The client passes the pointer to the space page wherever it is, so the player page would
+    // always have a mouse over it, and YouTube would keep its title, share button and play
+    // button up. The screen can't be clicked anyway, so the page gets no pointer at all.
+    Object.assign(iframe.style, { width: '100%', height: '100%', border: '0', display: 'block', pointerEvents: 'none' });
     // Messages sent before the page has loaded wait for it.
     iframe.addEventListener('load', () => {
       if (browser.removed || browser.iframe !== iframe) return;
@@ -1921,33 +1937,29 @@ var Core = class {
     this.requestState();
     return true;
   }
+  // A YouTube video id from a bare id or a YouTube link, or false (see MediaSources.youtubeId).
   getId(url){
     if (!url) return false;
     url = url.trim();
     if (url.length === 11 && /^[a-zA-Z0-9_-]{11}$/.test(url)) {
       return url;
     }
-    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|shorts\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+    if (window.MediaSources && MediaSources.youtubeId) return MediaSources.youtubeId(url);
+    // Before media-sources.js has loaded: the same rule, only YouTube's own hosts.
+    if (!/^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[a-z0-9-]+\.)*(?:youtube\.com|youtube-nocookie\.com|youtu\.be)(?:[\/?#:]|$)/i.test(url)) return false;
+    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|shorts\/|live\/|watch\?v=|\&v=)([^#\&\?\/]*).*/;
     const match = url.match(regExp);
     return (match && match[2].length === 11) ? match[2] : false;
   }
+  // A YouTube playlist id from a bare id or any link with list= in it (a playlist page, or a
+  // video in a playlist), or null. The same kinds as the server takes (server/lists.js): playlists
+  // (PL), albums (OLAK5uy_), a channel's uploads (UU) and favourites (FL); not mixes (RD).
   getPlaylistId(urlOrId) {
-    // First, check if the input is just a valid playlist ID.
-    // A simple check is to see if it starts with PL and contains no URL characters.
-    if (urlOrId.startsWith('PL') && !urlOrId.includes('/') && !urlOrId.includes('?')) {
-        return urlOrId;
-    }
-
-    // If it's a URL, try to extract the 'list' parameter.
-    const regex = /[?&]list=([^#&?]+)/;
-    const match = urlOrId.match(regex);
-
-    if (match && match[1] && match[1].startsWith('PL')) {
-        return match[1];
-    }
-
-    // Return null if no valid ID could be extracted.
-    return null;
+    const s = String(urlOrId || '').trim();
+    const kind = /^(PL|OLAK5uy_|UU|FL)[A-Za-z0-9_-]{10,}$/;
+    if (kind.test(s)) return s;
+    const match = /[?&]list=([^#&?]+)/.exec(s);
+    return match && kind.test(match[1]) ? match[1] : null;
   }
   // A link that may be a list of links (a .txt or .m3u file, a Google Doc, a Drive folder, an
   // archive.org item), or null. Only the server can tell for sure, as it reads the file; this
@@ -1960,30 +1972,47 @@ var Core = class {
     if (media && !media.drive) return null;
     return s;
   }
+  // A single video or stream link (YouTube, Twitch, a .m3u8 or VRCDN stream...), or null. In the
+  // playlists setting one shows in Lists as a list of just that video.
+  getSingleLink(input) {
+    const s = String(input || '').trim();
+    if (!/^https?:\/\/[^\s]+$/i.test(s) || s.length > 2000 || !window.MediaSources) return null;
+    return MediaSources.detect(s) ? s : null;
+  }
   // The saved playlists for the Lists view: the default playlist (the playlist setting), then the
-  // playlists setting's comma separated YouTube playlists and list links, at most 10.
+  // playlists setting's comma separated YouTube playlists, list links and single video or stream
+  // links, at most 10.
   getSavedLists() {
     const out = [];
     const seen = new Set();
     const add = (raw, isDefault) => {
-      const s = String(raw || '').trim();
-      const id = s && (this.getPlaylistId(s) || this.getListLink(s));
+      const s = String(raw || '').trim().replace(/[\s,]+$/, ''); // a stray comma at the end
+      const id = s && (this.getPlaylistId(s) || this.getListLink(s) || (!isDefault && this.getSingleLink(s)));
       if (!id || seen.has(id) || out.length >= 10) return;
       seen.add(id);
       out.push({ id, label: this.listLabel(id), isDefault: !!isDefault });
     };
     add(this.params && this.params.playlist, true);
-    String((this.params && this.params.playlists) || '').split(/\s*,\s*(?=https?:\/\/|PL|OLAK5uy_)|\s*\n\s*/).forEach(s => add(s, false));
+    String((this.params && this.params.playlists) || '').split(/\s*,\s*(?=https?:\/\/|PL|OLAK5uy_|UU|FL)|\s*\n\s*/).forEach(s => add(s, false));
     return out;
   }
   // A name for a saved list until the server says what it's called.
   listLabel(id) {
     if (this.getPlaylistId(id)) return 'YouTube playlist';
+    const single = this.getSingleLink(id) && MediaSources.detect(id);
+    if (single && single.type !== 'archive') {
+      const names = { youtube: 'YouTube video', twitch: single.channel ? `Twitch: ${single.channel}` : 'Twitch video', twitchclip: 'Twitch clip',
+        vimeo: 'Vimeo video', vdoninja: 'VDO.Ninja stream', hls: 'Stream', mpegts: single.live ? 'Live stream' : 'Video', file: 'Video file',
+        tubi: single.kind === 'series' ? 'Tubi series' : 'Tubi video', nasa: 'NASA+ video' };
+      return names[single.type] || 'Video';
+    }
     try {
       const u = new URL(id);
       if (/docs\.google\.com$/i.test(u.hostname)) return 'Google Doc';
       if (/drive\.google\.com$/i.test(u.hostname)) return /folders|embeddedfolderview/.test(u.pathname) ? 'Google Drive folder' : 'Google Drive file';
       if (/archive\.org$/i.test(u.hostname)) return `archive.org: ${u.pathname.split('/').filter(Boolean)[1] || 'item'}`;
+      if (/tubitv\.com$/i.test(u.hostname)) return `Tubi: ${(u.pathname.split('/').filter(Boolean)[1] || 'category').replace(/_/g, ' ')}`;
+      if (/plus\.nasa\.gov$/i.test(u.hostname)) return 'NASA+ series';
       let name = u.pathname.split('/').filter(Boolean).pop() || u.hostname;
       try { name = decodeURIComponent(name); } catch (e) {}
       return name.replace(/\.(txt|m3u)$/i, '') || u.hostname;

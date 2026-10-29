@@ -7,7 +7,9 @@
 
 /**
  * @typedef {Object} DetectedMedia
- * @property {'youtube'|'file'|'hls'|'mpegts'|'twitch'|'twitchclip'|'vimeo'|'vdoninja'|'archive'} type - The detected media stream/source type.
+ * @property {'youtube'|'file'|'hls'|'mpegts'|'twitch'|'twitchclip'|'vimeo'|'vdoninja'|'archive'|'tubi'|'nasa'} type - The detected media stream/source type.
+ *   'tubi' is a Tubi movie, episode or series page, and 'nasa' a NASA+ video page: the player asks the
+ *   server for the page's stream when it plays (`stream` is true), as Tubi's stream links expire.
  *   'archive' is an Internet Archive page or item (or a publicdomainmovie.net page) that the server
  *   turns into one of the item's files before it is played.
  * @property {string} [channel] - Twitch channel name if applicable.
@@ -23,6 +25,9 @@
  * @property {string} [archive] - For a 'file' on the Internet Archive: the item's identifier.
  * @property {string} [file] - For an Internet Archive link to one of an item's video files: its name.
  * @property {string} [page] - For a publicdomainmovie.net page: the page to read the item from.
+ * @property {'movie'|'episode'|'series'} [kind] - For Tubi: what the page is. A series is a list of episodes.
+ * @property {string} [slug] - For NASA+: the video's name in its address.
+ * @property {boolean} [stream] - True when the player gets the stream from the server (/api/stream).
  */
 
 var MediaSources = (() => {
@@ -137,6 +142,19 @@ var MediaSources = (() => {
       if (parts[0] === 'movie' && parts[1]) return { type: 'archive', page: `https://publicdomainmovie.net/movie/${encodeURIComponent(parts[1])}` };
       return null;
     }
+    // Tubi: tubitv.com/movies/<id>, /tv-shows/<id> (an episode) and /series/<id> (a list of episodes).
+    if (host === 'tubitv.com') {
+      const kinds = { movies: 'movie', 'tv-shows': 'episode', series: 'series' };
+      const kind = kinds[parts[0]];
+      const id = parts[1] || '';
+      if (!kind || !/^\d{1,12}$/.test(id)) return null;
+      return kind === 'series' ? { type: 'tubi', kind, id } : { type: 'tubi', kind, id, stream: true };
+    }
+    // NASA+: plus.nasa.gov/video/<name>/
+    if (host === 'plus.nasa.gov') {
+      const slug = parts[0] === 'video' ? parts[1] || '' : '';
+      return /^[a-z0-9-]{1,200}$/.test(slug) ? { type: 'nasa', slug, stream: true } : null;
+    }
     // A Google Drive file shared with anyone who has the link: played from its download address.
     // confirm=t skips the page Drive shows instead of a big file ("can't scan for viruses").
     if (host === 'drive.google.com') {
@@ -185,9 +203,10 @@ var MediaSources = (() => {
   /**
    * Set of media source types considered trusted by default. The Internet Archive is trusted too
    * (its links and its files): it is a well-known library hosting public-domain and Creative
-   * Commons films, not an arbitrary server, much like Vimeo.
+   * Commons films, not an arbitrary server, much like Vimeo. So are Tubi (a free, licensed
+   * streaming service) and NASA+ (NASA's own videos), whose streams the server looks up.
    */
-  const TRUSTED = new Set(['youtube', 'twitch', 'twitchclip', 'vimeo', 'archive']);
+  const TRUSTED = new Set(['youtube', 'twitch', 'twitchclip', 'vimeo', 'archive', 'tubi', 'nasa']);
 
   /**
    * Checks whether a detected media source is from an inherently trusted service.
@@ -200,9 +219,27 @@ var MediaSources = (() => {
   }
 
   /** Rejection message displayed when untrusted direct media links are queued in restricted rooms. */
-  const UNTRUSTED_MESSAGE = 'This world only plays YouTube, Twitch, Vimeo and Internet Archive links. Its owner can allow other links with the untrusted-links snippet setting.';
+  const UNTRUSTED_MESSAGE = 'This world only plays YouTube, Twitch, Vimeo, Tubi, NASA+ and Internet Archive links. Its owner can allow other links with the untrusted-links snippet setting.';
 
-  return { detect, nameFromLink, parseUrl, isTrusted, UNTRUSTED_MESSAGE };
+  /**
+   * The 11-character id of a YouTube video, from a bare id or a YouTube link (with or without
+   * https://), or false. Only YouTube's own hosts count: a pattern like "v/<11 letters>" turns up
+   * in other links too (twitch.tv/quarterjade is "tv/" and an 11-letter name).
+   *
+   * @param {string} link
+   * @returns {string|false}
+   */
+  function youtubeId(link) {
+    const s = String(link || '').trim();
+    if (/^[A-Za-z0-9_-]{11}$/.test(s)) return s;
+    const full = /^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : `https://${s}`;
+    const media = detect(full);
+    if (!media || media.type !== 'youtube') return false;
+    const match = /^.*(youtu\.be\/|v\/|u\/\w\/|embed\/|shorts\/|live\/|watch\?v=|&v=)([^#&?\/]*)/.exec(full);
+    return match && /^[A-Za-z0-9_-]{11}$/.test(match[2]) ? match[2] : false;
+  }
+
+  return { detect, nameFromLink, parseUrl, isTrusted, youtubeId, UNTRUSTED_MESSAGE };
 })();
 
 if ((typeof process !== 'undefined') && process.release && process.release.name.search(/node|io.js/) !== -1) {

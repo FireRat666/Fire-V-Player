@@ -26,6 +26,13 @@ var SEARCH_CACHE_SIZE = 10;
 var SEARCH_CACHE_MS = 6 * 60 * 60 * 1000;
 var SEARCH_COLOR = '#00897b';
 // The server works on 3 list previews at a time per connection and refuses more, so the rest wait.
+// What Search & Add can search: the source button goes through them in this order.
+var SEARCH_SOURCES = {
+  youtube: { label: 'YouTube', color: '#c62828', status: 'Searching YouTube.' },
+  archive: { label: 'Archive Films', color: '#6d4c41', status: 'Searching Internet Archive films and TV.' },
+  tubi: { label: 'Tubi', color: '#5e35b1', status: 'Searching Tubi. The first search takes a few seconds.' },
+  nasa: { label: 'NASA+', color: '#0b3d91', status: 'Searching NASA+.' }
+};
 var LIST_PREVIEWS_AT_ONCE = 3;
 // A list preview older than this is loaded again when it's next shown (the server re-reads lists
 // after 5 minutes too), and a request with no reply after LIST_REPLY_MS is given up on.
@@ -62,7 +69,7 @@ var FirePlaylistPanel = class {
     this.openListId = null;
     this.searchResults = [];
     this.searchQuery = '';
-    this.searchSource = 'youtube'; // 'youtube' | 'archive' (Internet Archive movies and TV)
+    this.searchSource = 'youtube'; // a key of SEARCH_SOURCES
     // Recent searches, kept on this device (like the full playlist page did).
     this.recentKey = `recent${this.karaoke ? 'Karaoke' : 'Playlist'}Searches`;
     this.recentSearches = this.loadRecent();
@@ -284,7 +291,8 @@ var FirePlaylistPanel = class {
     if (!hit) return;
     this.searchResults = hit.results;
     this.searchQuery = hit.query || '';
-    if (newest.startsWith('archive:')) this.searchSource = 'archive';
+    const source = newest.split(':')[0];
+    if (SEARCH_SOURCES[source]) this.searchSource = source;
   }
 
   // ---- lists saved from a link (Lists tab), kept on this device for this world
@@ -582,7 +590,7 @@ var FirePlaylistPanel = class {
     const searchHint = this.karaoke ? 'Search for a song to sing, or paste a video link' : 'Search YouTube, or paste a YouTube / Twitch / Vimeo / video link';
     this.searchField = await this.textField(this.searchRow, searchHint, v => { this.searchQuery = v; }, () => this.doSearch());
     if (this.searchField) {
-      // What to search: YouTube, or the Internet Archive's public-domain movies and TV (not for karaoke).
+      // What to search: YouTube, Internet Archive films and TV, Tubi or NASA+ (not for karaoke).
       if (!this.karaoke) this.sourceBtn = await this.button(this.searchRow, 'YouTube', () => this.toggleSearchSource(), { backgroundColor: '#c62828', width: '170px' });
       await this.button(this.searchRow, 'Search', () => this.doSearch(), { backgroundColor: '#1565c0' });
       // The last search, when its results were kept on this device.
@@ -1428,13 +1436,19 @@ var FirePlaylistPanel = class {
     this.render();
   }
 
-  // Switches the search between YouTube and Internet Archive movies and TV, and searches again.
+  // Switches the search to the next source (YouTube, Archive films, Tubi, NASA+), and searches again.
   toggleSearchSource() {
-    this.searchSource = this.searchSource === 'archive' ? 'youtube' : 'archive';
-    this.setText(this.sourceBtn, this.searchSource === 'archive' ? 'Movies & TV' : 'YouTube');
-    this.setStyle(this.sourceBtn, 'backgroundColor', this.searchSource === 'archive' ? '#6d4c41' : '#c62828');
+    const order = Object.keys(SEARCH_SOURCES);
+    this.searchSource = order[(order.indexOf(this.searchSource) + 1) % order.length];
+    this.showSearchSource();
     if ((this.searchQuery || '').trim().length >= 2) this.doSearch();
-    else this.setStatus(this.searchSource === 'archive' ? 'Searching Internet Archive movies and TV.' : 'Searching YouTube.');
+    else this.setStatus(SEARCH_SOURCES[this.searchSource].status);
+  }
+  showSearchSource() {
+    if (!this.sourceBtn) return;
+    const source = SEARCH_SOURCES[this.searchSource] || SEARCH_SOURCES.youtube;
+    this.setText(this.sourceBtn, source.label);
+    this.setStyle(this.sourceBtn, 'backgroundColor', source.color);
   }
 
   // Where the playing video is: its row near the top (one before it shows above), or its page.
@@ -1486,7 +1500,7 @@ var FirePlaylistPanel = class {
     const searchId = ++this.searchId;
     this.pendingSearchKey = isLink ? null : { key, query: q };
     const data = { term: q, searchId };
-    if (this.searchSource === 'archive') data.source = 'archive';
+    if (this.searchSource !== 'youtube') data.source = this.searchSource;
     this.send(Commands.SEARCH, data);
     console.log(`[PlaylistPanel] Searching for "${q}"...`);
     this.setStatus('Searching...', 0);
@@ -1870,10 +1884,7 @@ var FirePlaylistPanel = class {
     this.display(this.tabSearchBtn, !onSearch);
     this.display(this.searchTitle, onSearch);
     this.display(this.closeSearchBtn, onSearch);
-    if (this.sourceBtn) {
-      this.setText(this.sourceBtn, this.searchSource === 'archive' ? 'Movies & TV' : 'YouTube');
-      this.setStyle(this.sourceBtn, 'backgroundColor', this.searchSource === 'archive' ? '#6d4c41' : '#c62828');
-    }
+    this.showSearchSource();
 
     // A pasted playlist's question.
     const pl = this.pendingList;

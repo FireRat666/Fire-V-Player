@@ -13,6 +13,12 @@ const WEB_CONTEXT = { client: { clientName: 'WEB', clientVersion: '2.20250101.00
 /** The "Type: Video" search filter. */
 const VIDEOS_ONLY = 'EgIQAQ%3D%3D';
 const TIMEOUT_MS = 8000;
+/**
+ * Results a search gives: YouTube sends about 20 a page, so the second page is asked for too
+ * (about 0.8s more). A third page adds next to nothing.
+ */
+const SEARCH_RESULTS = 50;
+const MAX_PAGES = 2;
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const cache = new TtlCache({ maxEntries: 300 });
 
@@ -91,12 +97,8 @@ function parseVideoRenderer(r) {
   };
 }
 
-/**
- * Asks YouTube's web search endpoint directly. No API key: it is the same request youtube.com makes.
- * @param {string} term
- * @returns {Promise<Array<Object>>} Video results.
- */
-async function directSearch(term) {
+/** One request to YouTube's web search endpoint: a search, or the next page of one. */
+async function searchRequest(body) {
   const res = await fetch(SEARCH_URL, {
     method: 'POST',
     signal: AbortSignal.timeout(TIMEOUT_MS),
@@ -107,19 +109,52 @@ async function directSearch(term) {
       'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
       'accept-language': 'en-US,en;q=0.9'
     },
-    body: JSON.stringify({ context: WEB_CONTEXT, query: term, params: VIDEOS_ONLY })
+    body: JSON.stringify({ context: WEB_CONTEXT, ...body })
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const json = await res.json();
+  return res.json();
+}
+
+/** The token that asks for the next page of results, or ''. */
+function nextPageToken(json) {
+  const command = findAll(json, 'continuationCommand').find(c => c && typeof c.token === 'string');
+  return command ? command.token : '';
+}
+
+/**
+ * Asks YouTube's web search endpoint directly. No API key: it is the same request youtube.com makes.
+ * @param {string} term
+ * @param {Object} [options]
+ * @param {number} [options.max] - Most results; more than a page's (about 20) asks for the next pages.
+ * @returns {Promise<Array<Object>>} Video results.
+ */
+async function directSearch(term, { max = 0 } = {}) {
   const seen = new Set();
   const videos = [];
-  for (const r of findAll(json, 'videoRenderer')) {
-    const v = parseVideoRenderer(r);
-    if (!v || seen.has(v.id)) continue;
-    seen.add(v.id);
-    videos.push(v);
+  const take = json => {
+    for (const r of findAll(json, 'videoRenderer')) {
+      const v = parseVideoRenderer(r);
+      if (!v || seen.has(v.id)) continue;
+      seen.add(v.id);
+      videos.push(v);
+    }
+  };
+  let json = await searchRequest({ query: term, params: VIDEOS_ONLY });
+  take(json);
+  // More pages, while they keep adding videos. A page that fails just ends the list there.
+  for (let page = 1; page < MAX_PAGES && max && videos.length < max; page++) {
+    const token = nextPageToken(json);
+    if (!token) break;
+    const before = videos.length;
+    try {
+      json = await searchRequest({ continuation: token });
+    } catch (e) {
+      break;
+    }
+    take(json);
+    if (videos.length === before) break;
   }
-  return videos;
+  return max ? videos.slice(0, max) : videos;
 }
 
 /**
@@ -139,7 +174,7 @@ async function searchVideos(term) {
   try {
     const videos = await cache.remember(key, CACHE_TTL_MS, async () => {
       try {
-        const found = await directSearch(q);
+        const found = await directSearch(q, { max: SEARCH_RESULTS });
         if (found.length) return found;
         throw new Error('no results');
       } catch (err) {

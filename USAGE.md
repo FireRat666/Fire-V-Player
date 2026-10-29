@@ -16,6 +16,23 @@ In a SideQuest / Altspace Creator SDK world, add the player as a snippet. Its sl
 
 **Live preview (optional):** the SDK's outlines follow a setting's position, but not its scale or rotation. For a preview that updates as you change anything, copy [`unity/Editor/FireVPlayerSnippetPreview.cs`](unity/Editor/FireVPlayerSnippetPreview.cs) into an `Editor` folder in your project (e.g. `Assets/Editor/`). With the snippet's GameObject selected, it draws the screen, buttons and playlist panel in orange, and karaoke's Singers button in pink, where the player will put them. In karaoke it also gives the Singers button a drag handle, which the SDK doesn't.
 
+#### Second screens
+
+To show the video on more surfaces, give any object a **BS Material** and type `Fire-V-Player` into its **Texture** field. It works on any shape, such as a flat quad, a curved screen or a sphere, and needs no camera or render texture.
+
+In the world, the player swaps that text for whatever its own screen draws:
+- **YouTube and most links:** the space page.
+- **Twitch:** the player's own browser.
+- **Video files on the world's video player:** there's no picture to share, so second screens go black.
+
+For a ready-made one, copy [`unity/Editor/FireVPlayerSecondScreen.cs`](unity/Editor/FireVPlayerSecondScreen.cs) into the same `Editor` folder. Then use **GameObject > Fire-V-Player > Second Screen** (or right-click in the Hierarchy). It makes a 16:9 quad as wide as the player's screen, already set to `Fire-V-Player`.
+
+Second screens only show the video in the world.
+
+**Camera screens** (a camera filming the screen into a render texture, such as a "RenderTextureScreen" prefab) also show video files, but render the scene again every frame. The camera must film exactly the screen. Its orthographic size is half the screen's height: 0.28125 × the snippet's `scale`, so 0.5625 at `scale="2"`. If it doesn't match, the picture comes out cropped or shrunk.
+
+To set it up, select the prefab and use **GameObject > Fire-V-Player > Fit Camera Screen to Player**. That puts the prefab where the screen is and sizes its cameras. Turn off any placeholder screen in the prefab before building: it sits where the video is and flickers with it.
+
 ### On the website
 
 1. Edit your world on the website and open the **Snippets** section.

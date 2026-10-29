@@ -45,6 +45,9 @@ var SPACE_SIZE_CONFIRM_MS = 5000;
 // Set to -1 to mirror the space-page screen, if a client draws the page's texture flipped.
 var SURFACE_FLIP_X = 1;
 var SURFACE_FLIP_Y = 1;
+// A BS Material in the world's Unity scene whose Texture is "Fire-V-Player" (in any case) shows
+// the screen as well. See syncSecondScreens.
+var SECOND_SCREEN_TEXTURE = 'fire-v-player';
 
 var Core = class {
     constructor() {
@@ -172,6 +175,8 @@ var Core = class {
     // The screen itself: the browser, or the world's video player when a file is playing.
     this.screenReady = true;
     this.updateScreen();
+    // Second screens in the Unity scene may still be loading: look again in a while.
+    [3000, 10000].forEach(ms => setTimeout(() => { if (!this.destroyed) this.syncSecondScreens(); }, ms));
   }
 
   // ---------------------------------------------------------------- world objects (BS SDK)
@@ -318,6 +323,7 @@ var Core = class {
       if (this.nativeScreen) this.nativeScreen.destroy();
       console.log('[Core] A file is playing, so the world\'s video player takes the browser\'s place.');
       this.nativeScreen = new FireNativeScreen(this, link);
+      this.syncSecondScreens();
       return;
     }
     if (this.nativeScreen) {
@@ -405,6 +411,7 @@ var Core = class {
     // The address may have changed while the screen was being made.
     if (browser.url !== url) component.url = browser.url;
     browser.queue.splice(0).forEach(json => component.RunActions(json));
+    this.syncSecondScreens();
     if (p.geometry && p.geometry !== "false") await this.addScreenShape(go);
   }
   // The optional `geometry` setting: a white shape at the screen, in A-Frame's geometry syntax
@@ -658,6 +665,7 @@ var Core = class {
     await this.addComponent(go, new BS.Plane({ width: SCREEN_WIDTH_M, height: SCREEN_WIDTH_M * 9 / 16 }));
     await this.addComponent(go, new BS.Material({ shaderName: 'Unlit/Texture', texture: SPACE_BROWSER_TEXTURE, color: this.white() }));
     if (browser.removed) return;
+    this.syncSecondScreens();
     if (p.geometry && p.geometry !== "false") await this.addScreenShape(go);
   }
   // Sends one message (a JSON string) to the iframe's page, pinned to the player page's origin.
@@ -673,6 +681,59 @@ var Core = class {
     if (!browser || !browser.iframe || e.source !== browser.iframe.contentWindow) return;
     if (e.origin !== browser.origin || typeof e.data !== 'string') return;
     this.onBrowserMessage({ detail: e.data });
+  }
+
+  // ---------------------------------------------------------------- second screens
+  //
+  // A world can show the screen on more surfaces: any object in its Unity scene with a BS Material
+  // whose Texture is "Fire-V-Player" (the Unity menu Fire-V-Player > Second Screen makes one).
+  // Their material follows whichever texture the screen draws: the space
+  // page's, or the BS Browser's, whose reference is only known once it exists. The world's video
+  // player (files) has no texture to share, so they go black while it plays.
+
+  // The texture reference the screen draws now, or null when there isn't one to share.
+  secondScreenTexture() {
+    const browser = this.browser;
+    if (this.destroyed || !browser || browser.removed) return null;
+    if (browser.surface) return browser.go ? SPACE_BROWSER_TEXTURE : null;
+    const id = browser.component && browser.component.unityId;
+    return id != null && id !== '' ? `asset_browser_${id}` : null;
+  }
+  // The BS Materials of the scene's second screens. The page knows every object with a BS
+  // component, so these are among scene.objects.
+  findSecondScreens() {
+    const scene = this.banterScene();
+    if (!scene || !scene.objects || !this.modernSdk() || !BS.CT || BS.CT.Material == null) return [];
+    // Once the player has set a screen's texture it no longer reads "Fire-V-Player", so screens
+    // already found are remembered.
+    const known = this.secondScreens || (this.secondScreens = new Set());
+    Object.values(scene.objects).forEach(go => {
+      let material = null;
+      try { material = go && go.GetComponent(BS.CT.Material); } catch (e) {}
+      if (material && String(material.texture || '').trim().toLowerCase() === SECOND_SCREEN_TEXTURE) known.add(material);
+    });
+    return Array.from(known);
+  }
+  // Points every second screen at the screen's texture (or black). Safe to call often: a screen
+  // already showing the right thing isn't touched.
+  syncSecondScreens() {
+    if (!this.inWorld()) return;
+    const screens = this.findSecondScreens();
+    if (screens.length !== (this.secondScreenCount || 0)) {
+      this.secondScreenCount = screens.length;
+      console.log(`[Core] ${screens.length} second screen(s) in the scene.`);
+    }
+    const texture = this.secondScreenTexture();
+    screens.forEach(material => {
+      if (material.__fvpShowing === texture) return;
+      material.__fvpShowing = texture;
+      try {
+        material.texture = texture || '';
+        material.color = texture ? this.white() : new BS.Vector4(0, 0, 0, 1);
+      } catch (e) {
+        console.warn('[Core] Could not update a second screen:', e);
+      }
+    });
   }
 
   // ---------------------------------------------------------------- screen resolution
@@ -2389,6 +2450,7 @@ var Core = class {
 
     // The world's objects: the screen, buttons, hand controls and anything else made here.
     this.removeBrowser();
+    this.syncSecondScreens(); // black, as there's no screen any more
     // The space page goes back to how it was (Altspace's space-page screen).
     this.releaseSpaceSurface();
     this.removeHandControls();

@@ -45,8 +45,8 @@ var SPACE_SIZE_CONFIRM_MS = 5000;
 // Set to -1 to mirror the space-page screen, if a client draws the page's texture flipped.
 var SURFACE_FLIP_X = 1;
 var SURFACE_FLIP_Y = 1;
-// A BS Material in the world's Unity scene whose Texture is "Fire-V-Player" (in any case) shows
-// the screen as well. See syncSecondScreens.
+// An object in the world's Unity scene with a BS Material, named "Fire-V-Player..." or with
+// "Fire-V-Player" as its Texture (in any case), shows the screen as well. See syncSecondScreens.
 var SECOND_SCREEN_TEXTURE = 'fire-v-player';
 
 var Core = class {
@@ -715,7 +715,10 @@ var Core = class {
       let material = null;
       try { material = go && go.GetComponent(BS.CT.Material); } catch (e) {}
       if (!material) return;
-      if (String(material.texture || '').trim().toLowerCase() === SECOND_SCREEN_TEXTURE) known.add(material);
+      // Its Texture says "Fire-V-Player", or its object's name starts with it. The name is the
+      // dependable one: some clients load the world's BS Materials with an empty Texture.
+      if (String(material.texture || '').trim().toLowerCase() === SECOND_SCREEN_TEXTURE ||
+          String(go.name || '').trim().toLowerCase().startsWith(SECOND_SCREEN_TEXTURE)) known.add(material);
       else if (!known.has(material) && !material.__fvpAsked && material.unityId) unasked.push(material);
     });
     this.askMaterialTextures(scene, unasked);

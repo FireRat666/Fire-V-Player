@@ -18,14 +18,14 @@ In a SideQuest / Altspace Creator SDK world, add the player as a snippet. Its sl
 
 #### Second screens
 
-To show the video on more surfaces, give any object a **BS Material** and type `Fire-V-Player` into its **Texture** field. It works on any shape, such as a flat quad, a curved screen or a sphere, and needs no camera or render texture.
+To show the video on more surfaces, give any object a **BS Material** and name the object `Fire-V-Player` (or anything starting with it, such as `Fire-V-Player Left Wall`). Typing `Fire-V-Player` into the BS Material's **Texture** field works too, but some clients load that field empty, so the name is the safer choice. It works on any shape, such as a flat quad, a curved screen or a sphere, and needs no camera or render texture.
 
-In the world, the player swaps that text for whatever its own screen draws:
+In the world, the player shows whatever its own screen draws on it:
 - **YouTube and most links:** the space page.
 - **Twitch:** the player's own browser.
 - **Video files on the world's video player:** there's no picture to share, so second screens go black.
 
-For a ready-made one, copy [`unity/Editor/FireVPlayerSecondScreen.cs`](unity/Editor/FireVPlayerSecondScreen.cs) into the same `Editor` folder. Then use **GameObject > Fire-V-Player > Second Screen** (or right-click in the Hierarchy). It makes a 16:9 quad as wide as the player's screen, already set to `Fire-V-Player`.
+For a ready-made one, copy [`unity/Editor/FireVPlayerSecondScreen.cs`](unity/Editor/FireVPlayerSecondScreen.cs) into the same `Editor` folder. Then use **GameObject > Fire-V-Player > Second Screen** (or right-click in the Hierarchy). It makes a 16:9 quad named `Fire-V-Player`, as wide as the player's screen.
 
 Second screens only show the video in the world.
 

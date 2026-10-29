@@ -1,7 +1,7 @@
 // Second screens for the Fire-V-Player snippet (Banter Creator SDK).
 //
-// Any object with a BS Material whose Texture is "Fire-V-Player" shows the same picture as the
-// player's screen, with no camera or render texture: the player finds those materials and keeps
+// Any object with a BS Material, named "Fire-V-Player" (or starting with it) or with "Fire-V-Player"
+// as its Texture, shows the same picture as the player's screen, with no camera or render texture: the player finds those materials and keeps
 // them on whatever its screen draws, the space page (asset_browser_world, YouTube and most links)
 // or its own browser (Twitch). While a video file plays on the world's video player there is no
 // texture to share, so they go black. Any mesh works, a curved screen or a sphere included.
@@ -30,9 +30,9 @@ namespace FireVPlayer.EditorTools
     /// </summary>
     static class FireVPlayerSecondScreen
     {
-        const string ScreenName = "Fire-V-Player Second Screen";
-        // What marks a BS Material as a second screen (core.js SECOND_SCREEN_TEXTURE). The player
-        // replaces it with the screen's own texture.
+        // What marks a second screen (core.js SECOND_SCREEN_TEXTURE): the object's name, or its BS
+        // Material's Texture, which the player replaces with the screen's own texture.
+        const string ScreenName = "Fire-V-Player";
         const string MarkerTexture = "Fire-V-Player";
         const string SnippetName = "fire-v-player";
         const float ScreenAspect = 9f / 16f; // the player's screen is 1 m wide at scale 1, 16:9
@@ -91,7 +91,7 @@ namespace FireVPlayer.EditorTools
             if (player == null)
                 Debug.LogWarning("[Fire-V-Player] Added a second screen, but there's no Fire-V-Player snippet in the scene yet. It shows the player's screen once there is.");
             else
-                Debug.Log($"[Fire-V-Player] Added \"{go.name}\" ({width:0.##} x {width * ScreenAspect:0.##} m). Its BS Material's Texture is \"{MarkerTexture}\", which the player swaps for its screen in the world.");
+                Debug.Log($"[Fire-V-Player] Added \"{go.name}\" ({width:0.##} x {width * ScreenAspect:0.##} m). The player shows its screen on it in the world.");
         }
 
         /// <summary>

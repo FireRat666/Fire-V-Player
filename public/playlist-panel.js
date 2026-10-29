@@ -1436,13 +1436,13 @@ var FirePlaylistPanel = class {
     this.render();
   }
 
-  // Switches the search to the next source (YouTube, Archive films, Tubi, NASA+), and searches again.
+  // Switches the search to the next source (YouTube, Archive films, Tubi, NASA+). It only searches
+  // when Search is pressed, so clicking through the sources doesn't start one each time.
   toggleSearchSource() {
     const order = Object.keys(SEARCH_SOURCES);
     this.searchSource = order[(order.indexOf(this.searchSource) + 1) % order.length];
     this.showSearchSource();
-    if ((this.searchQuery || '').trim().length >= 2) this.doSearch();
-    else this.setStatus(SEARCH_SOURCES[this.searchSource].status);
+    this.setStatus(SEARCH_SOURCES[this.searchSource].status.replace(/^Searching/, 'Search will look on'), 4000);
   }
   showSearchSource() {
     if (!this.sourceBtn) return;

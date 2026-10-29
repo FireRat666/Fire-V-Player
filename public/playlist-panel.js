@@ -926,8 +926,8 @@ var FirePlaylistPanel = class {
     this.destroyed = true;
     this.built = false;
     this.visible = false;
-    [this.tickTimer, this.renderTimer, this.statusTimer, this.searchTimer, this.scrollTimer].forEach(t => { clearTimeout(t); clearInterval(t); });
-    this.tickTimer = this.renderTimer = this.statusTimer = this.searchTimer = this.scrollTimer = null;
+    [this.tickTimer, this.renderTimer, this.statusTimer, this.searchTimer, this.scrollTimer, this.listExpiryTimer].forEach(t => { clearTimeout(t); clearInterval(t); });
+    this.tickTimer = this.renderTimer = this.statusTimer = this.searchTimer = this.scrollTimer = this.listExpiryTimer = null;
     (this.thumbTimers || []).forEach(clearTimeout);
     this.thumbTimers = [];
     if (typeof this.core.removeMessageListener === 'function') this.core.removeMessageListener(this.onMessageFn);
@@ -1609,6 +1609,21 @@ var FirePlaylistPanel = class {
       this.listsOut.set(id, Date.now());
       this.send(Commands.LIST_PREVIEW, { id });
     }
+    this.scheduleListExpiry();
+  }
+
+  // While requests are out, checks again when the oldest would time out, so a stalled one shows
+  // its error and frees its place for the next waiting list without anyone touching the panel.
+  scheduleListExpiry() {
+    clearTimeout(this.listExpiryTimer);
+    this.listExpiryTimer = null;
+    if (this.destroyed || !this.listsOut.size) return;
+    const oldest = Math.min(...this.listsOut.values());
+    this.listExpiryTimer = setTimeout(() => {
+      this.listExpiryTimer = null;
+      this.pumpLists(); // expires timed-out requests, sends waiting ones and schedules the next check
+      this.renderSoon();
+    }, Math.max(0, oldest + LIST_REPLY_MS - Date.now()) + 50);
   }
 
   // Requests whose reply can't come any more: sent on a connection that has since been replaced

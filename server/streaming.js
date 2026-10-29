@@ -56,17 +56,23 @@ function parseTubiData(html) {
   return JSON.parse(body);
 }
 
-/** A Tubi page's data (path like "movies/123" or "category/westerns"), cached. */
+/** A Tubi page's data (path like "movies/123" or "category/westerns"), not cached. */
+async function fetchTubiPage(path) {
+  let html;
+  try {
+    html = await fetchText(`https://tubitv.com/${path}`);
+  } catch (e) {
+    throw new Error(/HTTP 404/.test(e.message) ? "That Tubi page doesn't exist (or isn't available here)." : "Couldn't reach Tubi. Try again in a moment.");
+  }
+  return parseTubiData(html);
+}
+
+/**
+ * A movie, episode or series page's data, cached whole (a stream is read from it later). A
+ * category page is much bigger and only its titles are needed, so it isn't kept (see tubiCategory).
+ */
 function tubiPage(path) {
-  return cache.remember(`tubi:${path}`, PAGE_TTL_MS, async () => {
-    let html;
-    try {
-      html = await fetchText(`https://tubitv.com/${path}`);
-    } catch (e) {
-      throw new Error(/HTTP 404/.test(e.message) ? "That Tubi page doesn't exist (or isn't available here)." : "Couldn't reach Tubi. Try again in a moment.");
-    }
-    return parseTubiData(html);
-  });
+  return cache.remember(`tubi:${path}`, PAGE_TTL_MS, () => fetchTubiPage(path));
 }
 
 function tubiPicture(c) {
@@ -129,21 +135,23 @@ async function tubiSeries(id) {
   return { title: clean(series.title, 120) || 'Tubi series', items };
 }
 
-/** The titles in a Tubi category (up to 50, as its page shows). */
-async function tubiCategory(slug) {
-  const data = await tubiPage(`category/${slug}`);
-  const container = data.container || {};
-  const ids = (container.containerChildrenIdMap || {})[slug] || [];
-  const byId = (data.video && data.video.byId) || {};
-  const info = (container.containerIdMap || {})[slug] || {};
-  const items = ids.map(id => byId[id] || byId[String(id).replace(/^0/, '')]).filter(Boolean).map(c => tubiItem(c));
-  return { title: clean(info.title ? `Tubi: ${info.title}` : `Tubi: ${slug}`, 120), items };
+/** The titles in a Tubi category (up to 50, as its page shows). Only these are cached, not the page. */
+function tubiCategory(slug) {
+  return cache.remember(`tubi:category:${slug}`, PAGE_TTL_MS, async () => {
+    const data = await fetchTubiPage(`category/${slug}`);
+    const container = data.container || {};
+    const ids = (container.containerChildrenIdMap || {})[slug] || [];
+    const byId = (data.video && data.video.byId) || {};
+    const info = (container.containerIdMap || {})[slug] || {};
+    const items = ids.map(id => byId[id] || byId[String(id).replace(/^0/, '')]).filter(Boolean).map(c => tubiItem(c));
+    return { title: clean(info.title ? `Tubi: ${info.title}` : `Tubi: ${slug}`, 120), items };
+  });
 }
 
 /** Tubi's categories: [{slug, title}]. */
 function tubiCategories() {
   return cache.remember('tubi:categories', CATALOG_TTL_MS, async () => {
-    const data = await tubiPage('category/featured');
+    const data = await fetchTubiPage('category/featured');
     const container = data.container || {};
     const map = container.containerIdMap || {};
     return (container.containerMenuList || Object.keys(map))

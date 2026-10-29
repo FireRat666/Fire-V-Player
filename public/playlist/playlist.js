@@ -644,6 +644,20 @@ var Playlist = class {
       this.listsOut.set(id, Date.now());
       this.core.sendMessage({ path: Commands.LIST_PREVIEW, data: { id } });
     }
+    this.scheduleListExpiry();
+  }
+  // While requests are out, checks again when the oldest would time out (2 minutes), so a stalled
+  // one shows its error and frees its place for the next waiting list without anyone clicking.
+  scheduleListExpiry() {
+    clearTimeout(this.listExpiryTimer);
+    this.listExpiryTimer = null;
+    if (!this.listsOut.size) return;
+    const oldest = Math.min(...this.listsOut.values());
+    this.listExpiryTimer = setTimeout(() => {
+      this.listExpiryTimer = null;
+      this.pumpLists(); // expires timed-out requests, sends waiting ones and schedules the next check
+      if (this.listsOverlay.style.display !== 'none') this.renderLists();
+    }, Math.max(0, oldest + 120000 - Date.now()) + 50);
   }
   // Requests whose reply can't come any more: sent on a connection since replaced (asked again on
   // the new one), or with no reply for 2 minutes.

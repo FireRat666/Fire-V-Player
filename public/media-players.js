@@ -42,33 +42,43 @@ class NoReferrerLoader {
     const controller = this.controller = new AbortController();
     const headers = {};
     if (context.rangeEnd) headers.Range = `bytes=${context.rangeStart || 0}-${context.rangeEnd - 1}`;
+    // A request ends once: by timing out, failing or loading. Whatever comes after (the fetch
+    // failing because the timeout aborted it, say) is ignored, as is everything after abort().
+    let settled = false;
+    const settle = () => {
+      if (settled || stats.aborted) return false;
+      settled = true;
+      clearTimeout(timer);
+      return true;
+    };
     const timer = setTimeout(() => {
+      if (!settle()) return;
       controller.abort();
-      if (!stats.aborted) callbacks.onTimeout(stats, context, null);
+      callbacks.onTimeout(stats, context, null);
     }, (config && config.timeout) || 20000);
+    this.timer = timer;
     fetch(context.url, { referrerPolicy: 'no-referrer', credentials: 'omit', signal: controller.signal, headers })
       .then(res => {
+        if (settled || stats.aborted) return null;
         stats.loading.first = Math.max(performance.now(), stats.loading.start);
         if (!res.ok) {
-          clearTimeout(timer);
-          callbacks.onError({ code: res.status, text: res.statusText }, context, res, stats);
+          if (settle()) callbacks.onError({ code: res.status, text: res.statusText }, context, res, stats);
           return null;
         }
         return (context.responseType === 'arraybuffer' ? res.arrayBuffer() : res.text()).then(data => {
-          clearTimeout(timer);
-          if (stats.aborted) return;
+          if (!settle()) return;
           stats.loading.end = Math.max(performance.now(), stats.loading.first);
           stats.loaded = stats.total = typeof data === 'string' ? data.length : data.byteLength;
           callbacks.onSuccess({ url: res.url, data, code: res.status }, stats, context, res);
         });
       })
       .catch(err => {
-        clearTimeout(timer);
-        if (!stats.aborted) callbacks.onError({ code: 0, text: err.message }, context, null, stats);
+        if (settle()) callbacks.onError({ code: 0, text: err.message }, context, null, stats);
       });
   }
   abort() {
     this.stats.aborted = true;
+    clearTimeout(this.timer);
     if (this.controller) this.controller.abort();
   }
   destroy() { this.abort(); }

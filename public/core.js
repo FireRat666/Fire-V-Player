@@ -2199,6 +2199,8 @@ var Core = class {
     const s = String(urlOrId || '').trim();
     const kind = /^(PL|OLAK5uy_|UU|FL)[A-Za-z0-9_-]{10,}$/;
     if (kind.test(s)) return s;
+    // Only YouTube's own links, as on the server: a list file's link may have list= in it too.
+    if (!/^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[a-z0-9-]+\.)*(?:youtube\.com|youtube-nocookie\.com|youtu\.be)(?:[\/?#:]|$)/i.test(s)) return null;
     const match = /[?&]list=([^#&?]+)/.exec(s);
     return match && kind.test(match[1]) ? match[1] : null;
   }
@@ -2209,8 +2211,9 @@ var Core = class {
     const s = String(input || '').trim();
     if (!/^https?:\/\/[^\s]+$/i.test(s) || s.length > 2000) return null;
     const media = window.MediaSources ? MediaSources.detect(s) : null;
-    // Drive file links play as videos, but as a playlist setting they are text files of links.
-    if (media && !media.drive) return null;
+    // Drive file links play as videos, but as a playlist setting they are text files of links. A
+    // Tubi series is a list of its episodes (the server reads it as one).
+    if (media && !media.drive && !(media.type === 'tubi' && media.kind === 'series')) return null;
     return s;
   }
   // A single video or stream link (YouTube, Twitch, a .m3u8 or VRCDN stream...), or null. In the

@@ -216,8 +216,8 @@ namespace FireVPlayer.EditorTools
         // with Reload (after Playlist) and Play/Pause (before the skips) when they're on.
         static float[] ButtonLayout(XElement e)
         {
-            bool playPause = Attr(e, "play-pause-button").ToLowerInvariant() != "false";
-            bool reload = Attr(e, "reload-button").ToLowerInvariant() != "false";
+            bool playPause = Flag(e, "play-pause-button", true);
+            bool reload = Flag(e, "reload-button", true);
             if (!playPause && !reload) return OriginalButtonX;
             const float Step = 0.24f, Gap = 0.31f, Centre = 0.03f;
             var groups = new[] { reload ? 2 : 1, playPause ? 3 : 2, 3 };
@@ -350,6 +350,22 @@ namespace FireVPlayer.EditorTools
         /// <param name="name">Attribute name.</param>
         /// <returns>Trimmed string value or empty string if missing.</returns>
         static string Attr(XElement e, string name) => ((string)e.Attribute(name) ?? "").Trim();
+
+        /// <summary>
+        /// Reads a true/false setting as core.js's setOrDefault does: missing gives the default,
+        /// "true"/"false" in any case count as written, and empty (an unticked checkbox) is false.
+        /// </summary>
+        /// <param name="e">Snippet XML element.</param>
+        /// <param name="name">Attribute name.</param>
+        /// <param name="fallback">Value when the attribute is missing or something else.</param>
+        static bool Flag(XElement e, string name, bool fallback)
+        {
+            if (e.Attribute(name) == null) return fallback;
+            var v = Attr(e, name).ToLowerInvariant();
+            if (v == "true") return true;
+            if (v == "false" || v == "") return false;
+            return fallback;
+        }
 
         /// <summary>
         /// Parses whitespace- or comma-delimited numbers from a snippet attribute.

@@ -1661,12 +1661,13 @@ var Core = class {
     if (!HAND_PLACES[place]) return;
     try { localStorage.setItem(HAND_PLACE_PREF_KEY, place); } catch (e) {}
     this.chosenHandPlace = this.currentHandPlace = place;
+    // A build still running sees the choice changed and stops, then builds again for the latest
+    // choice (see setupHandControls), Off included, which builds nothing.
+    this.handPlaceVersion = (this.handPlaceVersion || 0) + 1;
     this.removeHandControls();
     this.showToast(`Hand controls: ${HAND_PLACES[place].label}`);
-    if (place === 'off') return;
-    // A build still running stops when it sees it was removed, then builds again (see below).
     if (this.handControlsBuilding) this.handControlsRebuild = true;
-    else this.setupHandControls().catch(e => console.error('[Core] Could not set up the hand controls:', e));
+    else if (place !== 'off') this.setupHandControls().catch(e => console.error('[Core] Could not set up the hand controls:', e));
   }
   handPlaceLabel() {
     const place = HAND_PLACES[this.currentHandPlace];
@@ -1710,7 +1711,12 @@ var Core = class {
     }
   }
   async buildHandControls(scene) {
-    const name = this.currentHandPlace = await this.handPlace();
+    // False once the player chooses another place (or the player is removed) during a wait.
+    const version = this.handPlaceVersion;
+    const current = () => !this.destroyed && this.handPlaceVersion === version;
+    const name = await this.handPlace();
+    if (!current()) return;
+    this.currentHandPlace = name;
     const place = HAND_PLACES[name];
     if (name === 'off') return;
     const uid = (scene.localUser && scene.localUser.uid) || (window.user && window.user.id);
@@ -1719,11 +1725,13 @@ var Core = class {
       return;
     }
     const front = name === 'front' ? await this.handFrontPose() : null;
+    if (!current()) return;
     if (name === 'front' && !front) {
       this.showToast("Couldn't tell where you are, so the hand controls aren't in front of you. Move a little and choose In Front again.", 6000);
       return;
     }
     const root = await this.makeObject('FireVPlayer_HandControls', front || {});
+    if (!current()) { this.destroyObject(root); return; }
     this.handControls = root;
     // The buttons lie flat, facing out of the wrist (or toward the player). On the wrists the
     // hand-controls-position and hand-controls-rotation settings change where, mirrored for the right.

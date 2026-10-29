@@ -313,8 +313,9 @@ class App {
       }
     }
 
-    // If the user had votes, remove them
-    if (ws.u) {
+    // If the user had votes, remove them, once their last connection has gone: a screen reload or
+    // a closed panel leaves them in the room.
+    if (ws.u && !videoPlayer.sockets.some(s => s.u && s.u.id === ws.u.id)) {
       const voteCount = videoPlayer.votes.length;
       videoPlayer.votes = videoPlayer.votes.filter(vote => vote.u.id !== ws.u.id);
       // If the disconnected user had active votes, we need to update the clients.

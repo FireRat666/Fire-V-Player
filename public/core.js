@@ -736,6 +736,22 @@ var Core = class {
     });
   }
 
+  // Gives the second screens back their "Fire-V-Player" marker, black, so a player started later
+  // on this page can find them again.
+  releaseSecondScreens() {
+    if (!this.secondScreens) return;
+    this.secondScreens.forEach(material => {
+      delete material.__fvpShowing;
+      try {
+        material.texture = SECOND_SCREEN_TEXTURE;
+        material.color = new BS.Vector4(0, 0, 0, 1);
+      } catch (e) {
+        console.warn('[Core] Could not release a second screen:', e);
+      }
+    });
+    this.secondScreens.clear();
+  }
+
   // ---------------------------------------------------------------- screen resolution
   // `resolution` is the page's width in pixels (16:9). Each viewer can pick another in the panel,
   // remembered on their device, as their screen is their own browser.
@@ -2458,7 +2474,7 @@ var Core = class {
 
     // The world's objects: the screen, buttons, hand controls and anything else made here.
     this.removeBrowser();
-    this.syncSecondScreens(); // black, as there's no screen any more
+    this.releaseSecondScreens(); // black, and findable by the next player
     // The space page goes back to how it was (Altspace's space-page screen).
     this.releaseSpaceSurface();
     this.removeHandControls();

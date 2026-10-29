@@ -25,6 +25,12 @@ var ROW_CHUNK = 4;
 var SEARCH_CACHE_SIZE = 10;
 var SEARCH_CACHE_MS = 6 * 60 * 60 * 1000;
 var SEARCH_COLOR = '#00897b';
+// The server works on 3 list previews at a time per connection and refuses more, so the rest wait.
+var LIST_PREVIEWS_AT_ONCE = 3;
+// A list preview older than this is loaded again when it's next shown (the server re-reads lists
+// after 5 minutes too), and a request with no reply after LIST_REPLY_MS is given up on.
+var LIST_FRESH_MS = 5 * 60 * 1000;
+var LIST_REPLY_MS = 120000;
 // The progress bar's width in pixels: the panel (W, 1100) minus its padding and borders (42), the
 // now-playing card's padding (28), the time label (190) and the gap before the bar (10).
 var PROGRESS_WIDTH = 820;
@@ -49,6 +55,10 @@ var FirePlaylistPanel = class {
     this.savedLists = null;
     this.extraLists = [];
     this.listData = new Map();
+    this.listQueue = []; // list ids waiting to be asked for (see pumpLists)
+    this.listsOut = new Map(); // list id -> when it was asked for, still waiting for a reply
+    this.listsSocket = null;
+    this.searchesSent = []; // when each search still waiting for results was sent (see doSearch)
     this.openListId = null;
     this.searchResults = [];
     this.searchQuery = '';
@@ -1470,7 +1480,13 @@ var FirePlaylistPanel = class {
       this.render();
       return;
     }
-    this.pendingSearchKey = isLink ? null : { key, query: q };
+    // Replies don't say which search they answer, so results are only kept on the device when no
+    // other search was still waiting: otherwise the earlier one's could be kept under this one's words.
+    const now = Date.now();
+    this.searchesSent = this.searchesSent.filter(t => now - t < 120000);
+    const overlapping = this.searchesSent.length > 0;
+    this.searchesSent.push(now);
+    this.pendingSearchKey = isLink || overlapping ? null : { key, query: q };
     this.send(Commands.SEARCH, this.searchSource === 'archive' ? { term: q, source: 'archive' } : q);
     console.log(`[PlaylistPanel] Searching for "${q}"...`);
     this.setStatus('Searching...', 0);
@@ -1546,24 +1562,60 @@ var FirePlaylistPanel = class {
     this.getLists().forEach(list => this.requestList(list.id, false));
   }
 
-  // Asks the server what's in a list (it replies with LIST_PREVIEW_RESULT).
+  // Asks the server what's in a list (it replies with LIST_PREVIEW_RESULT), unless it's already
+  // being asked for or a recent answer is kept. `force` asks again even then (Retry). A list that
+  // was shown before keeps its videos on screen while it's loaded again.
   requestList(id, force) {
+    this.checkListRequests();
+    if (this.listsOut.has(id) || this.listQueue.includes(id)) return;
     const had = this.listData.get(id);
-    if (had && !force && (had.state === 'ready' || (had.state === 'loading' && Date.now() - had.at < 120000))) return;
-    this.listData.set(id, { state: 'loading', at: Date.now() });
-    this.send(Commands.LIST_PREVIEW, { id });
+    if (had && had.state === 'ready' && !force && Date.now() - had.at < LIST_FRESH_MS) return;
+    if (!(had && had.state === 'ready')) this.listData.set(id, { state: 'loading', at: Date.now() });
+    this.listQueue.push(id);
+    this.pumpLists();
     this.renderSoon();
+  }
+
+  // Sends waiting list requests, LIST_PREVIEWS_AT_ONCE at most at a time, while connected.
+  pumpLists() {
+    this.checkListRequests();
+    const connected = typeof this.core.connected === 'function' ? this.core.connected() : true;
+    while (connected && this.listsOut.size < LIST_PREVIEWS_AT_ONCE && this.listQueue.length) {
+      const id = this.listQueue.shift();
+      this.listsOut.set(id, Date.now());
+      this.send(Commands.LIST_PREVIEW, { id });
+    }
+  }
+
+  // Requests whose reply can't come any more: sent on a connection that has since been replaced
+  // (asked again on the new one), or with no reply for LIST_REPLY_MS.
+  checkListRequests() {
+    if (this.core.ws !== this.listsSocket) {
+      this.listsSocket = this.core.ws;
+      const lost = [...this.listsOut.keys()].filter(id => !this.listQueue.includes(id));
+      this.listsOut.clear();
+      this.listQueue.unshift(...lost);
+    }
+    const now = Date.now();
+    for (const [id, at] of this.listsOut) {
+      if (now - at < LIST_REPLY_MS) continue;
+      this.listsOut.delete(id);
+      const d = this.listData.get(id);
+      if (d && d.state === 'loading') this.listData.set(id, { state: 'error', error: 'No reply from the server. Try again.' });
+    }
   }
 
   onListPreview(data) {
     if (!data || typeof data.id !== 'string') return;
+    this.listsOut.delete(data.id);
+    this.pumpLists();
     if (data.error) {
       this.listData.set(data.id, { state: 'error', error: String(data.error) });
       if (this.openListId === data.id) this.setStatus(String(data.error), 6000);
       return;
     }
     const items = Array.isArray(data.items) ? data.items : [];
-    this.listData.set(data.id, { state: 'ready', title: data.title || '', items, skipped: data.skipped || 0, truncated: !!data.truncated });
+    this.listData.set(data.id, { state: 'ready', at: Date.now(), title: data.title || '', items, skipped: data.skipped || 0, truncated: !!data.truncated });
     // A saved list keeps its real name for next time.
     const mine = data.title && this.userLists.find(l => l.id === data.id);
     if (mine && mine.label !== data.title) { mine.label = data.title; this.saveUserLists(); }
@@ -1578,7 +1630,8 @@ var FirePlaylistPanel = class {
     }
     this.openListId = id;
     const data = this.listData.get(id);
-    if (!data || data.state === 'error') this.requestList(id, true);
+    // Loads it if it hasn't been, failed, or was loaded a while ago.
+    this.requestList(id, !data || data.state === 'error');
     // The list's own row at the top, its videos under it.
     const at = this.listEntries().findIndex(e => e.kind === 'list' && e.list.id === id);
     this.tab = 'lists';
@@ -1618,6 +1671,7 @@ var FirePlaylistPanel = class {
         clearInterval(this.searchTimer);
         this.searchTimer = null;
         this.searchResults = Array.isArray(json.data) ? json.data : [];
+        this.searchesSent.shift();
         console.log(`[PlaylistPanel] Got ${this.searchResults.length} search results.`);
         if (this.pendingSearchKey && this.searchResults.length) {
           this.saveSearch(this.pendingSearchKey.key, this.pendingSearchKey.query, this.searchResults);
@@ -1657,6 +1711,8 @@ var FirePlaylistPanel = class {
         this.loadSavedLists(); // names and sizes of any new ones
         break;
       case Commands.PLAYBACK_UPDATE:
+        // Sent on every (re)connection: list requests that were waiting can go now.
+        if (json.data && json.data.type === 'initial-sync') this.pumpLists();
         if (json.data && json.data.type === 'initial-sync' && this.refreshing) {
           this.refreshing = false;
           this.setStatus(this.karaoke ? 'Singer list is up to date.' : 'Playlist is up to date.');

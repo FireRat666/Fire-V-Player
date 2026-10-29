@@ -4,16 +4,24 @@
   </head>
   <body>
     <script>
-      // A floor to stand on, made with the BS SDK.
-      window.addEventListener("bs-loaded", () => {
+      // A floor to stand on, made with the BS SDK. The SDK and the scene may already be ready by
+      // the time this runs, so each is checked before waiting for its event.
+      let floorMade = false;
+      async function makeFloor() {
+        if (floorMade) return;
+        floorMade = true;
+        const floor = await new BS.GameObject({ name: "Floor", localScale: new BS.Vector3(30, 0.1, 30) }).Async();
+        await floor.AddComponent(new BS.Box({ width: 1, height: 1, depth: 1 }));
+        await floor.AddComponent(new BS.Material({ shaderName: "Unlit/Diffuse", color: new BS.Vector4(0.5, 0.5, 0, 1) }));
+        await floor.AddComponent(new BS.BoxCollider({ isTrigger: false, size: new BS.Vector3(1, 1, 1) }));
+      }
+      function whenSceneReady() {
         const scene = (BS.Scene || BS.BanterScene).GetInstance();
-        scene.On("unity-loaded", async () => {
-          const floor = await new BS.GameObject({ name: "Floor", localScale: new BS.Vector3(30, 0.1, 30) }).Async();
-          await floor.AddComponent(new BS.Box({ width: 1, height: 1, depth: 1 }));
-          await floor.AddComponent(new BS.Material({ shaderName: "Unlit/Diffuse", color: new BS.Vector4(0.5, 0.5, 0, 1) }));
-          await floor.AddComponent(new BS.BoxCollider({ isTrigger: false, size: new BS.Vector3(1, 1, 1) }));
-        });
-      });
+        if (scene.unityLoaded) makeFloor();
+        else scene.On("unity-loaded", makeFloor);
+      }
+      if (window.BS) whenSceneReady();
+      else window.addEventListener("bs-loaded", whenSceneReady);
     </script>
 
     <script src="playlist.js" instance="demo-playlist" space-screen="false" 

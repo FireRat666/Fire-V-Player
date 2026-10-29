@@ -99,6 +99,8 @@ var Playlist = class {
         }
         this.updatePlaylist(this.core.player);
         this.startUiUpdater();
+        // Sent on every (re)connection: list requests that were waiting can go now.
+        if (json.data.type === 'initial-sync' && this.listQueue) this.pumpLists();
         if (json.data.type === 'initial-sync' && this.refreshToast) {
           this.refreshToast = false;
           this.core.showToast("Playlist is up to date.", 2000);
@@ -569,6 +571,12 @@ var Playlist = class {
 
   setupListsUI() {
     this.listData = new Map();
+    // The server works on 3 list previews at a time per connection and refuses more, so the rest
+    // wait (see pumpLists). A preview is loaded again when shown after 5 minutes, as the server
+    // re-reads lists then too.
+    this.listQueue = [];
+    this.listsOut = new Map(); // list id -> when it was asked for
+    this.listsSocket = null;
     this.extraLists = [];
     this.openListId = null;
     this.listsOverlay = document.querySelector('.lists-overlay');
@@ -612,16 +620,49 @@ var Playlist = class {
     this.getLists().forEach(list => this.requestList(list.id, false));
     this.renderLists();
   }
+  // Asks the server what's in a list, unless it's already being asked for or a recent answer is
+  // kept (`force` asks again anyway). A list shown before keeps its videos while it reloads.
   requestList(id, force) {
+    this.checkListRequests();
+    if (this.listsOut.has(id) || this.listQueue.includes(id)) return;
     const had = this.listData.get(id);
-    if (had && !force && (had.state === 'ready' || (had.state === 'loading' && Date.now() - had.at < 120000))) return;
-    this.listData.set(id, { state: 'loading', at: Date.now() });
-    this.core.sendMessage({ path: Commands.LIST_PREVIEW, data: { id } });
+    if (had && had.state === 'ready' && !force && Date.now() - had.at < 5 * 60 * 1000) return;
+    if (!(had && had.state === 'ready')) this.listData.set(id, { state: 'loading', at: Date.now() });
+    this.listQueue.push(id);
+    this.pumpLists();
+  }
+  // Sends waiting list requests, 3 at most at a time, while connected.
+  pumpLists() {
+    this.checkListRequests();
+    while (this.core.connected() && this.listsOut.size < 3 && this.listQueue.length) {
+      const id = this.listQueue.shift();
+      this.listsOut.set(id, Date.now());
+      this.core.sendMessage({ path: Commands.LIST_PREVIEW, data: { id } });
+    }
+  }
+  // Requests whose reply can't come any more: sent on a connection since replaced (asked again on
+  // the new one), or with no reply for 2 minutes.
+  checkListRequests() {
+    if (this.core.ws !== this.listsSocket) {
+      this.listsSocket = this.core.ws;
+      const lost = [...this.listsOut.keys()].filter(id => !this.listQueue.includes(id));
+      this.listsOut.clear();
+      this.listQueue.unshift(...lost);
+    }
+    const now = Date.now();
+    for (const [id, at] of this.listsOut) {
+      if (now - at < 120000) continue;
+      this.listsOut.delete(id);
+      const d = this.listData.get(id);
+      if (d && d.state === 'loading') this.listData.set(id, { state: 'error', error: 'No reply from the server. Try again.' });
+    }
   }
   onListPreview(data) {
     if (!data || typeof data.id !== 'string') return;
+    this.listsOut.delete(data.id);
+    this.pumpLists();
     if (data.error) this.listData.set(data.id, { state: 'error', error: String(data.error) });
-    else this.listData.set(data.id, { state: 'ready', title: data.title || '', items: Array.isArray(data.items) ? data.items : [], skipped: data.skipped || 0, truncated: !!data.truncated });
+    else this.listData.set(data.id, { state: 'ready', at: Date.now(), title: data.title || '', items: Array.isArray(data.items) ? data.items : [], skipped: data.skipped || 0, truncated: !!data.truncated });
     if (this.listsOverlay.style.display !== 'none') this.renderLists();
   }
   appendList(id) {
@@ -681,7 +722,7 @@ var Playlist = class {
       if (list.shared && list.by) sub.textContent += `${sub.textContent ? '  -  ' : ''}saved by ${list.by}`;
       button(head, open ? 'Close' : 'Open', 'grey', () => {
         this.openListId = open ? null : list.id;
-        if (!open && data.state === 'error') this.requestList(list.id, true);
+        if (!open) this.requestList(list.id, data.state === 'error'); // or loaded a while ago
         this.renderLists();
       });
       if (data.state === 'error') button(head, 'Retry', 'teal', () => { this.requestList(list.id, true); this.renderLists(); });

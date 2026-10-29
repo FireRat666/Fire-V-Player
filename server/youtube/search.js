@@ -133,7 +133,8 @@ async function directSearch(term) {
 async function searchVideos(term) {
   const q = String(term || '').trim();
   if (!q) return { videos: [], via: 'direct' };
-  const key = q.toLowerCase();
+  // Its own namespace, apart from videoById's id: keys.
+  const key = `search:${q.toLowerCase()}`;
   let via = cache.get(key) !== undefined ? 'cache' : 'direct';
   try {
     const videos = await cache.remember(key, CACHE_TTL_MS, async () => {

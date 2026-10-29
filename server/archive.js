@@ -187,8 +187,8 @@ async function getItem(id) {
       list.sort((a, b) => rank(a) - rank(b) || Math.abs((Number(a.height) || 480) - 480) - Math.abs((Number(b.height) || 480) - 480));
       files.push(list[0]);
     }
-    files.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name, 'en', { numeric: true, sensitivity: 'base' }));
-    const best = files[0] ? rank(files[0]) : 0;
+    // In name order, so a season's episodes stay in order even when their copies differ.
+    files.sort((a, b) => a.name.localeCompare(b.name, 'en', { numeric: true, sensitivity: 'base' }));
     const describe = f => ({
       name: f.name,
       title: cleanText(f.title) || f.name.split('/').pop().replace(/\.[a-z0-9]+$/i, '').replace(/_/g, ' '),
@@ -197,8 +197,8 @@ async function getItem(id) {
     return {
       id,
       title: cleanText(meta.title) || id,
-      // Lower-quality copies of the videos are only used when there's nothing better.
-      files: files.filter(f => rank(f) === best).slice(0, MAX_ITEM_FILES).map(describe),
+      // The best copy of each video (each group above picked its own best).
+      files: files.slice(0, MAX_ITEM_FILES).map(describe),
       // Every copy, for a link straight to one of them.
       allFiles: [].concat(...groups.values()).map(describe)
     };

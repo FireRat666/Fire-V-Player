@@ -285,9 +285,11 @@ function twitchTime(seconds) {
  * The one Twitch embed for the life of the page. Twitch.Player's constructor adds a window
  * 'message' listener that its destroy() never removes, so every `new Twitch.Player` would leak
  * one. It's built once, kept in the page (hidden while something else plays) and re-pointed with
- * setChannel/setVideo, or by reloading its iframe. `owner` is the TwitchSource using it now.
+ * setChannel/setVideo, or by reloading its iframe. `owner` is the TwitchSource using it now and
+ * `key` its channel or video; `loaded` is what the embed was last pointed at, which differs from
+ * `key` until a re-point waiting for the embed to be ready has happened.
  */
-const twitchEmbed = { player: null, div: null, ready: false, owner: null, key: '' };
+const twitchEmbed = { player: null, div: null, ready: false, owner: null, key: '', loaded: '' };
 
 /**
  * Player adapter for live Twitch channels and recorded Twitch VODs.
@@ -345,23 +347,38 @@ class TwitchSource extends BaseMediaSource {
       };
       if (this.live) o.channel = this.channel; else o.video = this.video;
       if (this.pendingSeek > 0) o.time = twitchTime(this.pendingSeek);
-      e.key = this.key;
+      e.key = e.loaded = this.key;
       e.player = new Twitch.Player(e.div.id, o);
       this.listen(e.player);
       this.ensurePlaying(6000); // a new embed takes a few seconds to load
       return;
     }
-    if (e.key !== this.key) {
-      e.key = this.key;
-      try { this.live ? e.player.setChannel(this.channel) : e.player.setVideo(this.video); } catch (err) {
-        console.log('[Twitch] re-point failed', err);
-      }
+    e.key = this.key;
+    // An embed still loading (another source's) is re-pointed in onReady instead.
+    if (!e.ready) {
+      if (!this.wantPaused) this.ensurePlaying(6000);
+      return;
     }
-    this.ready = e.ready;
+    if (e.loaded !== this.key) this.repoint();
+    else if (!this.live) {
+      // The same VOD again: start where this play asks (even 0), not where the embed was left.
+      this.seekOnPlay = true;
+      try { e.player.seek(this.pendingSeek); } catch (err) {}
+    }
+    this.ready = true;
     this.applyAudio();
     if (this.wantPaused) { try { e.player.pause(); } catch (err) {} return; }
     try { e.player.play(); } catch (err) {}
     this.ensurePlaying();
+  }
+
+  /** Points the embed at this source's channel or video, and notes that it was. */
+  repoint() {
+    const e = twitchEmbed;
+    try { this.live ? e.player.setChannel(this.channel) : e.player.setVideo(this.video); } catch (err) {
+      console.log('[Twitch] re-point failed', err);
+    }
+    e.loaded = this.key;
   }
 
   /** The embed's events, added once for the life of the page and passed to whichever source owns it. */
@@ -386,6 +403,8 @@ class TwitchSource extends BaseMediaSource {
   }
 
   onReady() {
+    // It may have been loading something else when this source took it over.
+    if (twitchEmbed.loaded !== this.key) this.repoint();
     this.ready = true;
     this.applyAudio();
     if (this.wantPaused) { try { this.p.pause(); } catch (e) {} return; }
@@ -399,9 +418,10 @@ class TwitchSource extends BaseMediaSource {
     if (!this.live) {
       try { this.reportDuration(this.p.getDuration()); } catch (e) {}
       // setVideo() takes only an id, so a start offset is a seek once the video is running.
-      if (this.pendingSeek > 0) {
+      if (this.pendingSeek > 0 || this.seekOnPlay) {
         const t = this.pendingSeek;
         this.pendingSeek = 0;
+        this.seekOnPlay = false;
         try { if (Math.abs(this.p.getCurrentTime() - t) > 2) this.p.seek(t); } catch (e) {}
         this.setPos(t);
       }
@@ -453,6 +473,7 @@ class TwitchSource extends BaseMediaSource {
     twitchParents().forEach(h => url.searchParams.append('parent', h));
     this.setPlaying(false);
     frame.src = url.toString();
+    twitchEmbed.loaded = this.key;
     return true;
   }
 

@@ -10,8 +10,12 @@
  * @module server/lists
  */
 
-const dns = require('dns').promises;
+const dns = require('dns');
 const net = require('net');
+const http = require('http');
+const https = require('https');
+const zlib = require('zlib');
+const { Readable } = require('stream');
 const MediaSources = require('../public/media-sources.js');
 const media = require('./media.js');
 const { getInnertube } = require('./youtube/youtubeiService.js');
@@ -204,40 +208,126 @@ function isListSource(input) {
 
 // ------------------------------------------------------------------ fetching
 
-/** Whether an address is private, loopback, link-local or otherwise not on the public internet. */
+/**
+ * An IPv6 address as its 8 16-bit words (a dotted IPv4 tail is read as the last two), or null if
+ * it isn't one.
+ */
+function ipv6Words(ip) {
+  let s = String(ip).toLowerCase().split('%')[0];
+  const tail = /^(.*:)(\d+\.\d+\.\d+\.\d+)$/.exec(s);
+  if (tail) {
+    if (!net.isIPv4(tail[2])) return null;
+    const [a, b, c, d] = tail[2].split('.').map(Number);
+    s = `${tail[1]}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const halves = s.split('::');
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const rest = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  const fill = halves.length === 2 ? 8 - head.length - rest.length : 0;
+  if (fill < 0 || (halves.length === 2 && fill === 0)) return null;
+  const parts = [...head, ...Array(fill).fill('0'), ...rest];
+  if (parts.length !== 8 || parts.some(h => !/^[0-9a-f]{1,4}$/.test(h))) return null;
+  return parts.map(h => parseInt(h, 16));
+}
+
+/**
+ * Whether an address is private, loopback, link-local or otherwise not on the public internet.
+ * An IPv6 address that carries an IPv4 one (mapped ::ffff:a.b.c.d, also written ::ffff:7f00:1;
+ * the old ::a.b.c.d form; NAT64 64:ff9b::; 6to4 2002::) is judged by that IPv4 address.
+ * Anything that can't be read is treated as private.
+ */
 function isPrivateAddress(ip) {
   if (net.isIPv4(ip)) {
     const [a, b] = ip.split('.').map(Number);
     return a === 0 || a === 10 || a === 127 || a >= 224 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)
       || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || (a === 198 && (b === 18 || b === 19));
   }
-  const v6 = ip.toLowerCase();
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(v6);
-  if (mapped) return isPrivateAddress(mapped[1]);
-  return v6 === '::' || v6 === '::1' || /^f[cd]/.test(v6) || /^fe[89ab]/.test(v6) || /^ff/.test(v6);
+  const w = ipv6Words(ip);
+  if (!w) return true;
+  const v4 = (hi, lo) => `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+  const firstFiveZero = w.slice(0, 5).every(x => x === 0);
+  if (firstFiveZero && w[5] === 0xffff) return isPrivateAddress(v4(w[6], w[7])); // IPv4-mapped
+  if (firstFiveZero && w[5] === 0) return (w[6] === 0 && w[7] <= 1) || isPrivateAddress(v4(w[6], w[7])); // ::, ::1, IPv4-compatible
+  if (w[0] === 0x64 && w[1] === 0xff9b && w.slice(2, 6).every(x => x === 0)) return isPrivateAddress(v4(w[6], w[7])); // NAT64
+  if (w[0] === 0x64 && w[1] === 0xff9b && w[2] === 1) return true; // local-use NAT64
+  if (w[0] === 0x2002) return isPrivateAddress(v4(w[1], w[2])); // 6to4
+  if (w[0] === 0x2001 && w[1] === 0) return true; // Teredo
+  return (w[0] & 0xfe00) === 0xfc00 // unique local
+    || (w[0] & 0xffc0) === 0xfe80 // link-local
+    || (w[0] & 0xffc0) === 0xfec0 // site-local (deprecated)
+    || (w[0] & 0xff00) === 0xff00; // multicast
 }
 
-/** Refuses links to this server's own network: the server fetches list files for anyone. */
-async function assertPublicUrl(url) {
+/**
+ * Refuses links that can't be public before any connection: not http(s), a local name, or an IP
+ * address that is private. Names are checked when they're looked up for the connection itself
+ * (publicLookup), so the address checked is the one connected to.
+ */
+function assertPublicUrl(url) {
   const u = new URL(url);
   if (!/^https?:$/.test(u.protocol)) throw new ListError('Only http and https links can be loaded.');
   const host = u.hostname.replace(/^\[|\]$/g, '');
   if (/^localhost$|\.localhost$|\.local$|\.internal$/i.test(host)) throw new ListError('That link is not on the public internet.');
-  const addresses = net.isIP(host) ? [{ address: host }] : await dns.lookup(host, { all: true }).catch(() => {
-    throw new ListError(`Could not find ${host}.`);
+  if (net.isIP(host) && isPrivateAddress(host)) throw new ListError('That link is not on the public internet.');
+}
+
+/**
+ * The DNS lookup for list fetches' connections: refuses a name if any of its addresses is private,
+ * so a name can't pass a check and then resolve somewhere else for the connection.
+ */
+function publicLookup(hostname, options, callback) {
+  if (typeof options === 'function') { callback = options; options = {}; }
+  dns.lookup(hostname, { ...options, all: true }, (err, addresses) => {
+    if (err) return callback(new ListError(`Could not find ${hostname}.`));
+    if (!addresses.length || addresses.some(a => isPrivateAddress(a.address))) {
+      return callback(new ListError('That link is not on the public internet.'));
+    }
+    if (options && options.all) return callback(null, addresses);
+    callback(null, addresses[0].address, addresses[0].family);
   });
-  if (!addresses.length || addresses.some(a => isPrivateAddress(a.address))) throw new ListError('That link is not on the public internet.');
+}
+
+/** One request through publicLookup, as a fetch Response (redirects not followed). */
+function requestPublic(url, signal) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const lib = u.protocol === 'https:' ? https : http;
+    const req = lib.request(u, {
+      method: 'GET',
+      lookup: publicLookup,
+      signal,
+      headers: { 'User-Agent': USER_AGENT, 'Accept': 'text/plain, */*;q=0.8', 'Accept-Encoding': 'gzip, deflate, br' }
+    }, res => {
+      const headers = new Headers();
+      for (const [name, value] of Object.entries(res.headers)) {
+        [].concat(value).forEach(v => headers.append(name, String(v)));
+      }
+      const status = res.statusCode || 0;
+      if (status < 200 || status > 599 || [204, 205, 304].includes(status)) {
+        res.resume();
+        resolve(new Response(null, { status: status >= 200 && status <= 599 ? status : 502, headers }));
+        return;
+      }
+      const encoding = String(res.headers['content-encoding'] || '').toLowerCase();
+      const unzip = encoding === 'gzip' ? zlib.createGunzip() : encoding === 'deflate' ? zlib.createInflate() : encoding === 'br' ? zlib.createBrotliDecompress() : null;
+      const body = unzip ? res.pipe(unzip) : res;
+      if (unzip) { res.on('error', e => unzip.destroy(e)); headers.delete('content-encoding'); headers.delete('content-length'); }
+      resolve(new Response(Readable.toWeb(body), { status, headers }));
+    });
+    req.on('error', err => reject(err instanceof ListError ? err
+      : err && err.name === 'AbortError' ? new ListError('That link took too long to answer.')
+      : new ListError("Could not load that link.")));
+    req.end();
+  });
 }
 
 /** Fetches a public link, following up to 5 redirects and checking each one. */
 async function fetchPublic(url) {
+  const signal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
   for (let hop = 0; hop < 6; hop++) {
-    await assertPublicUrl(url);
-    const res = await fetch(url, {
-      redirect: 'manual',
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      headers: { 'User-Agent': USER_AGENT, 'Accept': 'text/plain, */*;q=0.8' }
-    });
+    assertPublicUrl(url);
+    const res = await requestPublic(url, signal);
     if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
       try { await res.body?.cancel(); } catch (e) {}
       url = new URL(res.headers.get('location'), url).href;

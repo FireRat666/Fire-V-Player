@@ -780,7 +780,8 @@ class App {
       }
       return;
     }
-    const videoId = this.getYoutubeId(term);
+    // A bare 11-character word is a video ID only for YouTube; an Archive search for it searches.
+    const videoId = source === 'archive' && !/^(https?:\/\/|www\.)/i.test(term) ? false : this.getYoutubeId(term);
 
     if (videoId) {
       // It's a URL, fetch the single video details

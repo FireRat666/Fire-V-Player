@@ -723,7 +723,13 @@ var FirePlaylistPanel = class {
       this.core.setScreenResolution(next || null);
       this.render();
     }, { backgroundColor: '#00838f' });
-    await this.label(mineRow, 'These change only your own screen.', { fontSize: '16px', color: '#999999', marginLeft: '8px', flexShrink: 1 });
+    // Steps the hand controls through their places (Core's HAND_PLACES), when the snippet has them.
+    if (this.core.params['hand-controls'] === 'true') {
+      this.handBtn = await this.button(mineRow, 'Hand Controls', () => {
+        Promise.resolve(this.core.nextHandPlace()).then(() => this.render()).catch(() => {});
+      }, { backgroundColor: '#5d4037' });
+    }
+    await this.label(mineRow, 'These change only your own player.', { fontSize: '16px', color: '#999999', marginLeft: '8px', flexShrink: 1 });
 
     // Add by link (in karaoke mode, pasting a link into Search does this)
     const linkSection = this.karaoke ? null : await section('Add by link');
@@ -1835,6 +1841,7 @@ var FirePlaylistPanel = class {
     this.setText(this.captionsBtn, captions ? 'Captions: On' : 'Captions: Off');
     this.setStyle(this.captionsBtn, 'backgroundColor', captions ? '#2e7d32' : '#00838f');
     const [resW, resH] = this.core.screenPageSize();
+    if (this.handBtn) this.setText(this.handBtn, `Hand Controls: ${this.core.handPlaceLabel()}`);
     this.setText(this.resolutionBtn, `Resolution: ${resW} x ${resH}${this.core.viewerResolution ? '' : ' (default)'}`);
     this.display(this.seekSection, host);
     if (this.loadPlaylistBtn) this.display(this.loadPlaylistBtn, host);

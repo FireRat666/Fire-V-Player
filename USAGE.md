@@ -130,7 +130,7 @@ In these worlds the Playlist button opens an **in-world panel** beside the scree
 
 - host controls: lock, take over, voting, clear, load the default playlist
 - seek to a time (host)
-- your player only: skip back/forward, Auto Sync, Captions (closed captions on or off for you, remembered on your device) and Resolution (steps your screen's page through 1280 x 720, 1600 x 900 and 1920 x 1080, then back to the snippet's `resolution`; remembered on your device)
+- your player only: skip back/forward, Auto Sync, Captions (closed captions on or off for you, remembered on your device) and Resolution (steps your screen's page through 1280 x 720, 1600 x 900 and 1920 x 1080, then back to the snippet's `resolution`; remembered on your device), and, when the snippet has `hand-controls`, **Hand Controls** (moves your hand buttons, see [Hand controls](#hand-controls))
 - add by link: a video (YouTube, Twitch, Vimeo or a direct link, see [Links from other sites](#links-from-other-sites)), or a YouTube playlist or list of links (see [Playlists of links](#playlists-of-links)): **Add** adds a video, and asks what to do with a playlist (see [Saved lists](#saved-lists))
 - space admins only: **Admin Take Over** (see [Admin Take Over](#admin-take-over)) and the mode switch between playlist and karaoke (see [Switching mode in world](#switching-mode-in-world))
 
@@ -146,6 +146,18 @@ In karaoke mode the Singers button (and the Join/Leave Queue button) opens the s
 - **More...** has the host controls (lock, take over, Auto Advance, which starts the next singer when a song ends), seek, and your own player's skip, Auto Sync and Captions.
 
 Whoever runs the karaoke should take over the player first, as only the host can start other people's songs.
+
+### Hand controls
+
+With `hand-controls="true"`, each player gets six buttons that go with them: mute, volume down and up, skip back and forward, and the Playlist (or Singers) panel. **More... > Hand Controls** in the panel moves them, one place per click, and your choice is remembered on your device:
+
+- **Left Wrist**: on the back of the left wrist (the default in VR).
+- **Right Wrist**: the same on the right wrist, for when another menu is on your left hand.
+- **In View**: at the bottom right of what you see, wherever you look (the default on desktop, where you can't turn your hand to see the buttons).
+- **In Front**: left in the world just in front of you, facing you. Choose it again later to bring them to where you are now.
+- **Off**: no hand buttons.
+
+`hand-controls-place` sets where they start for players who haven't chosen.
 
 ### Saved lists
 
@@ -301,9 +313,10 @@ All parameters are optional unless marked as **(Required)**.
 
 | Attribute | Description | Default Value |
 | :--- | :--- | :--- |
-| `hand-controls` | Set to `true` to put six buttons on your left hand in VR: mute, volume down and up, skip back and forward (your player only), and the Playlist / Singers panel, which opens in front of you. They lie flat on the back of the wrist, and come back if you leave and rejoin the space. | `false` |
-| `hand-controls-position` | Moves the hand buttons: `x y z` in metres, in the hand's own Unity axes (not converted, in a snippet or a script tag). Empty uses the built-in layout. `z` slides them along the hand, away from the wrist toward the fingers (bigger) or toward the wrist (smaller); `x` lifts them off the back of the hand (more negative). | `0 0.046 0.07` |
-| `hand-controls-rotation` | Turns the hand buttons: `x y z` in degrees, in the hand's own Unity axes. For example add `180` to `y` if they face into the wrist, add `180` to `z` if they're upside down, or change `z` by `90` to turn them on the wrist. | `0 90 180` |
+| `hand-controls` | Set to `true` to give each player six buttons: mute, volume down and up, skip back and forward (your player only), and the Playlist / Singers panel, which opens in front of you. They start on the back of the left wrist in VR and at the bottom right of the view on desktop, and each player can move them (see [Hand controls](#hand-controls)). They come back if you leave and rejoin the space. | `false` |
+| `hand-controls-place` | Where the hand buttons start, until a player picks somewhere else: `auto` (left wrist in VR, in view on desktop), `left`, `right`, `view`, `front` or `off`. | `auto` |
+| `hand-controls-position` | Moves the hand buttons on the wrist: `x y z` in metres, in the left hand's own Unity axes (mirrored on the right hand) (not converted, in a snippet or a script tag). Empty uses the built-in layout. `z` slides them along the hand, away from the wrist toward the fingers (bigger) or toward the wrist (smaller); `x` lifts them off the back of the hand (more negative). | `0 0.046 0.07` |
+| `hand-controls-rotation` | Turns the hand buttons on the wrist: `x y z` in degrees, in the left hand's own Unity axes (mirrored on the right hand). For example add `180` to `y` if they face into the wrist, add `180` to `z` if they're upside down, or change `z` by `90` to turn them on the wrist. | `0 90 180` |
 | `button-position` | The `x y z` position of the in-world UI buttons, relative to the player screen. | `0 0 0` |
 | `button-rotation` | The `x y z` rotation of the in-world UI buttons. `0 0 0` (or empty) means "the same as the screen's rotation", not zero, so for a true zero on a turned screen use something like `0.001 0 0`. | `0 0 0` |
 | `button-scale` | The `x y z` scale of the in-world UI buttons. | `1 1 1` |

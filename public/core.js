@@ -20,6 +20,21 @@ var SCREEN_MAX_RESOLUTION = 3840;
 // The choices in the panel's More view, as page widths.
 var SCREEN_RESOLUTIONS = [1280, 1600, 1920];
 var RESOLUTION_PREF_KEY = 'fire-v-player-resolution';
+// Where each viewer keeps their hand controls (see HAND_PLACES), remembered on their device.
+var HAND_PLACE_PREF_KEY = 'fire-v-player-hand-place';
+// The places the hand controls can go, in the order the panel's button steps through them.
+// attach is the SDK's LegacyAttachmentPosition (HEAD 0, LEFT_HAND 2, RIGHT_HAND 3); position and
+// rotation are in that attachment's own Unity axes. On a hand, -X is the back of the left hand
+// (+X the right's) and Z runs toward the fingers. "front" isn't attached: it's put in the world
+// in front of the player when chosen.
+var HAND_PLACES = {
+  left: { label: 'Left Wrist', attach: 2, position: [0, 0.046, 0.07], rotation: [0, 90, 180], scale: 0.1 },
+  right: { label: 'Right Wrist', attach: 3, position: [0, 0.046, 0.07], rotation: [0, 270, 180], scale: 0.1 },
+  // The bottom right of what the player sees, for desktop players, whose hands don't turn.
+  view: { label: 'In View', attach: 0, position: [0.2, -0.16, 0.5], rotation: [0, 0, 0], scale: 0.1 },
+  front: { label: 'In Front', scale: 0.15 },
+  off: { label: 'Off' }
+};
 // Altspace (Creator SDK) space-page screen, see claimSpaceSurface. The client keeps this asset
 // reference pointed at the space page's own browser texture.
 var SPACE_BROWSER_TEXTURE = 'asset_browser_world';
@@ -1436,8 +1451,63 @@ var Core = class {
   }
 
   // ---------------------------------------------------------------- hand controls
+  // Six buttons (mute, volume, skip, the panel) that go where each viewer chooses (HAND_PLACES).
+  // The snippet's hand-controls-place is the default; "auto" is the left wrist in VR and in view
+  // on desktop, where the hands can't be turned to see the buttons.
+  async isVR() {
+    if (this.vrCheck === undefined) {
+      const scene = this.banterScene();
+      this.vrCheck = (async () => {
+        if (!scene || typeof scene.IsVR !== 'function') return true; // older clients: as before
+        try {
+          const answer = await Promise.race([scene.IsVR(), new Promise(resolve => setTimeout(() => resolve(null), 3000))]);
+          console.log(answer === null ? '[Core] The client did not say whether it is in VR.' : `[Core] This client is ${answer ? '' : 'not '}in VR.`);
+          return answer !== false;
+        } catch (e) {
+          return true;
+        }
+      })();
+    }
+    return this.vrCheck;
+  }
+  // The viewer's own choice, else the snippet's (a place's name or "auto").
+  handPlaceChoice() {
+    if (this.chosenHandPlace) return this.chosenHandPlace;
+    try {
+      const saved = localStorage.getItem(HAND_PLACE_PREF_KEY);
+      if (saved && HAND_PLACES[saved]) return saved;
+    } catch (e) {}
+    const p = String(this.params['hand-controls-place'] || 'auto').trim().toLowerCase();
+    return HAND_PLACES[p] ? p : 'auto';
+  }
+  async handPlace() {
+    const choice = this.handPlaceChoice();
+    if (choice !== 'auto') return choice;
+    return (await this.isVR()) ? 'left' : 'view';
+  }
+  // Steps to the next place, remembered on this device, and moves the buttons there.
+  async nextHandPlace() {
+    const order = Object.keys(HAND_PLACES);
+    const now = this.currentHandPlace || await this.handPlace();
+    this.setHandPlace(order[(order.indexOf(now) + 1) % order.length]);
+  }
+  setHandPlace(place) {
+    if (!HAND_PLACES[place]) return;
+    try { localStorage.setItem(HAND_PLACE_PREF_KEY, place); } catch (e) {}
+    this.chosenHandPlace = this.currentHandPlace = place;
+    this.removeHandControls();
+    this.showToast(`Hand controls: ${HAND_PLACES[place].label}`);
+    if (place === 'off') return;
+    // A build still running stops when it sees it was removed, then builds again (see below).
+    if (this.handControlsBuilding) this.handControlsRebuild = true;
+    else this.setupHandControls().catch(e => console.error('[Core] Could not set up the hand controls:', e));
+  }
+  handPlaceLabel() {
+    const place = HAND_PLACES[this.currentHandPlace];
+    return place ? place.label : '...';
+  }
   /**
-   * Sets up wrist-attached playback controls on the local player's left hand.
+   * Sets up the hand controls where the viewer wants them.
    * Reattaches automatically when users rejoin or scene resets.
    * @returns {Promise<void>}
    */
@@ -1456,59 +1526,107 @@ var Core = class {
         if (!(e && e.detail && e.detail.isLocal) || this.handControls || this.handControlsBuilding) return;
         // Wait a moment after joining before attaching, which avoids a race on Quest.
         clearTimeout(this.handRejoinTimer);
-    clearTimeout(this.headRejoinTimer);
         this.handRejoinTimer = setTimeout(() => this.setupHandControls().catch(err => console.error('[Core] Could not set up the hand controls:', err)), 5000);
       };
       scene.On('user-left', this.onHandUserLeft);
       scene.On('user-joined', this.onHandUserJoined);
     }
     if (this.handControls || this.handControlsBuilding) return;
+    this.handControlsBuilding = true;
+    try {
+      await this.buildHandControls(scene);
+    } finally {
+      this.handControlsBuilding = false;
+      if (this.handControlsRebuild) {
+        this.handControlsRebuild = false;
+        if (!this.destroyed) this.setupHandControls().catch(e => console.error('[Core] Could not set up the hand controls:', e));
+      }
+    }
+  }
+  async buildHandControls(scene) {
+    const name = this.currentHandPlace = await this.handPlace();
+    const place = HAND_PLACES[name];
+    if (name === 'off') return;
     const uid = (scene.localUser && scene.localUser.uid) || (window.user && window.user.id);
-    if (!uid || typeof scene.LegacyAttachObject !== 'function') {
+    if (place.attach !== undefined && (!uid || typeof scene.LegacyAttachObject !== 'function')) {
       console.warn('[Core] The local player or LegacyAttachObject is missing, so no hand controls.');
       return;
     }
-    this.handControlsBuilding = true;
-    try {
-      const root = await this.makeObject('FireVPlayer_HandControls');
-      this.handControls = root;
-      // The buttons lie flat on the back of the wrist, facing out of it. These are in the hand's
-      // own Unity axes, with no A-Frame conversion. The hand-controls-position and
-      // hand-controls-rotation settings change them.
-      const wrapper = await this.makeObject('FireVPlayer_HandWrapper', {
-        parent: root,
-        position: this.toVector3(this.vec3(this.params['hand-controls-position'], [0, 0.046, 0.07])),
-        rotation: this.toVector3(this.vec3(this.params['hand-controls-rotation'], [0, 90, 180])),
-        scale: new BS.Vector3(0.1, 0.1, 0.1)
-      });
-      const buttons = [
-        ['Mute', -0.4, 0.4, "data-mute-icon-url", () => this.mute()],
-        ['VolumeDown', 0, 0.4, "data-vol-down-icon-url", () => this.volume(false)],
-        ['VolumeUp', 0.4, 0.4, "data-vol-up-icon-url", () => this.volume(true)],
-        ['SkipBack', -0.4, -0.1, "data-skip-backward-icon-url", () => this.sendBrowserMessage({path: Commands.SKIP_BACK})],
-        ['SkipForward', 0, -0.1, "data-skip-forward-icon-url", () => this.sendBrowserMessage({path: Commands.SKIP_FORWARD})],
-        ['Playlist', 0.4, -0.1, "data-playlist-icon-url", () => this.openPlaylist('front')]
-      ];
-      for (const [name, x, y, icon, callback] of buttons) {
-        if (root !== this.handControls) return; // removed meanwhile
-        // Just off the wrist, toward -Z: the side a button is seen from.
-        await this.makeIconButton(`FireVPlayer_Hand${name}`, wrapper, new BS.Vector3(x, y, -0.3), 0.4, this.params[icon], () => {
-          Promise.resolve(callback()).catch(() => {});
-        });
-      }
-      if (root !== this.handControls) return; // removed meanwhile
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      if (root !== this.handControls) return;
-      const leftHand = BS.LegacyAttachmentPosition ? BS.LegacyAttachmentPosition.LEFT_HAND : 1;
-      await scene.LegacyAttachObject(root, uid, leftHand);
-      console.log('[Core] Hand controls attached to the left hand.');
-      // Where the left hand is, for opening the panel the way the player is looking.
-      this.watchWorldPose(root, 'handPose');
-    } finally {
-      this.handControlsBuilding = false;
+    const front = name === 'front' ? await this.handFrontPose() : null;
+    if (name === 'front' && !front) {
+      this.showToast("Couldn't tell where you are, so the hand controls aren't in front of you. Move a little and choose In Front again.", 6000);
+      return;
     }
+    const root = await this.makeObject('FireVPlayer_HandControls', front || {});
+    this.handControls = root;
+    // The buttons lie flat, facing out of the wrist (or toward the player). On the wrists the
+    // hand-controls-position and hand-controls-rotation settings change where, mirrored for the right.
+    let position = place.position || [0, 0, 0], rotation = place.rotation || [0, 0, 0];
+    if (name === 'left' || name === 'right') {
+      const mirror = name === 'right';
+      const p = this.vec3(this.params['hand-controls-position'], null);
+      const r = this.vec3(this.params['hand-controls-rotation'], null);
+      if (p) position = mirror ? [-p[0], p[1], p[2]] : p;
+      if (r) rotation = mirror ? [r[0], -r[1], -r[2]] : r;
+    }
+    const wrapper = await this.makeObject('FireVPlayer_HandWrapper', {
+      parent: root,
+      position: this.toVector3(position),
+      rotation: this.toVector3(rotation),
+      scale: new BS.Vector3(place.scale, place.scale, place.scale)
+    });
+    const buttons = [
+      ['Mute', -0.4, 0.4, "data-mute-icon-url", () => this.mute()],
+      ['VolumeDown', 0, 0.4, "data-vol-down-icon-url", () => this.volume(false)],
+      ['VolumeUp', 0.4, 0.4, "data-vol-up-icon-url", () => this.volume(true)],
+      ['SkipBack', -0.4, -0.1, "data-skip-backward-icon-url", () => this.sendBrowserMessage({path: Commands.SKIP_BACK})],
+      ['SkipForward', 0, -0.1, "data-skip-forward-icon-url", () => this.sendBrowserMessage({path: Commands.SKIP_FORWARD})],
+      ['Playlist', 0.4, -0.1, "data-playlist-icon-url", () => this.openPlaylist('front')]
+    ];
+    for (const [button, x, y, icon, callback] of buttons) {
+      if (root !== this.handControls) return; // removed meanwhile
+      // Just off the wrist, toward -Z: the side a button is seen from.
+      await this.makeIconButton(`FireVPlayer_Hand${button}`, wrapper, new BS.Vector3(x, y, -0.3), 0.4, this.params[icon], () => {
+        Promise.resolve(callback()).catch(() => {});
+      });
+    }
+    if (root !== this.handControls) return;
+    if (place.attach === undefined) {
+      console.log('[Core] Hand controls put in front of the player.');
+      return;
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    if (root !== this.handControls) return;
+    await scene.LegacyAttachObject(root, uid, place.attach);
+    console.log(`[Core] Hand controls attached: ${place.label}.`);
+    // Where the hand is, for opening the panel the way the player is looking.
+    if (name === 'left' || name === 'right') this.watchWorldPose(root, 'handPose');
+  }
+  // A world position and rotation just in front of the player, a little below their eyes, tilted
+  // back to face them (Unity axes). Waits a few seconds for the head to report, as just after
+  // joining it may not have yet.
+  async handFrontPose() {
+    let head = this.headPose();
+    for (let k = 0; k < 10 && !(head && head.position && head.rotation); k++) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      head = this.headPose();
+    }
+    if (!head || !head.position || !head.rotation) return null;
+    const q = head.rotation;
+    const fx = 2 * (q.x * q.z + q.w * q.y), fz = 1 - 2 * (q.x * q.x + q.y * q.y);
+    if (Math.abs(fx) + Math.abs(fz) < 1e-6) return null;
+    const yaw = Math.atan2(fx, fz);
+    const d = 0.55;
+    // pose-update's height is about the floor on Quest (see the panel's frontPose).
+    const frontHeight = parseFloat(this.params['playlist-panel-front-height']);
+    const y = head.source === 'pose-update' ? head.position.y + (Number.isFinite(frontHeight) ? frontHeight : 1.4) - 0.3 : head.position.y - 0.3;
+    return {
+      position: new BS.Vector3(head.position.x + Math.sin(yaw) * d, y, head.position.z + Math.cos(yaw) * d),
+      rotation: new BS.Vector3(30, yaw * 180 / Math.PI, 0)
+    };
   }
   removeHandControls() {
+    this.handPose = null;
     if (!this.handControls) return;
     console.log('[Core] Removing the hand controls.');
     this.destroyObject(this.handControls);
@@ -1574,8 +1692,11 @@ var Core = class {
     this.setOrDefault("announce", 'true');
     this.setOrDefault("announce-four-twenty", 'false');
     this.setOrDefault("hand-controls", 'false');
-    // Fine-tunes where the hand buttons sit on the left hand, in the hand's own Unity axes:
-    // "x y z" metres and "x y z" degrees. Empty uses the built-in layout.
+    // Where the hand buttons start: auto (left wrist in VR, in view on desktop), left, right,
+    // view, front or off. Each viewer can choose another in the panel (HAND_PLACES).
+    this.setOrDefault("hand-controls-place", 'auto');
+    // Fine-tunes where the hand buttons sit on the wrist, in the left hand's own Unity axes
+    // (mirrored for the right): "x y z" metres and "x y z" degrees. Empty uses the built-in layout.
     this.setOrDefault("hand-controls-position", '');
     this.setOrDefault("hand-controls-rotation", '');
     this.setOrDefault("playlist-panel-front-height", '1.4');

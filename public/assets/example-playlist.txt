@@ -21,9 +21,19 @@ https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_exam
 https://storage.googleapis.com/shaka-demo-assets/angel-one-hls/hls.m3u8 Angel One, multi-audio - Shaka demo assets HLS (m3u8)
 https://demo.unified-streaming.com/k8s/low-latency/stable/channel1/channel1.isml/.m3u8 Low-latency live origin - Unified Streaming HLS (m3u8)
 
-# Video files (.mp4 and .webm)
+# DASH (.mpd) streams. Angel One and Sintel have subtitles for the Captions button.
+https://storage.googleapis.com/shaka-demo-assets/angel-one/dash.mpd Angel One (DASH, subtitles in 4 languages)
+https://storage.googleapis.com/shaka-demo-assets/sintel/dash.mpd Sintel (DASH, subtitles in 10 languages)
+https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.mpd Tears of Steel (DASH)
+https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd Big Buck Bunny (DASH)
+https://dash.akamaized.net/dash264/TestCases/3b/fraunhofer/aac-lc_stereo_with_video/ElephantsDream/elephants_dream_480p_aaclc_stereo_sidx.mpd Elephants Dream (DASH)
+https://livesim2.dashif.org/livesim2/testpic_2s/Manifest.mpd DASH-IF live test picture (live DASH)
+https://demo.unified-streaming.com/k8s/low-latency/stable/channel1/channel1.isml/.mpd Low-latency live origin - Unified Streaming (live DASH)
+
+# Video files (.mp4 and .webm). In a world they play on the world's video player, which on PC
+# takes MP4 (H.264) and WebM with VP8 video, but not VP9.
 https://download.blender.org/durian/trailer/sintel_trailer-480p.mp4 Sintel trailer (MP4)
-https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c0/Big_Buck_Bunny_4K.webm/Big_Buck_Bunny_4K.webm.480p.vp9.webm Big Buck Bunny (WebM, VP9)
+https://test-videos.co.uk/vids/bigbuckbunny/webm/vp8/360/Big_Buck_Bunny_360_10s_1MB.webm Big Buck Bunny, 10 seconds (WebM, VP8)
 https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4 Flower, 5 seconds (MP4)
 https://mdn.github.io/learning-area/html/multimedia-and-embedding/video-and-audio-content/rabbit320.webm Rabbit, 8 seconds (WebM, VP8)
 

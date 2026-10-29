@@ -151,6 +151,7 @@ async function hostSkip(app, ws, isForward) {
 
     const now = new Date().getTime() / 1000;
     const delta = isForward ? skipAmount : -skipAmount;
+    const oldTime = player.paused ? (player.currentTime || 0) : now - player.lastStartTime;
     let newCurrentTime;
     if (player.paused) {
       // Paused stays paused, at the new point (the time is held in currentTime while paused).
@@ -168,7 +169,8 @@ async function hostSkip(app, ws, isForward) {
       app.send(socket, Commands.HOST_SEEK, {
         newCurrentTime: newCurrentTime,
         newLastStartTime: player.lastStartTime,
-        paused: !!player.paused
+        paused: !!player.paused,
+        skipped: newCurrentTime - oldTime // for the toast: how far it really moved
       });
     });
     await app.savePlayerState(ws.i);
@@ -269,7 +271,9 @@ async function setVideoTime(app, ws, time) {
     if (!Number.isFinite(t)) return;
     const newTime = Math.max(0, trackDuration > 0 ? Math.min(t, trackDuration) : t);
 
-    player.lastStartTime = (new Date().getTime() / 1000) - newTime;
+    const now = new Date().getTime() / 1000;
+    const oldTime = player.paused ? (player.currentTime || 0) : now - player.lastStartTime;
+    player.lastStartTime = now - newTime;
     player.currentTime = newTime;
 
     // Broadcast a seek command to all clients. This is the same command used by host skip.
@@ -277,7 +281,9 @@ async function setVideoTime(app, ws, time) {
       app.send(socket, Commands.HOST_SEEK, {
         newCurrentTime: newTime,
         newLastStartTime: player.lastStartTime,
-        paused: !!player.paused
+        paused: !!player.paused,
+        skipped: newTime - oldTime, // for the toast
+        seek: true // a jump to a point, not a skip button
       });
     });
     await app.savePlayerState(ws.i);

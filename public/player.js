@@ -384,6 +384,21 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
       }
     }
 
+    /**
+     * A length of time for a toast: "5s", "0.25s", "1:40", "1:02:03". `clock` always uses the
+     * m:ss form, for a point in the video.
+     * @param {number} seconds
+     * @param {boolean} [clock]
+     * @returns {string}
+     */
+    durationText(seconds, clock) {
+      seconds = Math.max(0, Number(seconds) || 0);
+      if (seconds < 60 && !clock) return `${Math.round(seconds * 100) / 100}s`;
+      const t = Math.round(seconds);
+      const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, sec = String(t % 60).padStart(2, '0');
+      return h ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+    }
+
     /** Runs the world's messages that came before the player was ready (see setupBrowserMessaging). */
     drainBrowserMessages() {
       const queued = (this.browserQueue || []).splice(0);
@@ -561,10 +576,12 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
           else this.player.playVideo();
           this.playerData.lastStartTime = json.data.newLastStartTime;
 
-          // Show a toast indicating the skip direction and amount.
-          const skipAmount = this.core.isKaraoke ? SkipJumpTimeKaraoke : SkipJumpTimePlaylist;
-          const direction = diff > 0 ? 'FORWARDS +' : 'BACKWARDS -';
-          this.core.showToast(`Host skip: ${direction}${skipAmount}s`);
+          // How far it really moved, from the server (older servers: from this screen's time).
+          const moved = Number.isFinite(Number(json.data.skipped)) ? Number(json.data.skipped) : diff;
+          const amount = `${moved < 0 ? '-' : '+'}${this.durationText(Math.abs(moved))}`;
+          this.core.showToast(json.data.seek
+            ? `Host seek to ${this.durationText(newTime, true)} (${amount})`
+            : `Host skip: ${amount}`);
           this.disableAutoSync(true);
         }
         break;

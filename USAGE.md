@@ -95,6 +95,8 @@ In a Creator SDK world (`Assets/WebRoot/index.html`), add the player as a snippe
   button-position="0 0.83 2"
   button-rotation=""
   button-scale="1"
+  reload-button="true"
+  play-pause-button="true"
   playlist-ui="auto"
   playlist-panel-position="-1.8 1.5 1.85"
   playlist-panel-rotation="0 -20 0"
@@ -126,11 +128,11 @@ Settings are the same as the script attributes below, except:
 
 The player builds everything in the world with the BS SDK (`BS.GameObject` and components such as `BS.Browser`), so the page needs no `<a-scene>`; one left over from older versions does no harm. Script-tag positions and rotations still use A-Frame axes (Z flipped from Unity's), as before, so existing script tags keep working.
 
-In these worlds the Playlist button opens an **in-world panel** beside the screen. The main view has playback and volume controls, the playlist (play, reorder, remove, vote), the saved **Lists** (see [Saved lists](#saved-lists)) and YouTube search. Under the search box are your last five searches (kept on your device; click one to search again, **Clear** forgets them) and, in karaoke mode, **+ karaoke**, **+ lyrics** and **+ zoom karaoke**, which add that word to the search. Search also accepts a video link, or a playlist link, which asks whether to replace the playlist, add it all, or save it to Lists (see [Saved lists](#saved-lists)). The list scrolls (thumbstick, or drag it), 20 rows at a time; the panel opens at the video that's playing. Beside the tabs, **21-40 / 300** says which rows are shown, **<** and **>** move to the previous or next 20, **<<** and **>>** move 100, **|<** and **>|** go to the start and end, and **Now** goes back to the video that's playing. (On a client without scroll views, the list shows in pages of 7 and the same buttons turn the pages.) To move the panel, grab the pill under it in VR and carry it; the panel comes with it, stays upright and stays where you let go. The hand's Playlist button opens it in front of you, karaoke's Singers button opens it just above that button, and the Playlist button by the screen puts it back beside the screen. Only your own panel moves. **Refresh** fetches the latest playlist from the server; the panel also does this each time it opens. **More...** opens a second view with:
+In these worlds the Playlist button opens an **in-world panel** beside the screen. The main view has playback and volume controls, **Reload** (see [Reloading your screen](#reloading-your-screen)), the playlist (play, reorder, remove, vote), the saved **Lists** (see [Saved lists](#saved-lists)) and YouTube search. Under the search box are your last five searches (kept on your device; click one to search again, **Clear** forgets them) and, in karaoke mode, **+ karaoke**, **+ lyrics** and **+ zoom karaoke**, which add that word to the search. Search also accepts a video link, or a playlist link, which asks whether to replace the playlist, add it all, or save it to Lists (see [Saved lists](#saved-lists)). The list scrolls (thumbstick, or drag it), 20 rows at a time; the panel opens at the video that's playing. Beside the tabs, **21-40 / 300** says which rows are shown, **<** and **>** move to the previous or next 20, **<<** and **>>** move 100, **|<** and **>|** go to the start and end, and **Now** goes back to the video that's playing. (On a client without scroll views, the list shows in pages of 7 and the same buttons turn the pages.) To move the panel, grab the pill under it in VR and carry it; the panel comes with it, stays upright and stays where you let go. The hand's Playlist button opens it in front of you, karaoke's Singers button opens it just above that button, and the Playlist button by the screen puts it back beside the screen. Only your own panel moves. **Refresh** fetches the latest playlist from the server; the panel also does this each time it opens. **More...** opens a second view with:
 
 - host controls: lock, take over, voting, clear, load the default playlist
 - seek to a time (host)
-- your player only: skip back/forward, Auto Sync, Captions (closed captions on or off for you, remembered on your device) and Resolution (steps your screen's page through 1280 x 720, 1600 x 900 and 1920 x 1080, then back to the snippet's `resolution`; remembered on your device), and, when the snippet has `hand-controls`, **Hand Controls** (moves your hand buttons, see [Hand controls](#hand-controls))
+- your player only: **Reload Video**, skip back/forward, Auto Sync, Captions (closed captions on or off for you, remembered on your device) and Resolution (steps your screen's page through 1280 x 720, 1600 x 900 and 1920 x 1080, then back to the snippet's `resolution`; remembered on your device), and, when the snippet has `hand-controls`, **Hand Controls** (moves your hand buttons, see [Hand controls](#hand-controls))
 - add by link: a video (YouTube, Twitch, Vimeo or a direct link, see [Links from other sites](#links-from-other-sites)), or a YouTube playlist or list of links (see [Playlists of links](#playlists-of-links)): **Add** adds a video, and asks what to do with a playlist (see [Saved lists](#saved-lists))
 - space admins only: **Admin Take Over** (see [Admin Take Over](#admin-take-over)) and the mode switch between playlist and karaoke (see [Switching mode in world](#switching-mode-in-world))
 
@@ -149,7 +151,7 @@ Whoever runs the karaoke should take over the player first, as only the host can
 
 ### Hand controls
 
-With `hand-controls="true"`, each player gets six buttons that go with them: mute, volume down and up, skip back and forward, and the Playlist (or Singers) panel. **More... > Hand Controls** in the panel moves them, one place per click, and your choice is remembered on your device:
+With `hand-controls="true"`, each player gets seven buttons that go with them: mute, volume down and up, reload (see [Reloading your screen](#reloading-your-screen)), skip back and forward, and the Playlist (or Singers) panel. **More... > Hand Controls** in the panel moves them, one place per click, and your choice is remembered on your device:
 
 - **Left Wrist**: on the back of the left wrist (the default in VR).
 - **Right Wrist**: the same on the right wrist, for when another menu is on your left hand.
@@ -158,6 +160,10 @@ With `hand-controls="true"`, each player gets six buttons that go with them: mut
 - **Off**: no hand buttons.
 
 `hand-controls-place` sets where they start for players who haven't chosen.
+
+### Reloading your screen
+
+When a video or stream freezes or won't load for you, **Reload** (the circular arrow under the screen and on the hand controls, the panel's **Reload** beside the playback controls, or **More... > Reload Video**) builds your own screen again. The video starts again at the same point as everyone else's, as when someone joins late. Nobody else's screen changes, so the host doesn't need to switch videos back and forth to fix it for you. In karaoke it's in **More...** and on the hand controls.
 
 ### Saved lists
 
@@ -193,6 +199,8 @@ The server keeps what it read from a list for 5 minutes, so a change to the file
 - **A text file of links**, one per line, as a `.txt` or `.m3u` file at a direct link, on Dropbox (its share link), on Google Drive (its share link), or as a Google Doc (its share link; the server reads it as text). It must be shared so anyone with the link can see it.
 - **A Google Drive folder** shared with anyone who has the link: every video directly inside it, sorted by name. Subfolders are skipped.
 - **An archive.org item** (`https://archive.org/details/<id>`): its videos (an MP4 of each when there is one).
+
+For a working example, see [`public/assets/example-playlist.txt`](public/assets/example-playlist.txt): a YouTube live stream, a Twitch channel, a VRCDN stream and an HLS stream. The example snippet uses it as `playlists="PLZWiw-xxQ4SPDmADhvme7-pU2bx3s7nKX, https://vidya.firer.at/assets/example-playlist.txt"`.
 
 A list file can mix every source the player plays: YouTube videos, YouTube playlists (each is expanded), Twitch, Vimeo, VDO.Ninja, HLS and VRCDN streams, video and audio files, Google Drive and Dropbox files, and archive.org items. Blank lines and lines starting with `#` are ignored. Text after a link on the same line, or an m3u `#EXTINF:<seconds>,<title>` line above it, becomes that video's title, and `#PLAYLIST:<name>` names the list (otherwise it's named after the file).
 
@@ -313,13 +321,15 @@ All parameters are optional unless marked as **(Required)**.
 
 | Attribute | Description | Default Value |
 | :--- | :--- | :--- |
-| `hand-controls` | Set to `true` to give each player six buttons: mute, volume down and up, skip back and forward (your player only), and the Playlist / Singers panel, which opens in front of you. They start on the back of the left wrist in VR and at the bottom right of the view on desktop, and each player can move them (see [Hand controls](#hand-controls)). They come back if you leave and rejoin the space. | `false` |
+| `hand-controls` | Set to `true` to give each player seven buttons: mute, volume down and up, reload (your screen only), skip back and forward (your player only), and the Playlist / Singers panel, which opens in front of you. They start on the back of the left wrist in VR and at the bottom right of the view on desktop, and each player can move them (see [Hand controls](#hand-controls)). They come back if you leave and rejoin the space. | `false` |
 | `hand-controls-place` | Where the hand buttons start, until a player picks somewhere else: `auto` (left wrist in VR, in view on desktop), `left`, `right`, `view`, `front` or `off`. | `auto` |
 | `hand-controls-position` | Moves the hand buttons on the wrist: `x y z` in metres, in the left hand's own Unity axes (mirrored on the right hand) (not converted, in a snippet or a script tag). Empty uses the built-in layout. `z` slides them along the hand, away from the wrist toward the fingers (bigger) or toward the wrist (smaller); `x` lifts them off the back of the hand (more negative). | `0 0.046 0.07` |
 | `hand-controls-rotation` | Turns the hand buttons on the wrist: `x y z` in degrees, in the left hand's own Unity axes (mirrored on the right hand). For example add `180` to `y` if they face into the wrist, add `180` to `z` if they're upside down, or change `z` by `90` to turn them on the wrist. | `0 90 180` |
 | `button-position` | The `x y z` position of the in-world UI buttons, relative to the player screen. | `0 0 0` |
 | `button-rotation` | The `x y z` rotation of the in-world UI buttons. `0 0 0` (or empty) means "the same as the screen's rotation", not zero, so for a true zero on a turned screen use something like `0.001 0 0`. | `0 0 0` |
 | `button-scale` | The `x y z` scale of the in-world UI buttons. | `1 1 1` |
+| `reload-button` | Adds a Reload button to the row under the screen, after Playlist, which reloads only that player's screen (see [Reloading your screen](#reloading-your-screen)). `false` leaves it out. | `true` |
+| `play-pause-button` | Adds a Play/Pause button to the row under the screen, before the skip buttons. Only the host sees it, and it shows Pause while playing and Play while paused. `false` leaves it out. With both this and `reload-button` off, the row is laid out as before they existed. | `true` |
 | `playlist-ui` | What the Playlist (or, in karaoke mode, Singers) button opens. `panel`: an in-world panel (UI Toolkit) with controls, the playlist or singer queue, and search. `page`: the 2D playlist page in the client's menu browser. `auto`: `panel` whenever the client has the UI system (the SideQuest/Altspace Creator SDK), otherwise `page`. | `auto` |
 | `playlist-panel-position` | Where the in-world panel sits in the world, in the same units as `position`. When set, `playlist-panel-rotation` is a world rotation too (empty = the screen's rotation), and `playlist-panel-offset` is ignored. | (beside the screen) |
 | `playlist-panel-offset` | Where the in-world panel sits, relative to the screen, in metres: `x` right, `y` up, `z` toward the viewer. Empty puts it just right of the screen. | (beside the screen) |
@@ -330,6 +340,10 @@ All parameters are optional unless marked as **(Required)**.
 | `data-vol-up-icon-url` | URL for a custom "Volume Up" button icon. | Default icon |
 | `data-vol-down-icon-url` | URL for a custom "Volume Down" button icon. | Default icon |
 | `data-mute-icon-url` | URL for a custom "Mute" button icon. | Default icon |
+| `data-unmute-icon-url` | URL for a custom "Unmute" button icon, which the Mute button shows while you're muted. | Default icon |
+| `data-play-icon-url` | URL for a custom "Play" icon (the host's Play/Pause button while paused). | Default icon |
+| `data-pause-icon-url` | URL for a custom "Pause" icon (the host's Play/Pause button while playing). | Default icon |
+| `data-reload-icon-url` | URL for a custom "Reload" button icon. | Default icon |
 | `data-skip-forward-icon-url` | URL for a custom "Skip Forward" button icon. | Default icon |
 | `data-skip-backward-icon-url` | URL for a custom "Skip Backward" button icon. | Default icon |
 

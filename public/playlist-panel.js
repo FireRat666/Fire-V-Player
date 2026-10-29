@@ -533,6 +533,9 @@ var FirePlaylistPanel = class {
       this.restartBtn = await this.button(controls, 'Restart Song', () => this.send(Commands.RESTART_SONG));
       this.stopBtn = await this.button(controls, 'Stop Song', () => this.send(Commands.STOP), { backgroundColor: '#c62828' });
     }
+    // Rebuilds only this viewer's screen, for a video that froze or didn't load for them. Karaoke's
+    // row is full, so there it's only in More.
+    if (!this.karaoke) await this.button(controls, 'Reload', () => this.core.reloadScreen(), { backgroundColor: '#5d4037' });
     await this.div(controls, { flexGrow: 1 });
     await this.button(controls, 'Vol -', () => { this.core.volume(false); this.renderSoon(); }, { backgroundColor: GREY });
     this.volLabel = await this.label(controls, '', { fontSize: '20px', width: '110px', textAlign: 'center' });
@@ -704,6 +707,7 @@ var FirePlaylistPanel = class {
     // Your own player
     const mineSection = await section('Your player only');
     const mineRow = await row(mineSection, { flexWrap: 'wrap' });
+    await this.button(mineRow, 'Reload Video', () => this.core.reloadScreen(), { backgroundColor: '#5d4037' });
     await this.button(mineRow, '<< Skip', () => this.sendMine(Commands.LOCAL_SKIP_BACK, Commands.SKIP_BACK));
     await this.button(mineRow, 'Skip >>', () => this.sendMine(Commands.LOCAL_SKIP_FORWARD, Commands.SKIP_FORWARD));
     this.autoSyncBtn = await this.button(mineRow, 'Auto Sync: Off', () => {

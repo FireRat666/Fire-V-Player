@@ -84,6 +84,10 @@ var Core = class {
     this.setOrDefault("data-mute-icon-url", `${proto}://${this.hostUrl}/assets/Mute.png`);
     this.setOrDefault("data-skip-forward-icon-url", `${proto}://${this.hostUrl}/assets/Forward.png`);
     this.setOrDefault("data-skip-backward-icon-url", `${proto}://${this.hostUrl}/assets/Backwards.png`);
+    this.setOrDefault("data-reload-icon-url", `${proto}://${this.hostUrl}/assets/Reload.png`);
+    this.setOrDefault("data-unmute-icon-url", `${proto}://${this.hostUrl}/assets/Unmute.png`);
+    this.setOrDefault("data-play-icon-url", `${proto}://${this.hostUrl}/assets/Play.png`);
+    this.setOrDefault("data-pause-icon-url", `${proto}://${this.hostUrl}/assets/Pause.png`);
 
     if(this.params.announce === 'true') { 
       // this.setupSayNamesScript();
@@ -328,6 +332,23 @@ var Core = class {
       this.removeBrowser();
     }
     if (!this.browser) this.createBrowser(this.browserUrl(), surface);
+  }
+  // Builds this viewer's screen again from scratch, for when the video froze or didn't load for
+  // them: only their own screen, so nobody else's playback is touched. The new page starts at the
+  // host's current time, as for someone joining late.
+  reloadScreen() {
+    if (this.blocked || !this.screenReady) return;
+    const now = Date.now();
+    if (this.lastScreenReload && now - this.lastScreenReload < 3000) return; // a double click
+    this.lastScreenReload = now;
+    console.log('[Core] Reloading this viewer\'s screen.');
+    if (this.nativeScreen) {
+      this.nativeScreen.destroy();
+      this.nativeScreen = null;
+    }
+    this.removeBrowser();
+    this.updateScreen();
+    this.showToast('Reloading the video for you');
   }
   removeBrowser() {
     const browser = this.browser;
@@ -711,7 +732,31 @@ var Core = class {
     if (browser.go && typeof browser.go.SetLocalScale === 'function') browser.go.SetLocalScale(this.browserScale());
     console.log(`[Core] Screen page is now ${w} x ${h}.`);
   }
-  // The row of buttons under the screen: Playlist (Singers), skip back/forward, mute, volume.
+  // Where each button in the row under the screen goes (x, in the row's own metres). With the
+  // optional Reload and Play/Pause buttons turned off it's the original row. Play/Pause comes first
+  // in its group, so for everyone but the host (who alone sees it) it's just a wider gap.
+  // unity/Editor/FireVPlayerSnippetPreview.cs draws the same layout.
+  screenButtonLayout() {
+    const playPause = this.params['play-pause-button'] !== 'false';
+    const reload = this.params['reload-button'] !== 'false';
+    if (!playPause && !reload) {
+      return { Playlist: -0.633, SkipBack: -0.332, SkipForward: -0.081, Mute: 0.23, VolumeDown: 0.471, VolumeUp: 0.693 };
+    }
+    const groups = [['Playlist', reload && 'Reload'], [playPause && 'PlayPause', 'SkipBack', 'SkipForward'], ['Mute', 'VolumeDown', 'VolumeUp']]
+      .map(g => g.filter(Boolean));
+    const STEP = 0.24, GAP = 0.31, CENTRE = 0.03; // the original row's middle
+    const layout = {};
+    let x = 0;
+    groups.forEach((group, i) => {
+      if (i) x += GAP - STEP;
+      group.forEach(name => { layout[name] = x; x += STEP; });
+    });
+    const shift = CENTRE - (x - STEP) / 2;
+    Object.keys(layout).forEach(name => { layout[name] = Math.round((layout[name] + shift) * 1000) / 1000; });
+    return layout;
+  }
+  // The row of buttons under the screen: Playlist (Singers), Reload, Play/Pause (host), skip
+  // back/forward, mute, volume.
   async setupBrowserUi() {
     const p = this.params;
     const screenPos = this.vec3(p.position, [0, 0, 0]);
@@ -728,6 +773,61 @@ var Core = class {
     await this.setupMuteButton(this.playlistContainer);
     await this.setupSkipButton(true, this.playlistContainer);
     await this.setupSkipButton(false, this.playlistContainer);
+    const layout = this.screenButtonLayout();
+    if (layout.Reload !== undefined) {
+      await this.setupButton(this.playlistContainer, 'Reload', layout.Reload, this.params["data-reload-icon-url"], () => this.reloadScreen());
+    }
+    if (layout.PlayPause !== undefined) {
+      this.playPauseButton = await this.setupSwapButton(this.playlistContainer, 'ButtonPlayPause', new BS.Vector3(layout.PlayPause, 0, 0),
+        { pause: this.params["data-pause-icon-url"], play: this.params["data-play-icon-url"] },
+        () => this.sendMessage({ path: Commands.TOGGLE_PAUSE }));
+    }
+    this.updateScreenButtons();
+  }
+  // A button with a picture for each state (see showSwapButton). Each picture is its own icon
+  // button, and only the one for the current state is active, so it's the one seen and clicked.
+  async setupSwapButton(parent, name, position, icons, callback, size = 0.2) {
+    const holder = await this.makeObject(`FireVPlayer_${name}`, { parent, position });
+    const button = { holder, icons: {}, state: null, shown: true };
+    for (const state of Object.keys(icons)) {
+      const go = await this.makeIconButton(`FireVPlayer_${name}_${state}`, holder, new BS.Vector3(0, 0, 0), size, icons[state], callback);
+      button.icons[state] = go;
+      this.setActive(go, false);
+    }
+    return button;
+  }
+  // Shows the picture for `state`, or hides the whole button when `shown` is false.
+  showSwapButton(button, state, shown = true) {
+    if (!button) return;
+    if (button.shown !== shown) {
+      button.shown = shown;
+      this.setActive(button.holder, shown);
+    }
+    if (button.state === state) return;
+    button.state = state;
+    Object.keys(button.icons).forEach(key => this.setActive(button.icons[key], key === state));
+  }
+  setActive(go, on) {
+    if (!go) return;
+    try {
+      if (typeof go.SetActive === 'function') Promise.resolve(go.SetActive(!!on)).catch(() => {});
+      // Clients without SetActive: shrunk to nothing, collider and all, so it can't be clicked.
+      else if (typeof go.SetLocalScale === 'function') go.SetLocalScale(on ? new BS.Vector3(1, 1, 1) : new BS.Vector3(0.0001, 0.0001, 0.0001));
+    } catch (e) {
+      console.warn(`[Core] Could not ${on ? 'show' : 'hide'} ${go.name}:`, e);
+    }
+  }
+  isHost() {
+    const p = this.player;
+    return !!(p && p.host && window.user && p.host.id === window.user.id);
+  }
+  // The Mute button shows Unmute while muted, and Play/Pause shows what pressing it does, only to the host.
+  updateScreenButtons() {
+    const mute = this.params.mute === 'true' ? 'unmute' : 'mute';
+    this.showSwapButton(this.muteButton, mute);
+    this.showSwapButton(this.handMuteButton, mute);
+    const p = this.player;
+    this.showSwapButton(this.playPauseButton, p && p.paused ? 'play' : 'pause', this.isHost());
   }
   setVolume(isUp, amount) {
     if(isUp) {
@@ -938,7 +1038,7 @@ var Core = class {
     const playlistIconUrl = this.params["data-playlist-icon-url"];
     // Use the isKaraoke flag to provide a context-specific text label
     const buttonText = this.isKaraoke ? 'Singers' : 'Playlist';
-    const button = await this.setupButton(playlistContainer, 'Playlist', -0.633, playlistIconUrl, () => this.openPlaylist(), buttonText);
+    const button = await this.setupButton(playlistContainer, 'Playlist', this.screenButtonLayout().Playlist, playlistIconUrl, () => this.openPlaylist(), buttonText);
     // Kept so the label can follow a mode change.
     this.playlistButtonHolder = button.holder;
     this.playlistButtonText = button.label;
@@ -1255,6 +1355,7 @@ var Core = class {
     this.params.volume = 100;
     this.tempVolume = 100;
     this.params.mute = 'false';
+    this.updateScreenButtons();
     // Rejected while there's no screen yet; the page then starts at the volume from browserUrl().
     if (unmute) Promise.resolve(this.sendBrowserMessage({ path: Commands.MUTE, data: 'false' })).catch(() => {});
     Promise.resolve(this.sendBrowserMessage({ path: Commands.SET_VOLUME, data: 100 })).catch(() => {});
@@ -1309,11 +1410,13 @@ var Core = class {
   }
   setupVolButton(isUp, playlistContainer) {
     const volIconUrl = isUp ? this.params["data-vol-up-icon-url"] : this.params["data-vol-down-icon-url"];
-    return this.setupButton(playlistContainer, isUp ? 'VolumeUp' : 'VolumeDown', isUp ? 0.693 : 0.471, volIconUrl, () => this.volume(isUp));
+    const name = isUp ? 'VolumeUp' : 'VolumeDown';
+    return this.setupButton(playlistContainer, name, this.screenButtonLayout()[name], volIconUrl, () => this.volume(isUp));
   }
   setupSkipButton(isBack, playlistContainer) {
     const skipIconUrl = isBack ? this.params["data-skip-backward-icon-url"] : this.params["data-skip-forward-icon-url"];
-    return this.setupButton(playlistContainer, isBack ? 'SkipBack' : 'SkipForward', isBack ? -0.332 : -0.081, skipIconUrl, () => (isBack ? this.back() : this.forward()));
+    const name = isBack ? 'SkipBack' : 'SkipForward';
+    return this.setupButton(playlistContainer, name, this.screenButtonLayout()[name], skipIconUrl, () => (isBack ? this.back() : this.forward()));
   }
   volume(isUp) {
     if (this.blocked) return;
@@ -1321,6 +1424,7 @@ var Core = class {
     if(isUp && this.params.mute == 'true') {
       this.params.mute = 'false';
       this.sendBrowserMessage({path: Commands.MUTE, data: this.params.mute});
+      this.updateScreenButtons();
     }
     this.sendBrowserMessage({path: Commands.SET_VOLUME, data: this.params.volume});
   }
@@ -1329,10 +1433,11 @@ var Core = class {
     if (this.blocked) return;
     this.params.mute = this.params.mute == 'true' ? 'false' : 'true';
     this.sendBrowserMessage({path: Commands.MUTE, data: this.params.mute});
+    this.updateScreenButtons();
   }
-  setupMuteButton(playlistContainer) {
-    const muteIconUrl = this.params["data-mute-icon-url"]; // URL for the mute button icon
-    return this.setupButton(playlistContainer, 'Mute', 0.23, muteIconUrl, () => this.mute());
+  async setupMuteButton(playlistContainer) {
+    this.muteButton = await this.setupSwapButton(playlistContainer, 'ButtonMute', new BS.Vector3(this.screenButtonLayout().Mute, 0, 0),
+      { mute: this.params["data-mute-icon-url"], unmute: this.params["data-unmute-icon-url"] }, () => this.mute());
   }
 
   // ---------------------------------------------------------------- spatial volume
@@ -1575,20 +1680,29 @@ var Core = class {
       rotation: this.toVector3(rotation),
       scale: new BS.Vector3(place.scale, place.scale, place.scale)
     });
+    // Four on top, three staggered under them.
     const buttons = [
-      ['Mute', -0.4, 0.4, "data-mute-icon-url", () => this.mute()],
-      ['VolumeDown', 0, 0.4, "data-vol-down-icon-url", () => this.volume(false)],
-      ['VolumeUp', 0.4, 0.4, "data-vol-up-icon-url", () => this.volume(true)],
-      ['SkipBack', -0.4, -0.1, "data-skip-backward-icon-url", () => this.sendBrowserMessage({path: Commands.SKIP_BACK})],
-      ['SkipForward', 0, -0.1, "data-skip-forward-icon-url", () => this.sendBrowserMessage({path: Commands.SKIP_FORWARD})],
-      ['Playlist', 0.4, -0.1, "data-playlist-icon-url", () => this.openPlaylist('front')]
+      ['Mute', -0.57, 0.4, "data-mute-icon-url", () => this.mute()],
+      ['VolumeDown', -0.19, 0.4, "data-vol-down-icon-url", () => this.volume(false)],
+      ['VolumeUp', 0.19, 0.4, "data-vol-up-icon-url", () => this.volume(true)],
+      ['Reload', 0.57, 0.4, "data-reload-icon-url", () => this.reloadScreen()],
+      ['SkipBack', -0.38, -0.05, "data-skip-backward-icon-url", () => this.sendBrowserMessage({path: Commands.SKIP_BACK})],
+      ['SkipForward', 0, -0.05, "data-skip-forward-icon-url", () => this.sendBrowserMessage({path: Commands.SKIP_FORWARD})],
+      ['Playlist', 0.38, -0.05, "data-playlist-icon-url", () => this.openPlaylist('front')]
     ];
     for (const [button, x, y, icon, callback] of buttons) {
       if (root !== this.handControls) return; // removed meanwhile
       // Just off the wrist, toward -Z: the side a button is seen from.
-      await this.makeIconButton(`FireVPlayer_Hand${button}`, wrapper, new BS.Vector3(x, y, -0.3), 0.4, this.params[icon], () => {
-        Promise.resolve(callback()).catch(() => {});
-      });
+      const at = new BS.Vector3(x, y, -0.3);
+      const click = () => { Promise.resolve(callback()).catch(() => {}); };
+      if (button === 'Mute') {
+        // Shows Unmute while muted, like the one under the screen.
+        this.handMuteButton = await this.setupSwapButton(wrapper, 'HandMute', at,
+          { mute: this.params[icon], unmute: this.params["data-unmute-icon-url"] }, click, 0.36);
+        this.updateScreenButtons();
+      } else {
+        await this.makeIconButton(`FireVPlayer_Hand${button}`, wrapper, at, 0.36, this.params[icon], click);
+      }
     }
     if (root !== this.handControls) return;
     if (place.attach === undefined) {
@@ -1627,6 +1741,7 @@ var Core = class {
   }
   removeHandControls() {
     this.handPose = null;
+    this.handMuteButton = null;
     if (!this.handControls) return;
     console.log('[Core] Removing the hand controls.');
     this.destroyObject(this.handControls);
@@ -1691,6 +1806,10 @@ var Core = class {
     this.setOrDefault("is3d", 'false');
     this.setOrDefault("announce", 'true');
     this.setOrDefault("announce-four-twenty", 'false');
+    // Optional buttons in the row under the screen: Reload (this viewer's screen) and Play/Pause
+    // (only the host sees it). "false" leaves the row as it was before them.
+    this.setOrDefault("reload-button", 'true');
+    this.setOrDefault("play-pause-button", 'true');
     this.setOrDefault("hand-controls", 'false');
     // Where the hand buttons start: auto (left wrist in VR, in view on desktop), left, right,
     // view, front or off. Each viewer can choose another in the panel (HAND_PLACES).
@@ -2028,6 +2147,7 @@ var Core = class {
     }
     // A file track needs the world's video player in place of the browser, and back again after.
     try { this.updateScreen(json); } catch (e) { console.error('[Core] Could not switch screens:', e); }
+    try { this.updateScreenButtons(); } catch (e) { console.error('[Core] Could not update the screen buttons:', e); }
     this.notifyListeners(json);
   }
   // Passes a message to the panel and the other listeners, as if it came from the server.
@@ -2289,6 +2409,7 @@ var Core = class {
     this.playlistContainer = null;
     this.playlistButtonHolder = null;
     this.playlistButtonText = null;
+    this.muteButton = this.playPauseButton = null;
     this.ws = null;
     if (window.playlistPlayerInstance) {
       window.playlistPlayerInstance = null;

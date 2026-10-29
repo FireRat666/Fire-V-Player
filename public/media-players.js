@@ -20,6 +20,7 @@ const MEDIA_STATE = { UNSTARTED: -1, ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING:
 const MEDIA_SCRIPTS = {
   hls: 'https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js',
   mpegts: 'https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.js',
+  dash: 'https://cdn.jsdelivr.net/npm/dashjs@4.7.4/dist/dash.all.min.js',
   twitch: 'https://player.twitch.tv/js/embed/v1.js',
   vimeo: 'https://player.vimeo.com/api/player.js'
 };
@@ -86,7 +87,7 @@ class NoReferrerLoader {
 
 /**
  * Dynamically loads an external media player JavaScript SDK by name.
- * @param {'hls'|'mpegts'|'twitch'|'vimeo'} name - Player library key.
+ * @param {'hls'|'dash'|'mpegts'|'twitch'|'vimeo'} name - Player library key.
  * @returns {Promise<Event>} Resolves when script is loaded.
  */
 function loadMediaScript(name) {
@@ -118,7 +119,8 @@ class BaseMediaSource {
    * @param {function(string): void} opts.onError - Callback invoked on player errors.
    */
   constructor(opts) {
-    this.opts = opts;           // { container, link, start, volume, muted, onDuration, onError }
+    this.opts = opts;           // { container, link, start, volume, muted, captions, onDuration, onError }
+    this.captions = opts.captions !== false;
     this.wantPaused = false;
     this.live = false;
     this.ready = false;
@@ -129,6 +131,12 @@ class BaseMediaSource {
   rate() { return 1; }
   /** Checks if media is a live stream. @returns {boolean} */
   isLive() { return this.live; }
+  /**
+   * Shows or hides the video's own captions, where the player has any (English when there is a
+   * choice). Players without captions ignore it.
+   * @param {boolean} on
+   */
+  setCaptions(on) { this.captions = !!on; }
   /**
    * Reports discovered media duration to host/server.
    * @param {number} seconds - Media duration in seconds.
@@ -142,15 +150,15 @@ class BaseMediaSource {
 }
 
 /**
- * Player adapter for direct HTML5 video/audio files (.mp4, .webm, etc.), HLS streams (.m3u8)
- * and MPEG-TS streams (VRCDN's .live.ts).
+ * Player adapter for direct HTML5 video/audio files (.mp4, .webm, etc.), HLS streams (.m3u8),
+ * DASH streams (.mpd) and MPEG-TS streams (VRCDN's .live.ts).
  * @class VideoElementSource
  * @extends {BaseMediaSource}
  */
 class VideoElementSource extends BaseMediaSource {
   /**
    * @param {Object} opts - Source configuration options.
-   * @param {Object} media - What MediaSources.detect found: type 'file', 'hls' or 'mpegts'.
+   * @param {Object} media - What MediaSources.detect found: type 'file', 'hls', 'dash' or 'mpegts'.
    */
   constructor(opts, media) {
     super(opts);
@@ -180,6 +188,8 @@ class VideoElementSource extends BaseMediaSource {
     el.addEventListener('durationchange', () => { this.reportDuration(el.duration); this.applyPendingSeek(); });
     el.addEventListener('progress', () => this.applyPendingSeek());
     el.addEventListener('error', () => opts.onError("Couldn't play this video. The link may be wrong, or the site may not allow it here."));
+    // Caption tracks can turn up at any point while a stream loads.
+    if (el.textTracks && el.textTracks.addEventListener) el.textTracks.addEventListener('addtrack', () => this.applyCaptions());
     this.pendingSeek = opts.start > 0 ? opts.start : null; // a seek waiting until the file can go there
 
     if (media.stream) {
@@ -218,6 +228,25 @@ class VideoElementSource extends BaseMediaSource {
         m.attachMediaElement(el);
         m.load();
       }).catch(err => opts.onError(err.message));
+    } else if (media.type === 'dash') {
+      loadMediaScript('dash').then(() => {
+        if (this.destroyed) return;
+        if (!window.dashjs || !dashjs.supportsMediaSource()) { opts.onError("This browser can't play this stream."); return; }
+        const d = this.dash = dashjs.MediaPlayer().create();
+        d.updateSettings({ debug: { logLevel: dashjs.Debug.LOG_LEVEL_WARNING } });
+        d.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => { if (d.isDynamic()) this.live = true; this.applyCaptions(); });
+        d.on(dashjs.MediaPlayer.events.TEXT_TRACKS_ADDED, () => this.applyCaptions());
+        d.on(dashjs.MediaPlayer.events.ERROR, e => {
+          if (this.dashFailed) return; // dash.js reports one failure several times
+          this.dashFailed = true;
+          // A protected (DRM) stream needs a licence this player doesn't have.
+          const code = e && e.error && e.error.code;
+          const drm = code >= 100 && code < 120 || /key|licen[cs]e|protection|drm/i.test(String(e && e.error && e.error.message || ''));
+          opts.onError(drm ? "This stream is protected (DRM), so it can't play here."
+            : "Couldn't play this stream. It may be offline, or the site may not allow it here.");
+        });
+        d.initialize(el, url, true);
+      }).catch(err => opts.onError(err.message));
     } else if (!hls) {
       el.src = url;
     } else {
@@ -228,6 +257,7 @@ class VideoElementSource extends BaseMediaSource {
         if (!window.Hls || !Hls.isSupported()) { el.src = url; return; }
         const h = this.hls = new Hls(media.noReferrer ? { liveDurationInfinity: true, loader: NoReferrerLoader } : { liveDurationInfinity: true });
         h.on(Hls.Events.LEVEL_LOADED, (e, data) => { if (data.details && data.details.live) this.live = true; });
+        h.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, () => this.applyCaptions());
         h.on(Hls.Events.ERROR, (e, data) => { if (data.fatal) opts.onError("Couldn't play this stream. It may be offline, or the site may not allow it here."); });
         h.loadSource(url);
         h.attachMedia(el);
@@ -237,6 +267,45 @@ class VideoElementSource extends BaseMediaSource {
         else opts.onError(err.message);
       });
     }
+  }
+
+  setCaptions(on) {
+    super.setCaptions(on);
+    this.applyCaptions();
+  }
+
+  /**
+   * Shows the stream's captions (English when there is a choice) or hides them all, through
+   * hls.js or dash.js when they're playing it, and the video element's own text tracks (captions
+   * inside the video, as many HLS streams have).
+   */
+  applyCaptions() {
+    if (this.destroyed) return;
+    const on = this.captions;
+    const english = list => list.findIndex(t => /^en/i.test(String((t && (t.lang || t.language)) || '')));
+    try {
+      if (this.hls && this.hls.subtitleTracks) {
+        const list = this.hls.subtitleTracks;
+        this.hls.subtitleDisplay = on;
+        if (list.length) this.hls.subtitleTrack = on ? Math.max(0, english(list)) : -1;
+      }
+      if (this.dash) {
+        const list = this.dash.getTracksFor('text') || [];
+        this.dash.enableText(on && list.length > 0);
+        if (on && list.length) this.dash.setTextTrack(Math.max(0, english(list)));
+      }
+    } catch (e) {
+      console.warn('[Media] Could not change captions:', e);
+    }
+    // hls.js (when the stream lists subtitles) and dash.js show their pick through the video's
+    // tracks themselves; captions inside the video are chosen here, as for a file's own tracks.
+    if (this.dash || (this.hls && this.hls.subtitleTracks && this.hls.subtitleTracks.length)) {
+      if (!on) Array.from(this.el.textTracks || []).forEach(t => { if (t.mode === 'showing') t.mode = 'hidden'; });
+      return;
+    }
+    const tracks = Array.from(this.el.textTracks || []).filter(t => t.kind === 'captions' || t.kind === 'subtitles');
+    const pick = on ? (tracks[Math.max(0, english(tracks))] || null) : null;
+    tracks.forEach(t => { t.mode = t === pick ? 'showing' : 'disabled'; });
   }
 
   /**
@@ -302,6 +371,7 @@ class VideoElementSource extends BaseMediaSource {
       document.removeEventListener('click', this.unmuteOnClick, true);
     }
     if (this.hls) this.hls.destroy();
+    if (this.dash) { try { this.dash.reset(); } catch (e) {} }
     if (this.mpegts) this.mpegts.destroy();
     this.el.pause();
     this.el.removeAttribute('src');
@@ -831,6 +901,7 @@ class VimeoSource extends BaseMediaSource {
         if (this.t > 0) p.setCurrentTime(this.t).catch(() => {});
         (this.wantPaused ? p.pause() : p.play()).catch(() => {});
         p.getDuration().then(d => this.reportDuration(d)).catch(() => {});
+        this.applyCaptions();
       });
       p.on('timeupdate', d => { this.t = d.seconds; this.tAt = performance.now(); });
       p.on('playing', () => { this.playing = true; this.tAt = performance.now(); });
@@ -861,6 +932,18 @@ class VimeoSource extends BaseMediaSource {
   rate() { return this.r; }
   setVolume(v) { if (this.ready) this.p.setVolume(Math.max(0, Math.min(1, Number(v) / 100))).catch(() => {}); }
   setMuted(m) { if (this.ready) this.p.setMuted(!!m).catch(() => {}); }
+  setCaptions(on) { super.setCaptions(on); this.applyCaptions(); }
+  /** Vimeo's own captions: an English track when there is one, else the first; or none. */
+  applyCaptions() {
+    if (!this.ready || this.destroyed) return;
+    const p = this.p;
+    if (!this.captions) { p.disableTextTrack().catch(() => {}); return; }
+    p.getTextTracks().then(tracks => {
+      if (this.destroyed || !this.captions || !tracks || !tracks.length) return;
+      const t = tracks.find(x => /^en/i.test(x.language || '')) || tracks[0];
+      return p.enableTextTrack(t.language, t.kind);
+    }).catch(() => {});
+  }
   destroy() {
     this.destroyed = true;
     if (this.p) this.p.destroy().catch(() => {});
@@ -921,6 +1004,7 @@ class MediaSwitch {
     this.source = null; // the player for a non-YouTube link, while one is playing
     this.volume = 100;
     this.muted = false;
+    this.captions = true;
     this.container = document.getElementById('media-other');
     if (!this.container) {
       this.container = document.createElement('div');
@@ -953,6 +1037,7 @@ class MediaSwitch {
     }
     const opts = {
       container: this.container, link, start: Number(start) || 0, volume: this.volume, muted: this.muted,
+      captions: this.captions,
       onDuration: seconds => this.opts.onDuration(link, seconds),
       onError: message => this.opts.onError(message),
       requestClick: () => { if (this.opts.requestClick) this.opts.requestClick(); }
@@ -1001,7 +1086,9 @@ class MediaSwitch {
   }
   mute() { this.muted = true; this.yt.mute(); if (this.source) this.source.setMuted(true); }
   unMute() { this.muted = false; this.yt.unMute(); if (this.source) this.source.setMuted(false); }
-  // Captions are YouTube's own, so these do nothing while another source is playing.
+  /** Captions on or off for the other players (YouTube's are set through its captions module). */
+  setCaptions(on) { this.captions = !!on; if (this.source) this.source.setCaptions(this.captions); }
+  // YouTube's captions module, so these do nothing while another source is playing.
   getVideoData() { return this.source ? { video_id: '' } : this.yt.getVideoData(); }
   loadModule(n) { if (!this.source) this.yt.loadModule(n); }
   unloadModule(n) { if (!this.source) this.yt.unloadModule(n); }

@@ -7,7 +7,7 @@
 
 /**
  * @typedef {Object} DetectedMedia
- * @property {'youtube'|'file'|'hls'|'mpegts'|'twitch'|'twitchclip'|'vimeo'|'vdoninja'|'archive'|'loc'|'tubi'|'nasa'} type - The detected media stream/source type.
+ * @property {'youtube'|'file'|'hls'|'dash'|'mpegts'|'twitch'|'twitchclip'|'vimeo'|'vdoninja'|'archive'|'loc'|'tubi'|'nasa'} type - The detected media stream/source type.
  *   'tubi' is a Tubi movie, episode or series page, and 'nasa' a NASA+ video page: the player asks the
  *   server for the page's stream when it plays (`stream` is true), as Tubi's stream links expire.
  *   'archive' is an Internet Archive page or item (or a publicdomainmovie.net page) that the server
@@ -192,6 +192,8 @@ var MediaSources = (() => {
     }
 
     if (/\.m3u8$/i.test(u.pathname)) return { type: 'hls' };
+    // A DASH stream; browsers need dash.js to play it.
+    if (/\.mpd$/i.test(u.pathname)) return { type: 'dash' };
     // An MPEG-TS stream over HTTP (VRCDN's .live.ts links); browsers need mpegts.js to play it.
     if (/\.ts$/i.test(u.pathname)) return { type: 'mpegts', live: /\.live\.ts$/i.test(u.pathname) };
     if (FILE_EXT.test(u.pathname)) return { type: 'file' };
@@ -214,7 +216,7 @@ var MediaSources = (() => {
     try { name = decodeURIComponent(file); } catch (e) {}
     name = name.replace(/(\.live)?\.[a-z0-9]{2,5}$/i, '').replace(/[_+]+/g, ' ').trim();
     // Streams are often called index.m3u8 or playlist.m3u8, so say where they're from instead.
-    if (!name || /^(index|playlist|master|live|stream|chunklist)$/i.test(name)) name = `Stream from ${u.hostname}`;
+    if (!name || /^(index|playlist|master|live|stream|chunklist|manifest|dash)$/i.test(name)) name = `Stream from ${u.hostname}`;
     return name.slice(0, 120);
   }
 

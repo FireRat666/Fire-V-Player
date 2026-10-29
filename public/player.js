@@ -353,6 +353,7 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
         // won't start on their own until someone does.
         requestClick: () => this.clickMiddle()
       }) : this.yt;
+      if (this.player.setCaptions) this.player.setCaptions(this.core.captions !== false);
     }
 
     /**
@@ -770,6 +771,9 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
       const p = this.player;
       if (!p || typeof p.getVideoData !== 'function') return;
       const on = this.core.captions !== false;
+      // Twitch, Vimeo, streams and files have their own captions (where they have any).
+      if (typeof p.setCaptions === 'function') p.setCaptions(on);
+      if (p.isYouTube && !p.isYouTube()) return;
       const key = `${(p.getVideoData() || {}).video_id || ''}:${on}`;
       if (!force && this.captionsApplied === key) return;
       this.captionsApplied = key;

@@ -784,16 +784,16 @@ class App {
     const videoId = source === 'archive' && !/^(https?:\/\/|www\.)/i.test(term) ? false : this.getYoutubeId(term);
 
     if (videoId) {
-      // It's a URL, fetch the single video details
+      // It's a URL, fetch the single video details. Every search gets one SEARCH_RESULTS reply,
+      // even when it fails, as clients count the replies to know which searches are answered.
       try {
         const videoDetails = await videoById(videoId);
-        if (videoDetails) {
-          // The client expects an array of videos.
-          this.send(ws, Commands.SEARCH_RESULTS, [videoDetails]);
-        }
+        // The client expects an array of videos.
+        this.send(ws, Commands.SEARCH_RESULTS, videoDetails ? [videoDetails] : []);
       } catch (error) {
         // The error message from the scraper is user-friendly enough to send to the client.
         console.error(`Error fetching video by URL (${JSON.stringify(term)}):`, error.message);
+        this.send(ws, Commands.SEARCH_RESULTS, []);
         this.send(ws, Commands.ERROR, { message: error.message });
       }
       return;

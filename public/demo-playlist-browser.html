@@ -6,19 +6,41 @@
     <script>
       // A floor to stand on, made with the BS SDK. The SDK and the scene may already be ready by
       // the time this runs, so each is checked before waiting for its event.
-      let floorMade = false;
-      async function makeFloor() {
-        if (floorMade) return;
-        floorMade = true;
+      // Older clients only have the Banter* constructors, which take the settings in order.
+      let floorMade = false, floorMaking = null;
+      async function buildFloor() {
+        const modern = !!BS.Scene;
+        const color = new BS.Vector4(0.5, 0.5, 0, 1);
+        const center = new BS.Vector3(0, 0, 0), size = new BS.Vector3(1, 1, 1);
         const floor = await new BS.GameObject({ name: "Floor", localScale: new BS.Vector3(30, 0.1, 30) }).Async();
-        await floor.AddComponent(new BS.Box({ width: 1, height: 1, depth: 1 }));
-        await floor.AddComponent(new BS.Material({ shaderName: "Unlit/Diffuse", color: new BS.Vector4(0.5, 0.5, 0, 1) }));
-        await floor.AddComponent(new BS.BoxCollider({ isTrigger: false, size: new BS.Vector3(1, 1, 1) }));
+        try {
+          if (modern && BS.Box) await floor.AddComponent(new BS.Box({ width: 1, height: 1, depth: 1 }));
+          else if (BS.BanterGeometry && BS.GeometryType) await floor.AddComponent(new BS.BanterGeometry(BS.GeometryType.BoxGeometry, null, 1, 1, 1));
+          if (modern && BS.Material) await floor.AddComponent(new BS.Material({ shaderName: "Unlit/Diffuse", color }));
+          else if (BS.BanterMaterial) await floor.AddComponent(new BS.BanterMaterial("Unlit/Diffuse", "", color, 0, true));
+          await floor.AddComponent(modern ? new BS.BoxCollider({ isTrigger: false, center, size }) : new BS.BoxCollider(false, center, size));
+        } catch (e) {
+          try { floor.Destroy(); } catch (err) {}
+          throw e;
+        }
+      }
+      // Runs once; a failed attempt can be tried again the next time the scene says it's ready.
+      function makeFloor() {
+        if (floorMade) return Promise.resolve();
+        if (!floorMaking) {
+          floorMaking = buildFloor()
+            .then(() => { floorMade = true; })
+            .finally(() => { floorMaking = null; });
+        }
+        return floorMaking;
+      }
+      function tryFloor() {
+        makeFloor().catch(e => console.warn("[Demo] Could not make the floor:", e));
       }
       function whenSceneReady() {
         const scene = (BS.Scene || BS.BanterScene).GetInstance();
-        if (scene.unityLoaded) makeFloor();
-        else scene.On("unity-loaded", makeFloor);
+        if (scene.unityLoaded) tryFloor();
+        scene.On("unity-loaded", tryFloor);
       }
       if (window.BS) whenSceneReady();
       else window.addEventListener("bs-loaded", whenSceneReady);

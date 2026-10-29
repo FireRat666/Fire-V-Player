@@ -117,8 +117,9 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
      */
     setupBrowserMessaging() {
       const seen = [];
-      // Messages from the world wait until the player exists (onYouTubeIframeAPIReady), as most
-      // of them act on it; drainBrowserMessages runs them then, in order.
+      // Messages from the world wait until the YouTube player is ready (its onReady), as most of
+      // them act on it, and MediaSwitch passes volume and mute to it whatever is playing;
+      // drainBrowserMessages runs them then, in order.
       this.browserQueue = [];
       const onMessage = (e) => {
         const message = e && e.detail && e.detail.message;
@@ -130,7 +131,7 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
             if (seen.length > 50) seen.shift();
           }
         } catch (err) {}
-        if (!this.player) {
+        if (!this.player || !this.ytReady) {
           if (this.browserQueue.length < 100) this.browserQueue.push(message);
           return;
         }
@@ -339,9 +340,11 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
           onApiChange: async event => {
           },
           onReady: event => {
+            this.ytReady = true;
             this.setVolume();
             this.setMute();
             this.player.playVideo(); // Explicitly start playback.
+            this.drainBrowserMessages();
             // setTimeout(() => this.startPlayerOrNot(), 500);
           }
         }
@@ -357,10 +360,9 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
         // won't start on their own until someone does.
         requestClick: () => this.clickMiddle()
       }) : this.yt;
-      this.drainBrowserMessages();
     }
 
-    /** Runs the world's messages that came before the player existed (see setupBrowserMessaging). */
+    /** Runs the world's messages that came before the player was ready (see setupBrowserMessaging). */
     drainBrowserMessages() {
       const queued = (this.browserQueue || []).splice(0);
       queued.forEach(message => this.parseMessage(message));

@@ -710,12 +710,34 @@ var Core = class {
     // Once the player has set a screen's texture it no longer reads "Fire-V-Player", so screens
     // already found are remembered.
     const known = this.secondScreens || (this.secondScreens = new Set());
+    const unasked = [];
     Object.values(scene.objects).forEach(go => {
       let material = null;
       try { material = go && go.GetComponent(BS.CT.Material); } catch (e) {}
-      if (material && String(material.texture || '').trim().toLowerCase() === SECOND_SCREEN_TEXTURE) known.add(material);
+      if (!material) return;
+      if (String(material.texture || '').trim().toLowerCase() === SECOND_SCREEN_TEXTURE) known.add(material);
+      else if (!known.has(material) && !material.__fvpAsked && material.unityId) unasked.push(material);
     });
+    this.askMaterialTextures(scene, unasked);
     return Array.from(known);
+  }
+  // A material from the Unity scene can reach the page without its values (it reads ""), so each
+  // one's Texture is asked of Unity once; the answer updates the material, then the screens sync.
+  askMaterialTextures(scene, materials) {
+    if (!materials.length || typeof BS.ComponentQuery !== 'function' || !BS.PN || BS.PN.texture == null ||
+        typeof scene.QueryComponents !== 'function') return;
+    const query = new BS.ComponentQuery();
+    materials.forEach(material => { material.__fvpAsked = true; query.Add(material, [BS.PN.texture]); });
+    Promise.resolve(scene.QueryComponents(query))
+      .then(() => {
+        if (this.destroyed) return;
+        this.syncSecondScreens();
+        if (!this.secondScreenCount && !this.secondScreenAskLogged) {
+          this.secondScreenAskLogged = true;
+          console.log(`[Core] Still no second screen after asking Unity for ${materials.length} material(s). ${this.secondScreenSummary()}`);
+        }
+      })
+      .catch(e => console.warn('[Core] Could not read the scene\'s material textures:', e));
   }
   // What the page can see of the scene's materials, for the log: says why no second screen was found.
   secondScreenSummary() {
@@ -723,12 +745,17 @@ var Core = class {
       const scene = this.banterScene();
       if (!this.modernSdk() || !BS.CT || BS.CT.Material == null) return '(this client has no BS.CT.Material)';
       const objects = Object.values((scene && scene.objects) || {});
-      const textures = [];
+      let count = 0;
+      const textured = [];
       objects.forEach(go => {
         const material = go && go.GetComponent && go.GetComponent(BS.CT.Material);
-        if (material) textures.push(`${go.name || '?'}: "${material.texture || ''}"`);
+        if (!material) return;
+        count++;
+        // Only the ones with a texture or a name that looks like a screen: there can be hundreds.
+        const texture = String(material.texture || '');
+        if (texture || /screen|fire-v/i.test(go.name || '')) textured.push(`${go.name || '?'}: "${texture}"`);
       });
-      return `(${objects.length} objects, ${textures.length} BS Materials${textures.length ? ': ' + textures.slice(0, 12).join(', ') : ''})`;
+      return `(${objects.length} objects, ${count} BS Materials; with a texture or "screen" in the name: ${textured.slice(0, 20).join(', ') || 'none'})`;
     } catch (e) {
       return `(could not list materials: ${e && e.message})`;
     }

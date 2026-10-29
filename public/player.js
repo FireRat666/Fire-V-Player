@@ -745,22 +745,33 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
     }
 
     /**
-     * Polls the YouTube captions module for available tracks and selects English
-     * or the first available caption track.
+     * Polls the YouTube captions module for a track and shows English: an English track when
+     * there is one, else YouTube's English translation of the video's track. Auto-generated
+     * captions aren't in the track list, only the current track, so that one counts too.
      * @param {number} tries - Retries counter.
      */
     pickCaptionTrack(tries) {
       clearTimeout(this.captionsTimer);
       const p = this.player;
       if (!p || this.core.captions === false) return;
-      let list = [];
+      const isEnglish = t => /^en/i.test((t && t.languageCode) || '');
+      let list = [], current = null, languages = [];
       try { list = p.getOption('captions', 'tracklist') || []; } catch (e) {}
-      if (list.length) {
-        const track = list.find(t => /^en/i.test(t.languageCode || '')) || list[0];
-        try { p.setOption('captions', 'track', { languageCode: track.languageCode }); } catch (e) {}
+      try { current = p.getOption('captions', 'track'); } catch (e) {}
+      const base = list.find(isEnglish) || list[0] || (current && current.languageCode ? current : null);
+      if (base) {
+        try { languages = p.getOption('captions', 'translationLanguages') || []; } catch (e) {}
+        const english = languages.find(isEnglish);
+        try {
+          if (!isEnglish(base) && english && base.is_translateable !== false) {
+            p.setOption('captions', 'track', Object.assign({}, base, { translationLanguage: english }));
+          } else if (base !== current) {
+            p.setOption('captions', 'track', { languageCode: base.languageCode });
+          }
+        } catch (e) {}
         return;
       }
-      if (tries < 10) this.captionsTimer = setTimeout(() => this.pickCaptionTrack(tries + 1), 500);
+      if (tries < 20) this.captionsTimer = setTimeout(() => this.pickCaptionTrack(tries + 1), 500);
     }
 
     /**

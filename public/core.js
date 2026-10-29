@@ -2284,6 +2284,7 @@ var Core = class {
         if (this.player) {
           this.player.lastStartTime = json.data.newLastStartTime;
           this.player.currentTime = json.data.newCurrentTime;
+          if (typeof json.data.paused === 'boolean') this.player.paused = json.data.paused;
         }
         break;
     }

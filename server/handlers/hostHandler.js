@@ -149,20 +149,26 @@ async function hostSkip(app, ws, isForward) {
     // Use the explicit isKaraoke flag for a more reliable check.
     const skipAmount = player.isKaraoke ? SkipJumpTimeKaraoke : SkipJumpTimePlaylist;
 
-    // To skip forward in time, we subtract from the start timestamp.
-    // To skip backward, we add to it.
-    player.lastStartTime += isForward ? -skipAmount : skipAmount;
-    player.paused = false; // Resume playback on skip
-
-    // Calculate the new current time to send to clients for an immediate seek.
-    const newCurrentTime = (new Date().getTime() / 1000) - player.lastStartTime;
+    const now = new Date().getTime() / 1000;
+    const delta = isForward ? skipAmount : -skipAmount;
+    let newCurrentTime;
+    if (player.paused) {
+      // Paused stays paused, at the new point (the time is held in currentTime while paused).
+      newCurrentTime = Math.max(0, (player.currentTime || 0) + delta);
+      player.lastStartTime = now - newCurrentTime;
+    } else {
+      // To skip forward in time, we subtract from the start timestamp.
+      player.lastStartTime -= delta;
+      newCurrentTime = now - player.lastStartTime;
+    }
     player.currentTime = newCurrentTime; // Keep server state consistent.
 
     // Broadcast a seek command to all clients.
     player.sockets.forEach(socket => {
       app.send(socket, Commands.HOST_SEEK, {
         newCurrentTime: newCurrentTime,
-        newLastStartTime: player.lastStartTime
+        newLastStartTime: player.lastStartTime,
+        paused: !!player.paused
       });
     });
     await app.savePlayerState(ws.i);
@@ -270,7 +276,8 @@ async function setVideoTime(app, ws, time) {
     player.sockets.forEach(socket => {
       app.send(socket, Commands.HOST_SEEK, {
         newCurrentTime: newTime,
-        newLastStartTime: player.lastStartTime
+        newLastStartTime: player.lastStartTime,
+        paused: !!player.paused
       });
     });
     await app.savePlayerState(ws.i);

@@ -555,7 +555,10 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
           const diff = newTime - oldTime;
 
           this.player.seekTo(newTime);
-          this.player.playVideo(); // Ensure playback continues after host seek
+          // A seek while paused stays paused, as the buttons and panel show.
+          if (typeof json.data.paused === 'boolean') this.playerData.paused = json.data.paused;
+          if (this.playerData.paused) this.player.pauseVideo();
+          else this.player.playVideo();
           this.playerData.lastStartTime = json.data.newLastStartTime;
 
           // Show a toast indicating the skip direction and amount.

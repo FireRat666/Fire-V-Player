@@ -225,6 +225,7 @@ var Playlist = class {
         if (this.core.player) {
           this.core.player.lastStartTime = json.data.newLastStartTime;
           this.core.player.currentTime = json.data.newCurrentTime;
+          if (typeof json.data.paused === 'boolean') this.core.player.paused = json.data.paused;
           // The UI updater will pick up the new lastStartTime on its next interval.
           // To make the change immediate, we can manually update the relevant elements.
           const currentTimeBar = document.querySelector('.currentTime');

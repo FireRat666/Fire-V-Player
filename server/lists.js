@@ -19,6 +19,7 @@ const { Readable } = require('stream');
 const MediaSources = require('../public/media-sources.js');
 const media = require('./media.js');
 const streaming = require('./streaming.js');
+const loc = require('./loc.js');
 const { getInnertube } = require('./youtube/youtubeiService.js');
 const Scraper = require('./youtube/scraper.js');
 const scraper = new Scraper();
@@ -154,7 +155,7 @@ function youtubeVideoId(input) {
  * isn't a list (a YouTube link, a video or stream, or not a web link).
  *
  * @param {string} input
- * @returns {{kind: 'file'|'drivefolder'|'archive', url?: string, id?: string, name: string}|null}
+ * @returns {{kind: 'file'|'drivefolder'|'archive'|'streaming'|'loc', url?: string, id?: string, name: string}|null}
  */
 function listSource(input) {
   const s = String(input || '').trim();
@@ -166,6 +167,9 @@ function listSource(input) {
   // A Tubi category or series, or a NASA+ series.
   const site = streaming.listSource(u);
   if (site) return site;
+  // A Library of Congress free-to-use page (its public-domain films, say).
+  const locPage = loc.listSource(u);
+  if (locPage) return locPage;
 
   if (host === 'docs.google.com' && parts[0] === 'document' && parts[1] === 'd' && parts[2]) {
     return { kind: 'file', url: `https://docs.google.com/document/d/${encodeURIComponent(parts[2])}/export?format=txt`, name: 'Google Doc' };
@@ -550,6 +554,7 @@ async function resolveEntry(entry, limit) {
   }
   const source = listSource(input);
   if (source && source.kind === 'streaming') return (await streaming.loadList(source)).items.slice(0, limit);
+  if (source && source.kind === 'loc') return (await loc.loadList(source)).items.slice(0, limit);
   if (source && source.kind === 'archive') {
     const item = await archiveItem(source.id, limit);
     return item.items.length === 1 ? [titled(item.items[0])] : item.items;
@@ -599,8 +604,8 @@ function loadList(src, limit = MAX_ITEMS) {
   return listCache.remember(`list:${limit}:${src}`, LIST_TTL, async () => {
     if (source.kind === 'drivefolder') return { dropped: 0, ...(await driveFolder(source.id, limit)) };
     if (source.kind === 'archive') return { dropped: 0, ...(await archiveItem(source.id, limit)) };
-    if (source.kind === 'streaming') {
-      const list = await streaming.loadList(source);
+    if (source.kind === 'streaming' || source.kind === 'loc') {
+      const list = source.kind === 'loc' ? await loc.loadList(source) : await streaming.loadList(source);
       if (!list.items.length) throw new ListError('That list has nothing in it that can play here.');
       return { title: list.title, items: list.items.slice(0, limit), truncated: list.items.length > limit, dropped: 0 };
     }

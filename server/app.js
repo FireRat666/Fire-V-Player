@@ -822,7 +822,7 @@ class App {
     // If it starts with http://, https://, or www., we should return an error
     // or empty results, rather than searching YouTube for the URL string.
     if (/^(https?:\/\/|www\.)/i.test(term)) {
-      fail("I can't play that link. Try YouTube, Twitch, Vimeo, Internet Archive, or a direct video link (.mp4, .m3u8, VRCDN .live.ts).");
+      fail("I can't play that link. Try YouTube, Twitch, Vimeo, Internet Archive, Library of Congress, or a direct video link (.mp4, .m3u8, VRCDN .live.ts).");
       return;
     }
 

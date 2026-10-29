@@ -7,6 +7,7 @@
 
 const MediaSources = require('../public/media-sources.js');
 const archive = require('./archive.js');
+const loc = require('./loc.js');
 const streaming = require('./streaming.js');
 
 const FETCH_TIMEOUT_MS = 5000;
@@ -121,6 +122,10 @@ async function resolveMediaLink(link) {
     } catch (e) { /* played as a plain file below */ }
   }
 
+  // A Library of Congress film page or handle becomes its tile.loc.gov video file, and a file there
+  // gets the film's title when the server knows it.
+  if (media.type === 'loc' || (media.type === 'file' && media.loc)) return loc.resolveLink(link);
+
   // Tubi and NASA+ pages keep their page link; the player asks for the stream (/api/stream).
   if (media.type === 'tubi' || media.type === 'nasa') return streaming.resolveLink(link);
 
@@ -153,7 +158,7 @@ async function resolveMediaLinks(link) {
 
 /**
  * Checks whether a WebSocket client connection is permitted to queue the specified media link.
- * Known trusted providers (YouTube, Twitch, Vimeo, the Internet Archive) are always permitted.
+ * Known trusted providers (YouTube, Twitch, Vimeo, the Internet Archive, the Library of Congress) are always permitted.
  * Direct links and files require untrusted link permissions enabled on the connection.
  *
  * @param {Object} ws - The client WebSocket connection object.

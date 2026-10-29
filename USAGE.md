@@ -199,10 +199,11 @@ The server keeps what it read from a list for 5 minutes, so a change to the file
 - **A text file of links**, one per line, as a `.txt` or `.m3u` file at a direct link, on Dropbox (its share link), on Google Drive (its share link), or as a Google Doc (its share link; the server reads it as text). It must be shared so anyone with the link can see it.
 - **A Google Drive folder** shared with anyone who has the link: every video directly inside it, sorted by name. Subfolders are skipped.
 - **An archive.org item** (`https://archive.org/details/<id>`): its videos (an MP4 of each when there is one).
+- **A Library of Congress free-to-use page**, such as [Public Domain Films from the National Film Registry](https://www.loc.gov/free-to-use/public-domain-films-from-the-national-film-registry/): its films (see [Library of Congress films](#library-of-congress-films)).
 
-For a working example, see [`public/assets/example-playlist.txt`](public/assets/example-playlist.txt): a YouTube live stream, a Twitch channel, a VRCDN stream and an HLS stream. The example snippet uses it as `playlists="PLZWiw-xxQ4SPDmADhvme7-pU2bx3s7nKX, https://vidya.firer.at/assets/example-playlist.txt"`.
+For a working example, see [`public/assets/example-playlist.txt`](public/assets/example-playlist.txt): a YouTube live stream, a Twitch channel, a VRCDN stream, HLS streams, MP4 and WebM files, an audio file and a Library of Congress film, so it doubles as a set of test streams. The example snippet uses it, and the National Film Registry page, as `playlists="PLZWiw-xxQ4SPDmADhvme7-pU2bx3s7nKX, https://vidya.firer.at/assets/example-playlist.txt, https://www.loc.gov/free-to-use/public-domain-films-from-the-national-film-registry/"`.
 
-A list file can mix every source the player plays: YouTube videos, YouTube playlists (each is expanded), Twitch, Vimeo, VDO.Ninja, HLS and VRCDN streams, video and audio files, Google Drive and Dropbox files, and archive.org items. Blank lines and lines starting with `#` are ignored. Text after a link on the same line, or an m3u `#EXTINF:<seconds>,<title>` line above it, becomes that video's title, and `#PLAYLIST:<name>` names the list (otherwise it's named after the file).
+A list file can mix every source the player plays: YouTube videos, YouTube playlists (each is expanded), Twitch, Vimeo, VDO.Ninja, HLS and VRCDN streams, video and audio files, Google Drive and Dropbox files, archive.org items and Library of Congress films. Blank lines and lines starting with `#` are ignored. Text after a link on the same line, or an m3u `#EXTINF:<seconds>,<title>` line above it, becomes that video's title, and `#PLAYLIST:<name>` names the list (otherwise it's named after the file).
 
 ```text
 #PLAYLIST:Friday night
@@ -236,6 +237,19 @@ These always work, as the sites moderate what's on them:
 | Tubi movie or episode | `https://tubitv.com/movies/<id>/<name>`, `https://tubitv.com/tv-shows/<id>/<name>` | Free films and TV, with Tubi's ads left out. Stays in sync like YouTube. Titles Tubi only offers with copy protection (DRM) or to signed-in viewers say so instead of playing. Tubi's catalogue depends on the country the server is in. |
 | Tubi series | `https://tubitv.com/series/<id>/<name>` | Pasted into search, lists every episode. As a list (see below) it opens its episodes. |
 | NASA+ video | `https://plus.nasa.gov/video/<name>/` | NASA's own videos. Stays in sync like YouTube. |
+| Library of Congress film | `https://www.loc.gov/item/mbrs01836081/` | Public-domain films, played from the Library's own video file. Stays in sync like YouTube. See [Library of Congress films](#library-of-congress-films). |
+
+#### Library of Congress films
+
+The Library of Congress's films play from its own video files (`https://tile.loc.gov/.../<number>.mp4`, MP4 with H.264 video). Any of these links work, in search, **Load Playlist** and list files:
+
+- the film's page: `https://www.loc.gov/item/<id>/` (or `https://lccn.loc.gov/<id>`);
+- its permanent link (handle): `http://hdl.loc.gov/loc.mbrsmi/<collection>.<number>`, or its resource page `https://www.loc.gov/resource/mbrsmi.<collection>.<number>/`;
+- the video file itself, from the page's **Download** menu (the MP4).
+
+A page whose id starts with `mbrs` (most of the Library's films) needs no lookup. For any other page the server asks loc.gov once, but loc.gov often turns servers away with a bot check, so if it says it can't find the film, paste its permanent link or its MP4 link instead. The public-domain National Film Registry films are built in, so their pages always work, and their free-to-use page, `https://www.loc.gov/free-to-use/public-domain-films-from-the-national-film-registry/`, works as a list of 15 films (three of its 18, early films from 1896 to 1906, have no video file the server knows yet). Other free-to-use pages work as lists when loc.gov lets the server read them.
+
+The films are big (hundreds of MB to a few GB, at 1080p), but they stream, so they start as quickly as any video.
 
 These only work with `untrusted-links="true"` in the snippet, as they can come from any site:
 
@@ -298,7 +312,7 @@ All parameters are optional unless marked as **(Required)**.
 | `youtube` | The URL of a single YouTube video to use as the default "silent" video when nothing is playing. | A silent visual video |
 | `volume` | The initial volume, from `0` to `100`. | `40` |
 | `mute` | Whether the player should start muted. | `false` |
-| `untrusted-links` | Whether links from any site (video files, `.m3u8` streams, VRCDN, VDO.Ninja) can be played, as well as YouTube, Twitch, Vimeo, Tubi, NASA+ and the Internet Archive. Off by default, as those links aren't moderated. Each viewer's own world must allow them for them to play on their screen. See [Links from other sites](#links-from-other-sites). | `false` |
+| `untrusted-links` | Whether links from any site (video files, `.m3u8` streams, VRCDN, VDO.Ninja) can be played, as well as YouTube, Twitch, Vimeo, Tubi, NASA+, the Internet Archive and the Library of Congress. Off by default, as those links aren't moderated. Each viewer's own world must allow them for them to play on their screen. See [Links from other sites](#links-from-other-sites). | `false` |
 | `captions` | Whether closed captions start on. Each viewer can turn them on or off in the panel's More view, and their choice is remembered on their device. | `true` |
 | `resolution` | The width in pixels of the screen's page, which is 16:9 (`1600` is 1600 x 900). Higher is sharper, and YouTube and Twitch lay out as for a bigger window, but each frame costs more to draw, especially on Quest. The screen stays the same size in the world whatever the resolution. Each viewer can pick another for their own screen in the panel's More view. From 640 to 3840. | `1600` |
 | `space-screen` | Altspace (SideQuest Creator SDK) only. `auto`: the screen draws the space page's own browser, with the player page laid over that page, so no second browser is opened. It's used when the client can resize the space page (its `SetWorldBrowserSize` call or the `!swbs!` command) and the page really takes the size within 5 seconds; otherwise, and for a second player in the same space (only one can have the space page), the screen is a browser as before. The space page goes back to its own size when the player is removed. This screen can't be clicked, so players that need a click to start (Twitch) may need one more step. `false`: always open a browser for the screen. Banter is unaffected. | `auto` |

@@ -2,6 +2,8 @@
 # A list of links for the playlists setting: one link per line. Lines starting with # are
 # comments, and text after a link names it. Host your own .txt anywhere with a direct link
 # (or on Dropbox, Google Drive or as a Google Doc) and put its link in playlists.
+# Links to files and streams (everything below Twitch) need untrusted-links="true",
+# except the Library of Congress film.
 
 # A YouTube live stream
 https://www.youtube.com/watch?v=rFZHOHl-L8A
@@ -12,5 +14,21 @@ https://www.twitch.tv/lofigirl Lofi Girl on Twitch
 # A VRCDN stream (stream.vrcdn.live/live/<your stream key>.ts)
 https://stream.vrcdn.live/live/vrcdn.live.ts VRCDN test stream
 
-# An HLS (.m3u8) stream
+# HLS (.m3u8) streams, including Apple's test stream (fragmented MP4)
 https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8 Tears of Steel (HLS)
+https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8 Big Buck Bunny (HLS)
+https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8 Apple bipbop test stream (HLS, fMP4)
+
+# Video files (.mp4 and .webm)
+https://download.blender.org/durian/trailer/sintel_trailer-480p.mp4 Sintel trailer (MP4)
+https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c0/Big_Buck_Bunny_4K.webm/Big_Buck_Bunny_4K.webm.480p.vp9.webm Big Buck Bunny (WebM, VP9)
+https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4 Flower, 5 seconds (MP4)
+https://mdn.github.io/learning-area/html/multimedia-and-embedding/video-and-audio-content/rabbit320.webm Rabbit, 8 seconds (WebM, VP8)
+
+# An audio file
+https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg Example audio (Ogg Vorbis)
+
+# A Library of Congress film: its loc.gov page, handle or video file all work.
+# The whole public-domain National Film Registry list is
+# https://www.loc.gov/free-to-use/public-domain-films-from-the-national-film-registry/
+https://www.loc.gov/item/mbrs01836081/

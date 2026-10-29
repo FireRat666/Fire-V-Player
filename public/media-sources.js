@@ -7,11 +7,12 @@
 
 /**
  * @typedef {Object} DetectedMedia
- * @property {'youtube'|'file'|'hls'|'mpegts'|'twitch'|'twitchclip'|'vimeo'|'vdoninja'|'archive'|'tubi'|'nasa'} type - The detected media stream/source type.
+ * @property {'youtube'|'file'|'hls'|'mpegts'|'twitch'|'twitchclip'|'vimeo'|'vdoninja'|'archive'|'loc'|'tubi'|'nasa'} type - The detected media stream/source type.
  *   'tubi' is a Tubi movie, episode or series page, and 'nasa' a NASA+ video page: the player asks the
  *   server for the page's stream when it plays (`stream` is true), as Tubi's stream links expire.
  *   'archive' is an Internet Archive page or item (or a publicdomainmovie.net page) that the server
- *   turns into one of the item's files before it is played.
+ *   turns into one of the item's files before it is played. 'loc' is a Library of Congress film page
+ *   or handle, which the server turns into the film's video file on tile.loc.gov.
  * @property {string} [channel] - Twitch channel name if applicable.
  * @property {string} [video] - Twitch VOD ID if applicable.
  * @property {string} [clip] - Twitch clip slug if applicable.
@@ -23,6 +24,9 @@
  *   a Google Drive or Dropbox share link).
  * @property {boolean} [drive] - True for a Google Drive file.
  * @property {string} [archive] - For a 'file' on the Internet Archive: the item's identifier.
+ * @property {boolean} [loc] - For a 'file' on the Library of Congress's tile.loc.gov.
+ * @property {string} [collection] - For a Library of Congress film handle: its collection (ntscrm, say).
+ * @property {string} [number] - For a Library of Congress film handle: its number.
  * @property {string} [file] - For an Internet Archive link to one of an item's video files: its name.
  * @property {string} [page] - For a publicdomainmovie.net page: the page to read the item from.
  * @property {'movie'|'episode'|'series'} [kind] - For Tubi: what the page is. A series is a list of episodes.
@@ -142,6 +146,20 @@ var MediaSources = (() => {
       if (parts[0] === 'movie' && parts[1]) return { type: 'archive', page: `https://publicdomainmovie.net/movie/${encodeURIComponent(parts[1])}` };
       return null;
     }
+    // Library of Congress films: an item page (loc.gov/item/<id>/ or lccn.loc.gov/<id>), a film's
+    // handle (hdl.loc.gov/loc.mbrsmi/<collection>.<number>) or resource page
+    // (loc.gov/resource/mbrsmi.<collection>.<number>/), which the server turns into the film's
+    // tile.loc.gov video file. A file there is played as it is.
+    if (host === 'loc.gov' || host === 'lccn.loc.gov' || host === 'hdl.loc.gov') {
+      const ID = /^[A-Za-z]{0,8}\d{6,14}$/;
+      if (host === 'loc.gov' && parts[0] === 'item' && ID.test(parts[1] || '')) return { type: 'loc', id: parts[1] };
+      if (host === 'lccn.loc.gov' && parts.length === 1 && ID.test(parts[0])) return { type: 'loc', id: parts[0] };
+      const handle = host === 'hdl.loc.gov' && parts[0] === 'loc.mbrsmi' ? parts[1]
+        : (host === 'loc.gov' && parts[0] === 'resource' && /^mbrsmi\./.test(parts[1] || '') ? parts[1].slice(7) : '');
+      const m = /^([a-z]{2,20})\.(\d{1,12})$/.exec(handle || '');
+      if (m) return { type: 'loc', collection: m[1], number: m[2] };
+    }
+    if (host === 'tile.loc.gov' && FILE_EXT.test(u.pathname)) return { type: 'file', loc: true };
     // Tubi: tubitv.com/movies/<id>, /tv-shows/<id> (an episode) and /series/<id> (a list of episodes).
     if (host === 'tubitv.com') {
       const kinds = { movies: 'movie', 'tv-shows': 'episode', series: 'series' };
@@ -204,9 +222,10 @@ var MediaSources = (() => {
    * Set of media source types considered trusted by default. The Internet Archive is trusted too
    * (its links and its files): it is a well-known library hosting public-domain and Creative
    * Commons films, not an arbitrary server, much like Vimeo. So are Tubi (a free, licensed
-   * streaming service) and NASA+ (NASA's own videos), whose streams the server looks up.
+   * streaming service) and NASA+ (NASA's own videos), whose streams the server looks up, and the
+   * Library of Congress's films (its pages and its tile.loc.gov files).
    */
-  const TRUSTED = new Set(['youtube', 'twitch', 'twitchclip', 'vimeo', 'archive', 'tubi', 'nasa']);
+  const TRUSTED = new Set(['youtube', 'twitch', 'twitchclip', 'vimeo', 'archive', 'loc', 'tubi', 'nasa']);
 
   /**
    * Checks whether a detected media source is from an inherently trusted service.
@@ -215,11 +234,11 @@ var MediaSources = (() => {
    * @returns {boolean} True if media source is trusted without requiring untrusted-links override.
    */
   function isTrusted(media) {
-    return !!media && (TRUSTED.has(media.type) || (media.type === 'file' && !!media.archive));
+    return !!media && (TRUSTED.has(media.type) || (media.type === 'file' && (!!media.archive || !!media.loc)));
   }
 
   /** Rejection message displayed when untrusted direct media links are queued in restricted rooms. */
-  const UNTRUSTED_MESSAGE = 'This world only plays YouTube, Twitch, Vimeo, Tubi, NASA+ and Internet Archive links. Its owner can allow other links with the untrusted-links snippet setting.';
+  const UNTRUSTED_MESSAGE = 'This world only plays YouTube, Twitch, Vimeo, Tubi, NASA+, Internet Archive and Library of Congress links. Its owner can allow other links with the untrusted-links snippet setting.';
 
   /**
    * The 11-character id of a YouTube video, from a bare id or a YouTube link (with or without

@@ -99,15 +99,20 @@ var Playlist = class {
         }
         this.updatePlaylist(this.core.player);
         this.startUiUpdater();
+        // Sent on every (re)connection: list requests that were waiting can go now.
+        if (json.data.type === 'initial-sync' && this.listQueue) this.pumpLists();
         if (json.data.type === 'initial-sync' && this.refreshToast) {
           this.refreshToast = false;
           this.core.showToast("Playlist is up to date.", 2000);
         }
         break;
       case Commands.SEARCH_RESULTS:
+        // Only the latest search's reply is shown; an earlier one answered late is dropped.
+        if (json.searchId !== undefined && json.searchId !== this.searchId) break;
         this.loadVideos(json.data);
         break;
       case Commands.ERROR:
+        if (json.searchId !== undefined && json.searchId !== this.searchId) break; // an earlier search's
         const errorMessage = json.data && json.data.message ? json.data.message : "I can't let you do that...";
         this.core.showToast(errorMessage, 4000);
         break;
@@ -139,6 +144,14 @@ var Playlist = class {
       case Commands.AUTO_SYNC_STATE_CHANGED:
         this.autoSyncEnabled = json.data.enabled;
         this.autoSync.innerText = this.autoSyncEnabled ? "Auto Sync: On" : "Auto Sync: Off";
+        break;
+      case Commands.LIST_PREVIEW_RESULT:
+        this.onListPreview(json.data);
+        break;
+      case Commands.LISTS_UPDATED:
+        if (this.core.player && json.data && Array.isArray(json.data.lists)) this.core.player.lists = json.data.lists;
+        this.savedListsButton.style.display = this.getLists().length ? 'block' : 'none';
+        if (this.listsOverlay.style.display !== 'none') this.showLists();
         break;
       case Commands.PLAYLIST_UPDATED:
         if (this.core.player) {
@@ -212,6 +225,9 @@ var Playlist = class {
         if (this.core.player) {
           this.core.player.lastStartTime = json.data.newLastStartTime;
           this.core.player.currentTime = json.data.newCurrentTime;
+          if (typeof json.data.paused === 'boolean') this.core.player.paused = json.data.paused;
+          this.togglePause.innerText = this.core.player.paused ? 'Play' : 'Pause';
+          this.togglePause.className = this.core.player.paused ? 'button green' : 'button red';
           // The UI updater will pick up the new lastStartTime on its next interval.
           // To make the change immediate, we can manually update the relevant elements.
           const currentTimeBar = document.querySelector('.currentTime');
@@ -337,7 +353,12 @@ var Playlist = class {
       document.body.appendChild(myScript);
     });
   }
-  search(data) {
+  search(term) {
+    // Internet Archive movies and TV say which source. The ID comes back on the reply.
+    const source = document.querySelector('#search-source');
+    this.searchId = (this.searchId || 0) + 1;
+    const data = { term, searchId: this.searchId };
+    if (source && ['archive', 'tubi', 'nasa'].includes(source.value)) data.source = source.value;
     this.core.sendMessage({path: Commands.SEARCH, data });
   }
   updatePlaylist(player) {
@@ -349,6 +370,8 @@ var Playlist = class {
     this.loadDefaultPlaylistButton.style.display = (isMe && player.playlist.length === 0 && this.core.params.playlist) ? 'inline-block' : 'none';
     this.addPlaylist.style.display = !isMe ? 'none' :  'inline-block';
     this.addVideo.style.display = !isMe ? 'none' : 'inline-block';
+    this.savedListsButton.style.display = this.getLists().length ? 'block' : 'none';
+    if (this.listsOverlay.style.display !== 'none') this.renderLists(); // permissions, "in the playlist"
     this.takeOver.style.display = (player.canTakeOver || isMe) ? 'inline-block' : 'none';
     this.skipBackwards.style.display = isMe ? 'inline-block' : 'none';
     this.skipForward.style.display = isMe ? 'inline-block' : 'none';
@@ -551,6 +574,217 @@ var Playlist = class {
       }
     })
   }  
+  // ---- Saved lists: the snippet's playlist and playlists settings, and lists opened with Browse.
+  // Each opens to show its videos, which can be added one at a time or all at once.
+
+  setupListsUI() {
+    this.listData = new Map();
+    // The server works on 3 list previews at a time per connection and refuses more, so the rest
+    // wait (see pumpLists). A preview is loaded again when shown after 5 minutes, as the server
+    // re-reads lists then too.
+    this.listQueue = [];
+    this.listsOut = new Map(); // list id -> when it was asked for
+    this.listsSocket = null;
+    this.extraLists = [];
+    this.openListId = null;
+    this.listsOverlay = document.querySelector('.lists-overlay');
+    this.listsContainer = document.querySelector('.lists-container');
+    this.savedListsButton = document.querySelector('#savedLists');
+    this.savedListsButton.addEventListener('click', () => this.showLists());
+    document.querySelector('#close-lists-btn').addEventListener('click', () => { this.listsOverlay.style.display = 'none'; });
+    this.listsOverlay.addEventListener('click', (event) => {
+      if (event.target === this.listsOverlay) this.listsOverlay.style.display = 'none';
+    });
+  }
+  // The snippet's fixed lists, the room's shared ones (saved on the server), then any opened with Browse.
+  getLists() {
+    if (!this.savedLists) this.savedLists = this.core.getSavedLists();
+    const raw = (this.core.player && Array.isArray(this.core.player.lists)) ? this.core.player.lists : [];
+    const shared = raw.filter(l => l && typeof l.link === 'string' && typeof l.id === 'string')
+      .map(l => ({ id: l.link, label: String(l.title || 'Playlist'), shared: l.id, by: l.by && l.by.name ? String(l.by.name) : '' }));
+    // A link in both the snippet's lists and the shared ones keeps its first entry, with the shared
+    // details added (on a copy) so it still gets its Remove button.
+    const byId = new Map();
+    const out = [];
+    this.savedLists.concat(shared, this.extraLists || []).forEach(l => {
+      const had = byId.get(l.id);
+      if (!had) { const copy = Object.assign({}, l); byId.set(l.id, copy); out.push(copy); }
+      else if (l.shared && !had.shared) { had.shared = l.shared; had.by = l.by; }
+    });
+    return out;
+  }
+  // Saves a list to the room's shared lists (the host, or anyone while unlocked). The server checks it works.
+  shareList(id) {
+    if (!this.canAdd()) { this.core.showToast("The player is locked: only the host can save lists.", 4000); return; }
+    this.core.sendMessage({ path: Commands.SAVE_LIST, data: { link: id } });
+    this.core.showToast("Saving the list for everyone...", 3000);
+  }
+  unshareList(list) {
+    if (!this.canAdd()) { this.core.showToast("The player is locked: only the host can remove lists.", 4000); return; }
+    this.core.sendMessage({ path: Commands.REMOVE_LIST, data: { id: list.shared } });
+    if (this.openListId === list.id) this.openListId = null;
+  }
+  isHost() {
+    return !!(this.core.player && this.core.player.host && this.core.player.host.id === window.user.id);
+  }
+  // The host, or anyone while the player is unlocked (as the server checks).
+  canAdd() {
+    return this.isHost() || !(this.core.player && this.core.player.locked);
+  }
+  showLists() {
+    this.listsOverlay.style.display = 'flex';
+    this.getLists().forEach(list => this.requestList(list.id, false));
+    this.renderLists();
+  }
+  // Asks the server what's in a list, unless it's already being asked for or a recent answer is
+  // kept (`force` asks again anyway). A list shown before keeps its videos while it reloads.
+  requestList(id, force) {
+    this.checkListRequests();
+    if (this.listsOut.has(id) || this.listQueue.includes(id)) return;
+    const had = this.listData.get(id);
+    if (had && had.state === 'ready' && !force && Date.now() - had.at < 5 * 60 * 1000) return;
+    if (!(had && had.state === 'ready')) this.listData.set(id, { state: 'loading', at: Date.now() });
+    this.listQueue.push(id);
+    this.pumpLists();
+  }
+  // Sends waiting list requests, 3 at most at a time, while connected.
+  pumpLists() {
+    this.checkListRequests();
+    while (this.core.connected() && this.listsOut.size < 3 && this.listQueue.length) {
+      const id = this.listQueue.shift();
+      this.listsOut.set(id, Date.now());
+      this.core.sendMessage({ path: Commands.LIST_PREVIEW, data: { id } });
+    }
+    this.scheduleListExpiry();
+  }
+  // While requests are out, checks again when the oldest would time out (2 minutes), so a stalled
+  // one shows its error and frees its place for the next waiting list without anyone clicking.
+  scheduleListExpiry() {
+    clearTimeout(this.listExpiryTimer);
+    this.listExpiryTimer = null;
+    if (!this.listsOut.size) return;
+    const oldest = Math.min(...this.listsOut.values());
+    this.listExpiryTimer = setTimeout(() => {
+      this.listExpiryTimer = null;
+      this.pumpLists(); // expires timed-out requests, sends waiting ones and schedules the next check
+      if (this.listsOverlay.style.display !== 'none') this.renderLists();
+    }, Math.max(0, oldest + 120000 - Date.now()) + 50);
+  }
+  // Requests whose reply can't come any more: sent on a connection since replaced (asked again on
+  // the new one), or with no reply for 2 minutes.
+  checkListRequests() {
+    if (this.core.ws !== this.listsSocket) {
+      this.listsSocket = this.core.ws;
+      const lost = [...this.listsOut.keys()].filter(id => !this.listQueue.includes(id));
+      this.listsOut.clear();
+      this.listQueue.unshift(...lost);
+    }
+    const now = Date.now();
+    for (const [id, at] of this.listsOut) {
+      if (now - at < 120000) continue;
+      this.listsOut.delete(id);
+      const d = this.listData.get(id);
+      if (d && d.state === 'loading') this.listData.set(id, { state: 'error', error: 'No reply from the server. Try again.' });
+    }
+  }
+  onListPreview(data) {
+    if (!data || typeof data.id !== 'string') return;
+    this.listsOut.delete(data.id);
+    this.pumpLists();
+    if (data.error) this.listData.set(data.id, { state: 'error', error: String(data.error) });
+    else this.listData.set(data.id, { state: 'ready', at: Date.now(), title: data.title || '', items: Array.isArray(data.items) ? data.items : [], skipped: data.skipped || 0, truncated: !!data.truncated });
+    if (this.listsOverlay.style.display !== 'none') this.renderLists();
+  }
+  appendList(id) {
+    if (!this.canAdd()) { this.core.showToast("The player is locked: only the host can add videos.", 4000); return; }
+    this.core.sendMessage({ path: Commands.FROM_PLAYLIST, data: { id, append: true, fromPlaylist: true } });
+    this.core.showToast("Adding the list to the playlist...", 3000);
+  }
+  replaceWithList(id) {
+    this.core.sendMessage({ path: Commands.FROM_PLAYLIST, data: { id, shouldClear: true, fromPlaylist: true } });
+    this.core.showToast("Loading playlist...", 3000);
+  }
+  browseList(id) {
+    if (!this.getLists().some(l => l.id === id)) this.extraLists.push({ id, label: this.core.listLabel(id), isDefault: false, extra: true });
+    this.openListId = id;
+    this.requestList(id, true);
+    this.savedListsButton.style.display = 'block';
+    this.showLists();
+  }
+  renderLists() {
+    const container = this.listsContainer;
+    const scroll = container.scrollTop;
+    container.innerHTML = '';
+    const host = this.isHost();
+    const canAdd = this.canAdd();
+    const inPlaylist = new Set(((this.core.player && this.core.player.playlist) || []).map(v => v.link));
+    const button = (parent, text, cls, onClick) => {
+      const b = this.core.makeAndAddElement('div', null, parent);
+      b.className = `button slim ${cls}`;
+      b.textContent = text;
+      b.addEventListener('click', (e) => { e.stopPropagation(); onClick(); });
+      return b;
+    };
+    const lists = this.getLists();
+    if (!lists.length) {
+      const empty = this.core.makeAndAddElement('div', { padding: '10px', color: '#bbb' }, container);
+      empty.textContent = "No saved lists. Use Add Playlist > Save to Lists to keep one here for everyone in this room.";
+    }
+    lists.forEach(list => {
+      const data = this.listData.get(list.id) || { state: 'none' };
+      const open = this.openListId === list.id;
+      const card = this.core.makeAndAddElement('div', null, container);
+      card.className = 'list-card';
+      const head = this.core.makeAndAddElement('div', null, card);
+      head.className = 'list-card-head';
+      const text = this.core.makeAndAddElement('div', null, head);
+      text.className = 'list-card-name';
+      const name = this.core.makeAndAddElement('div', null, text);
+      name.textContent = ((data.state === 'ready' && data.title) || list.label) + (list.isDefault ? ' (default)' : list.shared ? ' (shared)' : '');
+      const sub = this.core.makeAndAddElement('div', null, text);
+      sub.className = 'list-card-sub';
+      if (data.state === 'loading') sub.textContent = 'Loading...';
+      else if (data.state === 'error') sub.textContent = data.error;
+      else if (data.state === 'ready') {
+        const n = data.items.length;
+        sub.textContent = `${n} video${n === 1 ? '' : 's'}${data.truncated ? ' (the first ones)' : ''}${data.skipped ? `, ${data.skipped} skipped` : ''}`;
+      }
+      if (list.shared && list.by) sub.textContent += `${sub.textContent ? '  -  ' : ''}saved by ${list.by}`;
+      button(head, open ? 'Close' : 'Open', 'grey', () => {
+        this.openListId = open ? null : list.id;
+        if (!open) this.requestList(list.id, data.state === 'error'); // or loaded a while ago
+        this.renderLists();
+      });
+      if (data.state === 'error') button(head, 'Retry', 'teal', () => { this.requestList(list.id, true); this.renderLists(); });
+      if (canAdd && data.state !== 'error') button(head, 'Add All', 'teal', () => this.appendList(list.id));
+      if (host && data.state !== 'error') button(head, 'Replace', 'green', () => this.replaceWithList(list.id));
+      if (list.shared && canAdd) button(head, 'Remove', 'red', () => this.unshareList(list));
+      else if (list.extra && canAdd && data.state !== 'error') button(head, 'Save', 'purple', () => this.shareList(list.id));
+      if (!open || data.state !== 'ready') return;
+      data.items.forEach((v, i) => {
+        const row = this.core.makeAndAddElement('div', null, card);
+        row.className = 'list-item';
+        const img = this.core.makeAndAddElement('img', null, row);
+        if (v.thumbnail) img.src = v.thumbnail;
+        const title = this.core.makeAndAddElement('div', null, row);
+        title.className = 'list-item-title';
+        const added = inPlaylist.has(v.link);
+        const dur = v.duration ? this.durationCode(v.duration / 1000) : '';
+        title.textContent = `${i + 1}. ${v.title || 'Untitled'}${dur ? '  (' + dur + ')' : ''}${added ? '  - in the playlist' : ''}`;
+        title.title = v.link;
+        if (canAdd && !added) button(row, 'Add', 'teal', () => {
+          this.core.sendMessage({ path: Commands.ADD_TO_PLAYLIST, data: v });
+          this.core.showToast(`"${v.title}" was added to the playlist!`);
+        });
+        if (host && !added) {
+          button(row, 'Play Now', 'teal', () => this.core.sendMessage({ path: Commands.ADD_AND_PLAY, data: v }));
+          button(row, 'Play Next', 'teal', () => this.core.sendMessage({ path: Commands.ADD_AND_PLAY_NEXT, data: v }));
+        }
+      });
+    });
+    container.scrollTop = scroll;
+  }
+
   parseTimeToSeconds(timeString) {
     if (!timeString) return null;
     timeString = timeString.trim();
@@ -785,17 +1019,44 @@ var Playlist = class {
       this.addItemInput.focus();
     });
 
+    // A YouTube playlist, or a link to a list of links (which the server reads and checks).
+    const playlistInput = () => {
+      const input = this.addItemInput.value.trim();
+      const id = this.core.getPlaylistId(input) || this.core.getListLink(input);
+      if (!id) this.core.showToast("That is not a YouTube playlist or a link to a list of links.", 4000);
+      return id;
+    };
     this.addItemSubmit.addEventListener('click', () => {
-      const input = this.addItemInput.value;
-      const playlistId = this.core.getPlaylistId(input);
+      const playlistId = playlistInput();
       if (playlistId) {
         this.playlistId = playlistId;
         this.playPlaylist(true);
         this.addPlaylistOverlay.style.display = 'none';
-      } else {
-        this.core.showToast("Invalid Playlist URL or ID.", 4000);
+        this.core.showToast("Loading playlist...", 3000);
       }
     });
+    document.querySelector('#append-playlist-url-btn').addEventListener('click', () => {
+      const id = playlistInput();
+      if (id) {
+        this.appendList(id);
+        this.addPlaylistOverlay.style.display = 'none';
+      }
+    });
+    document.querySelector('#save-playlist-url-btn').addEventListener('click', () => {
+      const id = playlistInput();
+      if (id) {
+        this.shareList(id);
+        this.addPlaylistOverlay.style.display = 'none';
+      }
+    });
+    document.querySelector('#browse-playlist-url-btn').addEventListener('click', () => {
+      const id = playlistInput();
+      if (id) {
+        this.addPlaylistOverlay.style.display = 'none';
+        this.browseList(id);
+      }
+    });
+    this.setupListsUI();
 
     this.addItemInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {

@@ -20,6 +20,34 @@ var SCREEN_MAX_RESOLUTION = 3840;
 // The choices in the panel's More view, as page widths.
 var SCREEN_RESOLUTIONS = [1280, 1600, 1920];
 var RESOLUTION_PREF_KEY = 'fire-v-player-resolution';
+// Where each viewer keeps their hand controls (see HAND_PLACES), remembered on their device.
+var HAND_PLACE_PREF_KEY = 'fire-v-player-hand-place';
+// The places the hand controls can go, in the order the panel's button steps through them.
+// attach is the SDK's LegacyAttachmentPosition (HEAD 0, LEFT_HAND 2, RIGHT_HAND 3); position and
+// rotation are in that attachment's own Unity axes. On a hand, -X is the back of the left hand
+// (+X the right's) and Z runs toward the fingers. "front" isn't attached: it's put in the world
+// in front of the player when chosen.
+var HAND_PLACES = {
+  left: { label: 'Left Wrist', attach: 2, position: [0, 0.046, 0.07], rotation: [0, 90, 180], scale: 0.1 },
+  right: { label: 'Right Wrist', attach: 3, position: [0, 0.046, 0.07], rotation: [0, 270, 180], scale: 0.1 },
+  // The bottom right of what the player sees, for desktop players, whose hands don't turn.
+  view: { label: 'In View', attach: 0, position: [0.2, -0.16, 0.5], rotation: [0, 0, 0], scale: 0.1 },
+  front: { label: 'In Front', scale: 0.15 },
+  off: { label: 'Off' }
+};
+// Altspace (Creator SDK) space-page screen, see claimSpaceSurface. The client keeps this asset
+// reference pointed at the space page's own browser texture.
+var SPACE_BROWSER_TEXTURE = 'asset_browser_world';
+// The wire command for sizing the space page, for clients without scene.SetWorldBrowserSize.
+var SET_WORLD_BROWSER_SIZE = '!swbs!';
+// How long a size request may take to show up as the space page's own window size.
+var SPACE_SIZE_CONFIRM_MS = 5000;
+// Set to -1 to mirror the space-page screen, if a client draws the page's texture flipped.
+var SURFACE_FLIP_X = 1;
+var SURFACE_FLIP_Y = 1;
+// An object in the world's Unity scene with a BS Material, named "Fire-V-Player..." or with
+// "Fire-V-Player" as its Texture (in any case), shows the screen as well. See syncSecondScreens.
+var SECOND_SCREEN_TEXTURE = 'fire-v-player';
 
 var Core = class {
     constructor() {
@@ -59,6 +87,10 @@ var Core = class {
     this.setOrDefault("data-mute-icon-url", `${proto}://${this.hostUrl}/assets/Mute.png`);
     this.setOrDefault("data-skip-forward-icon-url", `${proto}://${this.hostUrl}/assets/Forward.png`);
     this.setOrDefault("data-skip-backward-icon-url", `${proto}://${this.hostUrl}/assets/Backwards.png`);
+    this.setOrDefault("data-reload-icon-url", `${proto}://${this.hostUrl}/assets/Reload.png`);
+    this.setOrDefault("data-unmute-icon-url", `${proto}://${this.hostUrl}/assets/Unmute.png`);
+    this.setOrDefault("data-play-icon-url", `${proto}://${this.hostUrl}/assets/Play.png`);
+    this.setOrDefault("data-pause-icon-url", `${proto}://${this.hostUrl}/assets/Pause.png`);
 
     if(this.params.announce === 'true') { 
       // this.setupSayNamesScript();
@@ -127,15 +159,29 @@ var Core = class {
       console.log(`Player is in 2D mode. Open the playlist controls here: ${playlistUrl}`);
       return;
     }
+    // Second screens show the loading picture until the screen is up (see syncSecondScreens).
+    try { this.syncSecondScreens(); } catch (e) { console.warn('[Core] Could not set up second screens yet:', e); }
+    // In Altspace the screen can be the space page's own browser (see claimSpaceSurface). Finding
+    // out can take a few seconds, so it runs while the buttons are made.
+    const claim = this.spaceSurface ? Promise.resolve() : this.claimSpaceSurface().catch(e => {
+      console.warn('[Core] Could not use the space page as the screen:', e);
+      this.releaseSpaceSurface();
+    });
     try {
       await this.setupBrowserUi();
     } catch (e) {
       console.error('[Core] Could not create the in-world buttons:', e);
     }
+    await claim;
     if (this.destroyed) return; // cleaned up while the buttons were being made
     // The screen itself: the browser, or the world's video player when a file is playing.
     this.screenReady = true;
     this.updateScreen();
+    // Second screens in the Unity scene may still be loading, or come later: keep looking.
+    // A scan with nothing to change touches nothing.
+    if (!this.secondScreenTimer) {
+      this.secondScreenTimer = setInterval(() => { if (!this.destroyed) this.syncSecondScreens(); }, 5000);
+    }
   }
 
   // ---------------------------------------------------------------- world objects (BS SDK)
@@ -244,7 +290,18 @@ var Core = class {
     if (!this.inWorld() || !(BS.VideoPlayer || BS.BanterVideoPlayer)) return false;
     // Files come from anywhere, so only where the world's owner allows them (as in the browser).
     const media = MediaSources.detect(link);
-    return !!media && media.type === 'file' && this.allowUntrusted === true;
+    if (!media || media.type !== 'file' || this.allowUntrusted !== true) return false;
+    // Audio files play in the browser: Unity's player on Quest doesn't play audio without video,
+    // and can't play Ogg or Opus anywhere.
+    const u = MediaSources.parseUrl(media.url || link);
+    return !(u && /\.(ogg|oga|opus|mp3|m4a|aac|wav|flac)$/i.test(u.pathname));
+  }
+  // Twitch won't start until someone clicks its player, and the space-page screen can't be clicked
+  // (it's a picture of a page nobody can reach), so Twitch gets a BS Browser screen, as on clients
+  // without the space page.
+  needsClickableScreen(link) {
+    const media = link && window.MediaSources ? MediaSources.detect(link) : null;
+    return !!media && (media.type === 'twitch' || media.type === 'twitchclip');
   }
   currentLink() {
     const p = this.player;
@@ -275,6 +332,7 @@ var Core = class {
       if (this.nativeScreen) this.nativeScreen.destroy();
       console.log('[Core] A file is playing, so the world\'s video player takes the browser\'s place.');
       this.nativeScreen = new FireNativeScreen(this, link);
+      this.syncSecondScreens();
       return;
     }
     if (this.nativeScreen) {
@@ -282,7 +340,30 @@ var Core = class {
       this.nativeScreen.destroy();
       this.nativeScreen = null;
     }
-    if (!this.browser) this.createBrowser(this.browserUrl());
+    // The space page when this player has it, unless the track needs clicking.
+    const surface = this.spaceSurface && !this.needsClickableScreen(link) ? this.spaceSurface : null;
+    if (this.browser && (this.browser.surface || null) !== surface) {
+      console.log(surface ? '[Core] Back to the space-page screen.' : '[Core] This needs clicking, so the screen is a browser for now.');
+      this.removeBrowser();
+    }
+    if (!this.browser) this.createBrowser(this.browserUrl(), surface);
+  }
+  // Builds this viewer's screen again from scratch, for when the video froze or didn't load for
+  // them: only their own screen, so nobody else's playback is touched. The new page starts at the
+  // host's current time, as for someone joining late.
+  reloadScreen() {
+    if (this.blocked || !this.screenReady) return;
+    const now = Date.now();
+    if (this.lastScreenReload && now - this.lastScreenReload < 3000) return; // a double click
+    this.lastScreenReload = now;
+    console.log('[Core] Reloading this viewer\'s screen.');
+    if (this.nativeScreen) {
+      this.nativeScreen.destroy();
+      this.nativeScreen = null;
+    }
+    this.removeBrowser();
+    this.updateScreen();
+    this.showToast('Reloading the video for you');
   }
   removeBrowser() {
     const browser = this.browser;
@@ -290,15 +371,25 @@ var Core = class {
     // A screen still being built destroys itself when it sees this.
     browser.removed = true;
     this.destroyObject(browser.go);
+    // The space-page screen's page goes too, so it doesn't play on behind the world's video
+    // player. The space page itself stays claimed and sized for the next screen.
+    if (browser.iframe) {
+      try { browser.iframe.src = 'about:blank'; } catch (e) {}
+      browser.iframe.remove();
+      browser.iframe = null;
+    }
     this.browser = null;
     // Messages still waiting for the old page will never be answered.
     this.browserAcks = {};
   }
   // The screen: a BS Browser showing the player page. It's built in the background; actions sent
   // before it's ready wait in `queue`.
-  createBrowser(url) {
-    const browser = this.browser = { url, go: null, component: null, queue: [], removed: false };
-    browser.ready = this.buildBrowser(browser).catch(e => {
+  // In Altspace, when this player has the space page (claimSpaceSurface), the page is an iframe
+  // on it instead, and the screen draws the space page's texture.
+  createBrowser(url, surface = this.spaceSurface) {
+    const browser = this.browser = { url, go: null, component: null, queue: [], removed: false, surface: surface || null };
+    const build = browser.surface ? this.buildSpaceScreen(browser) : this.buildBrowser(browser);
+    browser.ready = build.catch(e => {
       console.error('[Core] Could not create the browser screen:', e);
       this.showToast("Couldn't create the screen.", 6000);
     });
@@ -329,6 +420,7 @@ var Core = class {
     // The address may have changed while the screen was being made.
     if (browser.url !== url) component.url = browser.url;
     browser.queue.splice(0).forEach(json => component.RunActions(json));
+    this.syncSecondScreens();
     if (p.geometry && p.geometry !== "false") await this.addScreenShape(go);
   }
   // The optional `geometry` setting: a white shape at the screen, in A-Frame's geometry syntax
@@ -359,6 +451,14 @@ var Core = class {
   runBrowserActions(actions) {
     const browser = this.browser;
     if (!browser) return false;
+    if (browser.surface) {
+      // The iframe's page takes the same messages by postMessage. It can't be clicked.
+      actions.forEach(a => {
+        if (a.actionType === 'postmessage') this.postToSpaceScreen(browser, a.strParam1);
+        else console.log(`[Core] The space-page screen can't do the browser action "${a.actionType}".`);
+      });
+      return true;
+    }
     const json = JSON.stringify({ actions });
     if (browser.component) browser.component.RunActions(json);
     else browser.queue.push(json);
@@ -369,6 +469,10 @@ var Core = class {
     const browser = this.browser;
     if (!browser) return;
     browser.url = url;
+    if (browser.iframe) {
+      browser.loaded = false;
+      browser.iframe.src = this.spaceScreenUrl(url);
+    }
     if (browser.component) browser.component.url = url;
   }
   // Messages from the screen's page (window.O.sendMessage), such as the answer to a volume change.
@@ -387,6 +491,337 @@ var Core = class {
     const [w, h] = browser.size || this.screenPageSize();
     if (Number.isFinite(fx) && Number.isFinite(fy)) { x = Math.round(w * fx); y = Math.round(h * fy); }
     this.runBrowserActions([{actionType: "click2d", numParam1: x, numParam2: y}]);
+  }
+
+  // ---------------------------------------------------------------- space-page screen (Altspace)
+  //
+  // The Altspace client renders the space page (the page this script runs in) in a browser of its
+  // own that nobody sees, and lets a material draw it through the SPACE_BROWSER_TEXTURE asset. So
+  // the player page can run in an iframe laid over the whole space page, and the screen is a plane
+  // with that texture: no second browser is opened. There is one space page, so one player per
+  // space can have it (window.__vpSurfaceOwner, shared with other players that do the same); any
+  // other gets the BS Browser screen. Used only where the client can size the space page and the
+  // size shows up as this window's size, unless the `space-screen` setting turns it off.
+
+  spaceScreenSetting() {
+    const v = String(this.params['space-screen'] || 'auto').trim().toLowerCase();
+    if (v === 'false' || v === 'off' || v === 'no') return 'off';
+    return 'auto';
+  }
+  spacePageIs(w, h) {
+    return Math.abs(window.innerWidth - w) <= 2 && Math.abs(window.innerHeight - h) <= 2;
+  }
+  // Asks the client to make the space page w x h. False when it has no way to.
+  requestSpacePageSize(w, h) {
+    const scene = this.banterScene();
+    if (!scene) return false;
+    try {
+      if (typeof scene.SetWorldBrowserSize === 'function') { scene.SetWorldBrowserSize(w, h); return true; }
+      // Clients without the named call still carry the wire command: SetProp sends it as it is.
+      if (typeof scene.SetProp === 'function') { scene.SetProp(SET_WORLD_BROWSER_SIZE, { w: String(w), h: String(h) }); return true; }
+    } catch (e) {
+      console.warn('[Core] Could not size the space page:', e);
+    }
+    return false;
+  }
+  // Sizes the space page, true once this window really is that size.
+  setSpacePageSize(w, h) {
+    const surface = this.spaceSurface;
+    if (!this.requestSpacePageSize(w, h)) return Promise.resolve(false);
+    if (surface) { surface.sized = true; surface.size = [w, h]; }
+    return new Promise(resolve => {
+      if (this.spacePageIs(w, h)) { resolve(true); return; }
+      let timer = null;
+      const done = ok => {
+        window.removeEventListener('resize', onResize);
+        clearTimeout(timer);
+        if (!ok) console.warn(`[Core] The space page never became ${w} x ${h} (it's ${window.innerWidth} x ${window.innerHeight}).`);
+        resolve(ok);
+      };
+      const onResize = () => { if (this.spacePageIs(w, h)) done(true); };
+      timer = setTimeout(() => done(this.spacePageIs(w, h)), SPACE_SIZE_CONFIRM_MS);
+      window.addEventListener('resize', onResize);
+    });
+  }
+  // Takes the space page for the screen, or leaves this.spaceSurface null when it can't be used.
+  async claimSpaceSurface() {
+    if (this.spaceScreenSetting() === 'off') {
+      console.log('[Core] space-screen is off: using a browser for the screen.');
+      return null;
+    }
+    const scene = this.banterScene();
+    const named = !!scene && typeof scene.SetWorldBrowserSize === 'function';
+    if (!scene || !this.modernSdk() || typeof BS.Plane !== 'function' || typeof BS.Material !== 'function'
+      || (!named && typeof scene.SetProp !== 'function')) {
+      return null; // not a client that can share its space page (Banter)
+    }
+    if (window.__vpSurfaceOwner) {
+      console.log(`[Core] Another player (${window.__vpSurfaceOwner}) has the space page, so this one uses a browser for its screen.`);
+      return null;
+    }
+    const owner = window.__vpSurfaceOwner = `fire-v-player:${this.params.instance}`;
+    const surface = this.spaceSurface = {
+      owner, sized: false, size: null, named, layer: null, onMessage: null,
+      original: [window.innerWidth, window.innerHeight]
+    };
+    const [w, h] = this.screenPageSize();
+    let ok = true;
+    // SetProp sends the command whether or not the client knows it, so a page that already has
+    // the size proves nothing: move it off that size first and see it come back.
+    if (!named && this.spacePageIs(w, h)) ok = await this.setSpacePageSize(w, h - 16);
+    if (ok && this.spaceSurface === surface) ok = await this.setSpacePageSize(w, h);
+    if (this.destroyed || this.spaceSurface !== surface) {
+      if (this.spaceSurface === surface) this.releaseSpaceSurface();
+      return null;
+    }
+    if (!ok) {
+      console.log('[Core] This client did not size the space page, so the screen is a browser.');
+      this.releaseSpaceSurface();
+      return null;
+    }
+    // Over everything the space page shows: the whole page is the screen.
+    const layer = surface.layer = document.createElement('div');
+    layer.setAttribute('data-fire-v-player-screen', owner);
+    Object.assign(layer.style, {
+      position: 'fixed', left: '0', top: '0', width: '100vw', height: '100vh', margin: '0', padding: '0',
+      overflow: 'hidden', background: '#000', zIndex: '2147483647'
+    });
+    (document.body || document.documentElement).appendChild(layer);
+    surface.onMessage = e => this.onSpaceScreenMessage(e);
+    window.addEventListener('message', surface.onMessage);
+    console.log(`[Core] The screen is the space page (${w} x ${h}).`);
+    return surface;
+  }
+  // Gives the space page back: no layer, its own size, and no owner.
+  releaseSpaceSurface() {
+    const surface = this.spaceSurface;
+    if (!surface) return;
+    this.spaceSurface = null;
+    if (surface.onMessage) window.removeEventListener('message', surface.onMessage);
+    if (surface.layer) surface.layer.remove();
+    if (surface.sized) {
+      const scene = this.banterScene();
+      try {
+        // An empty request puts the space page back to the client's own size.
+        if (scene && typeof scene.SetProp === 'function') scene.SetProp(SET_WORLD_BROWSER_SIZE, {});
+        else if (scene && typeof scene.SetWorldBrowserSize === 'function') scene.SetWorldBrowserSize(surface.original[0], surface.original[1]);
+      } catch (e) {
+        console.warn('[Core] Could not put the space page back to its size:', e);
+      }
+    }
+    if (window.__vpSurfaceOwner === surface.owner) delete window.__vpSurfaceOwner;
+  }
+  // Logs anything that could make the space screen's page count as hidden to an embed that checks
+  // (Twitch won't autoplay then): what is drawn on top at the centre, and see-through or
+  // transformed elements above the iframe.
+  logSpaceScreenCover(iframe) {
+    try {
+      const describe = el => el === iframe ? 'the player' : `${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}${el.className && typeof el.className === 'string' ? '.' + el.className.split(' ')[0] : ''}`;
+      const top = document.elementsFromPoint(window.innerWidth / 2, window.innerHeight / 2).slice(0, 3).map(describe);
+      const odd = [];
+      for (let el = iframe; el; el = el.parentElement) {
+        const s = getComputedStyle(el);
+        if (Number(s.opacity) < 1 || s.transform !== 'none' || s.filter !== 'none' || s.visibility !== 'visible') {
+          odd.push(`${describe(el)} (opacity ${s.opacity}, transform ${s.transform}, filter ${s.filter}, visibility ${s.visibility})`);
+        }
+      }
+      console.log(`[Core] Space screen: on top at the centre ${top.join(' > ')}; page ${document.visibilityState}; ${odd.length ? 'styled above it: ' + odd.join(', ') : 'nothing see-through or transformed above it'}.`);
+    } catch (e) {
+      console.log('[Core] Could not check the space screen:', e);
+    }
+  }
+  // The player page's origin, the only one the iframe's messages are taken from or sent to.
+  playerPageOrigin() {
+    try { return new URL(this.initialUrl, location.href).origin; } catch (e) { return ''; }
+  }
+  // The player page's address in the iframe: it's told to talk to this page by postMessage.
+  spaceScreenUrl(url) {
+    let origin = '';
+    try { origin = new URL(url, location.href).origin; } catch (e) {}
+    if (!origin || origin !== this.playerPageOrigin()) return url; // some other page (SET_BROWSER_URL)
+    return `${url}${url.includes('?') ? '&' : '?'}embed=space&po=${encodeURIComponent(location.origin)}`;
+  }
+  async buildSpaceScreen(browser) {
+    const surface = browser.surface;
+    const p = this.params;
+    browser.origin = this.playerPageOrigin();
+    const iframe = browser.iframe = document.createElement('iframe');
+    iframe.allow = 'autoplay; encrypted-media; fullscreen; picture-in-picture';
+    // The client passes the pointer to the space page wherever it is, so the player page would
+    // always have a mouse over it, and YouTube would keep its title, share button and play
+    // button up. The screen can't be clicked anyway, so the page gets no pointer at all.
+    Object.assign(iframe.style, { width: '100%', height: '100%', border: '0', display: 'block', pointerEvents: 'none' });
+    // Messages sent before the page has loaded wait for it.
+    iframe.addEventListener('load', () => {
+      if (browser.removed || browser.iframe !== iframe) return;
+      browser.loaded = true;
+      browser.queue.splice(0).forEach(data => this.postToSpaceScreen(browser, data));
+      setTimeout(() => this.logSpaceScreenCover(iframe), 3000);
+    });
+    iframe.src = this.spaceScreenUrl(browser.url);
+    surface.layer.appendChild(iframe);
+    // A size picked while the world's video player had the screen.
+    const [w, h] = this.screenPageSize();
+    browser.size = surface.size || [w, h];
+    if (browser.size[0] !== w || browser.size[1] !== h) this.applyScreenResolution();
+    const t = this.screenTransform();
+    const [sx, sy, sz] = this.vec3(p.scale, [1, 1, 1]);
+    const go = browser.go = await this.makeObject('FireVPlayer_SpaceScreen', {
+      position: t.position, rotation: t.rotation, scale: new BS.Vector3(SURFACE_FLIP_X * sx, SURFACE_FLIP_Y * sy, sz)
+    });
+    if (browser.removed) { this.destroyObject(go); return; }
+    // The same size as the browser screen: SCREEN_WIDTH_M wide, 16:9, before the snippet's scale.
+    await this.addComponent(go, new BS.Plane({ width: SCREEN_WIDTH_M, height: SCREEN_WIDTH_M * 9 / 16 }));
+    await this.addComponent(go, new BS.Material({ shaderName: 'Unlit/Texture', texture: SPACE_BROWSER_TEXTURE, color: this.white() }));
+    if (browser.removed) return;
+    this.syncSecondScreens();
+    if (p.geometry && p.geometry !== "false") await this.addScreenShape(go);
+  }
+  // Sends one message (a JSON string) to the iframe's page, pinned to the player page's origin.
+  postToSpaceScreen(browser, data) {
+    if (browser.removed) return;
+    const target = browser.iframe && browser.iframe.contentWindow;
+    if (!browser.loaded || !target) { browser.queue.push(data); return; }
+    try { target.postMessage(data, browser.origin); } catch (e) { console.warn('[Core] Could not message the screen:', e); }
+  }
+  // Messages from the iframe's page, as the BS Browser's browser-message events.
+  onSpaceScreenMessage(e) {
+    const browser = this.browser;
+    if (!browser || !browser.iframe || e.source !== browser.iframe.contentWindow) return;
+    if (e.origin !== browser.origin || typeof e.data !== 'string') return;
+    this.onBrowserMessage({ detail: e.data });
+  }
+
+  // ---------------------------------------------------------------- second screens
+  //
+  // A world can show the screen on more surfaces: any object in its Unity scene with a BS Material
+  // whose Texture is "Fire-V-Player" (the Unity menu Fire-V-Player > Second Screen makes one).
+  // Their material follows whichever texture the screen draws: the space
+  // page's, or the BS Browser's, whose reference is only known once it exists. The world's video
+  // player (files) has no texture to share, so they go black while it plays.
+
+  // The texture reference the screen draws now, or null when there isn't one to share.
+  secondScreenTexture() {
+    const browser = this.browser;
+    if (this.destroyed || !browser || browser.removed) return null;
+    if (browser.surface) return browser.go ? SPACE_BROWSER_TEXTURE : null;
+    const id = browser.component && browser.component.unityId;
+    return id != null && id !== '' ? `asset_browser_${id}` : null;
+  }
+  // The picture second screens show while the player loads (public/assets).
+  secondScreenLoadingUrl() {
+    return this.hostUrl ? `${this.getProtocol()}://${this.hostUrl}/assets/SecondScreenLoading.png` : null;
+  }
+  // The BS Materials of the scene's second screens. The page knows every object with a BS
+  // component, so these are among scene.objects.
+  findSecondScreens() {
+    const scene = this.banterScene();
+    if (!scene || !scene.objects || !this.modernSdk() || !BS.CT || BS.CT.Material == null) return [];
+    // Once the player has set a screen's texture it no longer reads "Fire-V-Player", so screens
+    // already found are remembered.
+    const known = this.secondScreens || (this.secondScreens = new Set());
+    const unasked = [];
+    Object.values(scene.objects).forEach(go => {
+      let material = null;
+      try { material = go && go.GetComponent(BS.CT.Material); } catch (e) {}
+      if (!material) return;
+      // Its Texture says "Fire-V-Player", or its object's name starts with it. The name is the
+      // dependable one: some clients load the world's BS Materials with an empty Texture.
+      if (String(material.texture || '').trim().toLowerCase() === SECOND_SCREEN_TEXTURE ||
+          String(go.name || '').trim().toLowerCase().startsWith(SECOND_SCREEN_TEXTURE)) known.add(material);
+      else if (!known.has(material) && !material.__fvpAsked && material.unityId) unasked.push(material);
+    });
+    this.askMaterialTextures(scene, unasked);
+    return Array.from(known);
+  }
+  // A material from the Unity scene can reach the page without its values (it reads ""), so each
+  // one's Texture is asked of Unity once; the answer updates the material, then the screens sync.
+  askMaterialTextures(scene, materials) {
+    if (!materials.length || typeof BS.ComponentQuery !== 'function' || !BS.PN || BS.PN.texture == null ||
+        typeof scene.QueryComponents !== 'function') return;
+    // Optional: a client whose query throws just goes without, and never breaks the screen build.
+    let asked;
+    try {
+      const query = new BS.ComponentQuery();
+      materials.forEach(material => { material.__fvpAsked = true; query.Add(material, [BS.PN.texture]); });
+      asked = scene.QueryComponents(query);
+    } catch (e) {
+      console.warn('[Core] Could not ask for the scene\'s material textures:', e);
+      materials.forEach(material => { delete material.__fvpAsked; }); // a later scan asks again
+      return;
+    }
+    Promise.resolve(asked)
+      .then(() => {
+        if (this.destroyed) return;
+        this.syncSecondScreens();
+        if (!this.secondScreenCount && !this.secondScreenAskLogged) {
+          this.secondScreenAskLogged = true;
+          console.log(`[Core] Still no second screen after asking Unity for ${materials.length} material(s). ${this.secondScreenSummary()}`);
+        }
+      })
+      .catch(e => console.warn('[Core] Could not read the scene\'s material textures:', e));
+  }
+  // What the page can see of the scene's materials, for the log: says why no second screen was found.
+  secondScreenSummary() {
+    try {
+      const scene = this.banterScene();
+      if (!this.modernSdk() || !BS.CT || BS.CT.Material == null) return '(this client has no BS.CT.Material)';
+      const objects = Object.values((scene && scene.objects) || {});
+      let count = 0;
+      const textured = [];
+      objects.forEach(go => {
+        const material = go && go.GetComponent && go.GetComponent(BS.CT.Material);
+        if (!material) return;
+        count++;
+        // Only the ones with a texture or a name that looks like a screen: there can be hundreds.
+        const texture = String(material.texture || '');
+        if (texture || /screen|fire-v/i.test(go.name || '')) textured.push(`${go.name || '?'}: "${texture}"`);
+      });
+      return `(${objects.length} objects, ${count} BS Materials; with a texture or "screen" in the name: ${textured.slice(0, 20).join(', ') || 'none'})`;
+    } catch (e) {
+      return `(could not list materials: ${e && e.message})`;
+    }
+  }
+  // Points every second screen at the screen's texture (or black). Safe to call often: a screen
+  // already showing the right thing isn't touched.
+  syncSecondScreens() {
+    if (!this.inWorld()) return;
+    const screens = this.findSecondScreens();
+    if (screens.length !== this.secondScreenCount) {
+      this.secondScreenCount = screens.length;
+      console.log(`[Core] ${screens.length} second screen(s) in the scene. ${this.secondScreenSummary()}`);
+    }
+    let texture = this.secondScreenTexture();
+    // Until the screen has a texture to share, a picture saying the player is loading (instead of
+    // the white Unity draws for the "Fire-V-Player" marker). While the world's video player plays
+    // a file there's nothing to share, so they go black.
+    if (!texture && !this.nativeScreen && !this.destroyed) texture = this.secondScreenLoadingUrl();
+    screens.forEach(material => {
+      if (material.__fvpShowing === texture) return;
+      material.__fvpShowing = texture;
+      try {
+        material.texture = texture || '';
+        material.color = texture ? this.white() : new BS.Vector4(0, 0, 0, 1);
+      } catch (e) {
+        console.warn('[Core] Could not update a second screen:', e);
+      }
+    });
+  }
+
+  // Gives the second screens back their "Fire-V-Player" marker, black, so a player started later
+  // on this page can find them again.
+  releaseSecondScreens() {
+    if (!this.secondScreens) return;
+    this.secondScreens.forEach(material => {
+      delete material.__fvpShowing;
+      try {
+        material.texture = SECOND_SCREEN_TEXTURE;
+        material.color = new BS.Vector4(0, 0, 0, 1);
+      } catch (e) {
+        console.warn('[Core] Could not release a second screen:', e);
+      }
+    });
+    this.secondScreens.clear();
   }
 
   // ---------------------------------------------------------------- screen resolution
@@ -431,6 +866,14 @@ var Core = class {
   // Resizes the page and rescales the screen, so it stays the same size in the world.
   applyScreenResolution() {
     const browser = this.browser;
+    if (browser && browser.surface) {
+      // The space page is the page: it's resized, and the screen keeps its size in metres.
+      const [w, h] = browser.size = this.screenPageSize();
+      this.setSpacePageSize(w, h).then(ok => {
+        if (ok) console.log(`[Core] Screen page is now ${w} x ${h}.`);
+      });
+      return;
+    }
     if (!browser || !browser.component) return;
     const [w, h] = browser.size = this.screenPageSize();
     browser.component.pageWidth = w;
@@ -438,7 +881,31 @@ var Core = class {
     if (browser.go && typeof browser.go.SetLocalScale === 'function') browser.go.SetLocalScale(this.browserScale());
     console.log(`[Core] Screen page is now ${w} x ${h}.`);
   }
-  // The row of buttons under the screen: Playlist (Singers), skip back/forward, mute, volume.
+  // Where each button in the row under the screen goes (x, in the row's own metres). With the
+  // optional Reload and Play/Pause buttons turned off it's the original row. Play/Pause comes first
+  // in its group, so for everyone but the host (who alone sees it) it's just a wider gap.
+  // unity/Editor/FireVPlayerSnippetPreview.cs draws the same layout.
+  screenButtonLayout() {
+    const playPause = this.params['play-pause-button'] !== 'false';
+    const reload = this.params['reload-button'] !== 'false';
+    if (!playPause && !reload) {
+      return { Playlist: -0.633, SkipBack: -0.332, SkipForward: -0.081, Mute: 0.23, VolumeDown: 0.471, VolumeUp: 0.693 };
+    }
+    const groups = [['Playlist', reload && 'Reload'], [playPause && 'PlayPause', 'SkipBack', 'SkipForward'], ['Mute', 'VolumeDown', 'VolumeUp']]
+      .map(g => g.filter(Boolean));
+    const STEP = 0.24, GAP = 0.31, CENTRE = 0.03; // the original row's middle
+    const layout = {};
+    let x = 0;
+    groups.forEach((group, i) => {
+      if (i) x += GAP - STEP;
+      group.forEach(name => { layout[name] = x; x += STEP; });
+    });
+    const shift = CENTRE - (x - STEP) / 2;
+    Object.keys(layout).forEach(name => { layout[name] = Math.round((layout[name] + shift) * 1000) / 1000; });
+    return layout;
+  }
+  // The row of buttons under the screen: Playlist (Singers), Reload, Play/Pause (host), skip
+  // back/forward, mute, volume.
   async setupBrowserUi() {
     const p = this.params;
     const screenPos = this.vec3(p.position, [0, 0, 0]);
@@ -455,6 +922,61 @@ var Core = class {
     await this.setupMuteButton(this.playlistContainer);
     await this.setupSkipButton(true, this.playlistContainer);
     await this.setupSkipButton(false, this.playlistContainer);
+    const layout = this.screenButtonLayout();
+    if (layout.Reload !== undefined) {
+      await this.setupButton(this.playlistContainer, 'Reload', layout.Reload, this.params["data-reload-icon-url"], () => this.reloadScreen());
+    }
+    if (layout.PlayPause !== undefined) {
+      this.playPauseButton = await this.setupSwapButton(this.playlistContainer, 'ButtonPlayPause', new BS.Vector3(layout.PlayPause, 0, 0),
+        { pause: this.params["data-pause-icon-url"], play: this.params["data-play-icon-url"] },
+        () => this.sendMessage({ path: Commands.TOGGLE_PAUSE }));
+    }
+    this.updateScreenButtons();
+  }
+  // A button with a picture for each state (see showSwapButton). Each picture is its own icon
+  // button, and only the one for the current state is active, so it's the one seen and clicked.
+  async setupSwapButton(parent, name, position, icons, callback, size = 0.2) {
+    const holder = await this.makeObject(`FireVPlayer_${name}`, { parent, position });
+    const button = { holder, icons: {}, state: null, shown: true };
+    for (const state of Object.keys(icons)) {
+      const go = await this.makeIconButton(`FireVPlayer_${name}_${state}`, holder, new BS.Vector3(0, 0, 0), size, icons[state], callback);
+      button.icons[state] = go;
+      this.setActive(go, false);
+    }
+    return button;
+  }
+  // Shows the picture for `state`, or hides the whole button when `shown` is false.
+  showSwapButton(button, state, shown = true) {
+    if (!button) return;
+    if (button.shown !== shown) {
+      button.shown = shown;
+      this.setActive(button.holder, shown);
+    }
+    if (button.state === state) return;
+    button.state = state;
+    Object.keys(button.icons).forEach(key => this.setActive(button.icons[key], key === state));
+  }
+  setActive(go, on) {
+    if (!go) return;
+    try {
+      if (typeof go.SetActive === 'function') Promise.resolve(go.SetActive(!!on)).catch(() => {});
+      // Clients without SetActive: shrunk to nothing, collider and all, so it can't be clicked.
+      else if (typeof go.SetLocalScale === 'function') go.SetLocalScale(on ? new BS.Vector3(1, 1, 1) : new BS.Vector3(0.0001, 0.0001, 0.0001));
+    } catch (e) {
+      console.warn(`[Core] Could not ${on ? 'show' : 'hide'} ${go.name}:`, e);
+    }
+  }
+  isHost() {
+    const p = this.player;
+    return !!(p && p.host && window.user && p.host.id === window.user.id);
+  }
+  // The Mute button shows Unmute while muted, and Play/Pause shows what pressing it does, only to the host.
+  updateScreenButtons() {
+    const mute = this.params.mute === 'true' ? 'unmute' : 'mute';
+    this.showSwapButton(this.muteButton, mute);
+    this.showSwapButton(this.handMuteButton, mute);
+    const p = this.player;
+    this.showSwapButton(this.playPauseButton, p && p.paused ? 'play' : 'pause', this.isHost());
   }
   setVolume(isUp, amount) {
     if(isUp) {
@@ -665,7 +1187,7 @@ var Core = class {
     const playlistIconUrl = this.params["data-playlist-icon-url"];
     // Use the isKaraoke flag to provide a context-specific text label
     const buttonText = this.isKaraoke ? 'Singers' : 'Playlist';
-    const button = await this.setupButton(playlistContainer, 'Playlist', -0.633, playlistIconUrl, () => this.openPlaylist(), buttonText);
+    const button = await this.setupButton(playlistContainer, 'Playlist', this.screenButtonLayout().Playlist, playlistIconUrl, () => this.openPlaylist(), buttonText);
     // Kept so the label can follow a mode change.
     this.playlistButtonHolder = button.holder;
     this.playlistButtonText = button.label;
@@ -708,7 +1230,8 @@ var Core = class {
   getPlaylistPageUrl() {
     // Determine the mode ('karaoke' or 'playlist') based on the in-world script's setting.
     const mode = this.isKaraoke ? 'karaoke' : 'playlist';
-    const playlistParam = this.params.playlist ? `&playlist=${this.params.playlist}` : "";
+    const playlistParam = (this.params.playlist ? `&playlist=${encodeURIComponent(this.params.playlist)}` : "")
+      + (this.params.playlists ? `&playlists=${encodeURIComponent(this.params.playlists)}` : "");
     // Pass the mode as a URL parameter so the UI page knows its context.
     const proto = this.getProtocol();
     return `${proto}://${this.hostUrl}/${mode}/?instance=${encodeURIComponent(this.params.instance)}${playlistParam}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}&mode=${mode}`;
@@ -981,6 +1504,7 @@ var Core = class {
     this.params.volume = 100;
     this.tempVolume = 100;
     this.params.mute = 'false';
+    this.updateScreenButtons();
     // Rejected while there's no screen yet; the page then starts at the volume from browserUrl().
     if (unmute) Promise.resolve(this.sendBrowserMessage({ path: Commands.MUTE, data: 'false' })).catch(() => {});
     Promise.resolve(this.sendBrowserMessage({ path: Commands.SET_VOLUME, data: 100 })).catch(() => {});
@@ -1035,11 +1559,13 @@ var Core = class {
   }
   setupVolButton(isUp, playlistContainer) {
     const volIconUrl = isUp ? this.params["data-vol-up-icon-url"] : this.params["data-vol-down-icon-url"];
-    return this.setupButton(playlistContainer, isUp ? 'VolumeUp' : 'VolumeDown', isUp ? 0.693 : 0.471, volIconUrl, () => this.volume(isUp));
+    const name = isUp ? 'VolumeUp' : 'VolumeDown';
+    return this.setupButton(playlistContainer, name, this.screenButtonLayout()[name], volIconUrl, () => this.volume(isUp));
   }
   setupSkipButton(isBack, playlistContainer) {
     const skipIconUrl = isBack ? this.params["data-skip-backward-icon-url"] : this.params["data-skip-forward-icon-url"];
-    return this.setupButton(playlistContainer, isBack ? 'SkipBack' : 'SkipForward', isBack ? -0.332 : -0.081, skipIconUrl, () => (isBack ? this.back() : this.forward()));
+    const name = isBack ? 'SkipBack' : 'SkipForward';
+    return this.setupButton(playlistContainer, name, this.screenButtonLayout()[name], skipIconUrl, () => (isBack ? this.back() : this.forward()));
   }
   volume(isUp) {
     if (this.blocked) return;
@@ -1047,6 +1573,7 @@ var Core = class {
     if(isUp && this.params.mute == 'true') {
       this.params.mute = 'false';
       this.sendBrowserMessage({path: Commands.MUTE, data: this.params.mute});
+      this.updateScreenButtons();
     }
     this.sendBrowserMessage({path: Commands.SET_VOLUME, data: this.params.volume});
   }
@@ -1055,10 +1582,11 @@ var Core = class {
     if (this.blocked) return;
     this.params.mute = this.params.mute == 'true' ? 'false' : 'true';
     this.sendBrowserMessage({path: Commands.MUTE, data: this.params.mute});
+    this.updateScreenButtons();
   }
-  setupMuteButton(playlistContainer) {
-    const muteIconUrl = this.params["data-mute-icon-url"]; // URL for the mute button icon
-    return this.setupButton(playlistContainer, 'Mute', 0.23, muteIconUrl, () => this.mute());
+  async setupMuteButton(playlistContainer) {
+    this.muteButton = await this.setupSwapButton(playlistContainer, 'ButtonMute', new BS.Vector3(this.screenButtonLayout().Mute, 0, 0),
+      { mute: this.params["data-mute-icon-url"], unmute: this.params["data-unmute-icon-url"] }, () => this.mute());
   }
 
   // ---------------------------------------------------------------- spatial volume
@@ -1177,8 +1705,64 @@ var Core = class {
   }
 
   // ---------------------------------------------------------------- hand controls
+  // Six buttons (mute, volume, skip, the panel) that go where each viewer chooses (HAND_PLACES).
+  // The snippet's hand-controls-place is the default; "auto" is the left wrist in VR and in view
+  // on desktop, where the hands can't be turned to see the buttons.
+  async isVR() {
+    if (this.vrCheck === undefined) {
+      const scene = this.banterScene();
+      this.vrCheck = (async () => {
+        if (!scene || typeof scene.IsVR !== 'function') return true; // older clients: as before
+        try {
+          const answer = await Promise.race([scene.IsVR(), new Promise(resolve => setTimeout(() => resolve(null), 3000))]);
+          console.log(answer === null ? '[Core] The client did not say whether it is in VR.' : `[Core] This client is ${answer ? '' : 'not '}in VR.`);
+          return answer !== false;
+        } catch (e) {
+          return true;
+        }
+      })();
+    }
+    return this.vrCheck;
+  }
+  // The viewer's own choice, else the snippet's (a place's name or "auto").
+  handPlaceChoice() {
+    if (this.chosenHandPlace) return this.chosenHandPlace;
+    try {
+      const saved = localStorage.getItem(HAND_PLACE_PREF_KEY);
+      if (saved && HAND_PLACES[saved]) return saved;
+    } catch (e) {}
+    const p = String(this.params['hand-controls-place'] || 'auto').trim().toLowerCase();
+    return HAND_PLACES[p] ? p : 'auto';
+  }
+  async handPlace() {
+    const choice = this.handPlaceChoice();
+    if (choice !== 'auto') return choice;
+    return (await this.isVR()) ? 'left' : 'view';
+  }
+  // Steps to the next place, remembered on this device, and moves the buttons there.
+  async nextHandPlace() {
+    const order = Object.keys(HAND_PLACES);
+    const now = this.currentHandPlace || await this.handPlace();
+    this.setHandPlace(order[(order.indexOf(now) + 1) % order.length]);
+  }
+  setHandPlace(place) {
+    if (!HAND_PLACES[place]) return;
+    try { localStorage.setItem(HAND_PLACE_PREF_KEY, place); } catch (e) {}
+    this.chosenHandPlace = this.currentHandPlace = place;
+    // A build still running sees the choice changed and stops, then builds again for the latest
+    // choice (see setupHandControls), Off included, which builds nothing.
+    this.handPlaceVersion = (this.handPlaceVersion || 0) + 1;
+    this.removeHandControls();
+    this.showToast(`Hand controls: ${HAND_PLACES[place].label}`);
+    if (this.handControlsBuilding) this.handControlsRebuild = true;
+    else if (place !== 'off') this.setupHandControls().catch(e => console.error('[Core] Could not set up the hand controls:', e));
+  }
+  handPlaceLabel() {
+    const place = HAND_PLACES[this.currentHandPlace];
+    return place ? place.label : '...';
+  }
   /**
-   * Sets up wrist-attached playback controls on the local player's left hand.
+   * Sets up the hand controls where the viewer wants them.
    * Reattaches automatically when users rejoin or scene resets.
    * @returns {Promise<void>}
    */
@@ -1197,59 +1781,124 @@ var Core = class {
         if (!(e && e.detail && e.detail.isLocal) || this.handControls || this.handControlsBuilding) return;
         // Wait a moment after joining before attaching, which avoids a race on Quest.
         clearTimeout(this.handRejoinTimer);
-    clearTimeout(this.headRejoinTimer);
         this.handRejoinTimer = setTimeout(() => this.setupHandControls().catch(err => console.error('[Core] Could not set up the hand controls:', err)), 5000);
       };
       scene.On('user-left', this.onHandUserLeft);
       scene.On('user-joined', this.onHandUserJoined);
     }
     if (this.handControls || this.handControlsBuilding) return;
+    this.handControlsBuilding = true;
+    try {
+      await this.buildHandControls(scene);
+    } finally {
+      this.handControlsBuilding = false;
+      if (this.handControlsRebuild) {
+        this.handControlsRebuild = false;
+        if (!this.destroyed) this.setupHandControls().catch(e => console.error('[Core] Could not set up the hand controls:', e));
+      }
+    }
+  }
+  async buildHandControls(scene) {
+    // False once the player chooses another place (or the player is removed) during a wait.
+    const version = this.handPlaceVersion;
+    const current = () => !this.destroyed && this.handPlaceVersion === version;
+    const name = await this.handPlace();
+    if (!current()) return;
+    this.currentHandPlace = name;
+    const place = HAND_PLACES[name];
+    if (name === 'off') return;
     const uid = (scene.localUser && scene.localUser.uid) || (window.user && window.user.id);
-    if (!uid || typeof scene.LegacyAttachObject !== 'function') {
+    if (place.attach !== undefined && (!uid || typeof scene.LegacyAttachObject !== 'function')) {
       console.warn('[Core] The local player or LegacyAttachObject is missing, so no hand controls.');
       return;
     }
-    this.handControlsBuilding = true;
-    try {
-      const root = await this.makeObject('FireVPlayer_HandControls');
-      this.handControls = root;
-      // The buttons lie flat on the back of the wrist, facing out of it. These are in the hand's
-      // own Unity axes, with no A-Frame conversion. The hand-controls-position and
-      // hand-controls-rotation settings change them.
-      const wrapper = await this.makeObject('FireVPlayer_HandWrapper', {
-        parent: root,
-        position: this.toVector3(this.vec3(this.params['hand-controls-position'], [0, 0.046, 0.07])),
-        rotation: this.toVector3(this.vec3(this.params['hand-controls-rotation'], [0, 90, 180])),
-        scale: new BS.Vector3(0.1, 0.1, 0.1)
-      });
-      const buttons = [
-        ['Mute', -0.4, 0.4, "data-mute-icon-url", () => this.mute()],
-        ['VolumeDown', 0, 0.4, "data-vol-down-icon-url", () => this.volume(false)],
-        ['VolumeUp', 0.4, 0.4, "data-vol-up-icon-url", () => this.volume(true)],
-        ['SkipBack', -0.4, -0.1, "data-skip-backward-icon-url", () => this.sendBrowserMessage({path: Commands.SKIP_BACK})],
-        ['SkipForward', 0, -0.1, "data-skip-forward-icon-url", () => this.sendBrowserMessage({path: Commands.SKIP_FORWARD})],
-        ['Playlist', 0.4, -0.1, "data-playlist-icon-url", () => this.openPlaylist('front')]
-      ];
-      for (const [name, x, y, icon, callback] of buttons) {
-        if (root !== this.handControls) return; // removed meanwhile
-        // Just off the wrist, toward -Z: the side a button is seen from.
-        await this.makeIconButton(`FireVPlayer_Hand${name}`, wrapper, new BS.Vector3(x, y, -0.3), 0.4, this.params[icon], () => {
-          Promise.resolve(callback()).catch(() => {});
-        });
-      }
-      if (root !== this.handControls) return; // removed meanwhile
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      if (root !== this.handControls) return;
-      const leftHand = BS.LegacyAttachmentPosition ? BS.LegacyAttachmentPosition.LEFT_HAND : 1;
-      await scene.LegacyAttachObject(root, uid, leftHand);
-      console.log('[Core] Hand controls attached to the left hand.');
-      // Where the left hand is, for opening the panel the way the player is looking.
-      this.watchWorldPose(root, 'handPose');
-    } finally {
-      this.handControlsBuilding = false;
+    const front = name === 'front' ? await this.handFrontPose() : null;
+    if (!current()) return;
+    if (name === 'front' && !front) {
+      this.showToast("Couldn't tell where you are, so the hand controls aren't in front of you. Move a little and choose In Front again.", 6000);
+      return;
     }
+    const root = await this.makeObject('FireVPlayer_HandControls', front || {});
+    if (!current()) { this.destroyObject(root); return; }
+    this.handControls = root;
+    // The buttons lie flat, facing out of the wrist (or toward the player). On the wrists the
+    // hand-controls-position and hand-controls-rotation settings change where, mirrored for the right.
+    let position = place.position || [0, 0, 0], rotation = place.rotation || [0, 0, 0];
+    if (name === 'left' || name === 'right') {
+      const mirror = name === 'right';
+      const p = this.vec3(this.params['hand-controls-position'], null);
+      const r = this.vec3(this.params['hand-controls-rotation'], null);
+      if (p) position = mirror ? [-p[0], p[1], p[2]] : p;
+      if (r) rotation = mirror ? [r[0], -r[1], -r[2]] : r;
+    }
+    const wrapper = await this.makeObject('FireVPlayer_HandWrapper', {
+      parent: root,
+      position: this.toVector3(position),
+      rotation: this.toVector3(rotation),
+      scale: new BS.Vector3(place.scale, place.scale, place.scale)
+    });
+    // Four on top, three staggered under them.
+    const buttons = [
+      ['Mute', -0.57, 0.4, "data-mute-icon-url", () => this.mute()],
+      ['VolumeDown', -0.19, 0.4, "data-vol-down-icon-url", () => this.volume(false)],
+      ['VolumeUp', 0.19, 0.4, "data-vol-up-icon-url", () => this.volume(true)],
+      ['Reload', 0.57, 0.4, "data-reload-icon-url", () => this.reloadScreen()],
+      ['SkipBack', -0.38, -0.05, "data-skip-backward-icon-url", () => this.sendBrowserMessage({path: Commands.SKIP_BACK})],
+      ['SkipForward', 0, -0.05, "data-skip-forward-icon-url", () => this.sendBrowserMessage({path: Commands.SKIP_FORWARD})],
+      ['Playlist', 0.38, -0.05, "data-playlist-icon-url", () => this.openPlaylist('front')]
+    ];
+    for (const [button, x, y, icon, callback] of buttons) {
+      if (root !== this.handControls) return; // removed meanwhile
+      // Just off the wrist, toward -Z: the side a button is seen from.
+      const at = new BS.Vector3(x, y, -0.3);
+      const click = () => { Promise.resolve(callback()).catch(() => {}); };
+      if (button === 'Mute') {
+        // Shows Unmute while muted, like the one under the screen.
+        this.handMuteButton = await this.setupSwapButton(wrapper, 'HandMute', at,
+          { mute: this.params[icon], unmute: this.params["data-unmute-icon-url"] }, click, 0.36);
+        this.updateScreenButtons();
+      } else {
+        await this.makeIconButton(`FireVPlayer_Hand${button}`, wrapper, at, 0.36, this.params[icon], click);
+      }
+    }
+    if (root !== this.handControls) return;
+    if (place.attach === undefined) {
+      console.log('[Core] Hand controls put in front of the player.');
+      return;
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    if (root !== this.handControls) return;
+    await scene.LegacyAttachObject(root, uid, place.attach);
+    console.log(`[Core] Hand controls attached: ${place.label}.`);
+    // Where the hand is, for opening the panel the way the player is looking.
+    if (name === 'left' || name === 'right') this.watchWorldPose(root, 'handPose');
+  }
+  // A world position and rotation just in front of the player, a little below their eyes, tilted
+  // back to face them (Unity axes). Waits a few seconds for the head to report, as just after
+  // joining it may not have yet.
+  async handFrontPose() {
+    let head = this.headPose();
+    for (let k = 0; k < 10 && !(head && head.position && head.rotation); k++) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      head = this.headPose();
+    }
+    if (!head || !head.position || !head.rotation) return null;
+    const q = head.rotation;
+    const fx = 2 * (q.x * q.z + q.w * q.y), fz = 1 - 2 * (q.x * q.x + q.y * q.y);
+    if (Math.abs(fx) + Math.abs(fz) < 1e-6) return null;
+    const yaw = Math.atan2(fx, fz);
+    const d = 0.55;
+    // pose-update's height is about the floor on Quest (see the panel's frontPose).
+    const frontHeight = parseFloat(this.params['playlist-panel-front-height']);
+    const y = head.source === 'pose-update' ? head.position.y + (Number.isFinite(frontHeight) ? frontHeight : 1.4) - 0.3 : head.position.y - 0.3;
+    return {
+      position: new BS.Vector3(head.position.x + Math.sin(yaw) * d, y, head.position.z + Math.cos(yaw) * d),
+      rotation: new BS.Vector3(30, yaw * 180 / Math.PI, 0)
+    };
   }
   removeHandControls() {
+    this.handPose = null;
+    this.handMuteButton = null;
     if (!this.handControls) return;
     console.log('[Core] Removing the hand controls.');
     this.destroyObject(this.handControls);
@@ -1297,6 +1946,9 @@ var Core = class {
     this.setOrDefault("box-trigger-rotation", '0 0 0');
     this.setOrDefault("box-trigger-scale", '1 1 1');
     this.setOrDefault("resolution", '1600');
+    // Altspace: "auto" draws the screen from the space page's own browser where the client allows
+    // it (see claimSpaceSurface), "false" always opens a browser for it.
+    this.setOrDefault("space-screen", 'auto');
     // The world video player's size for files (native-video.js); empty matches the browser.
     this.setOrDefault("native-screen-size", '');
     this.setOrDefault("one-for-each-instance", "false");
@@ -1311,9 +1963,16 @@ var Core = class {
     this.setOrDefault("is3d", 'false');
     this.setOrDefault("announce", 'true');
     this.setOrDefault("announce-four-twenty", 'false');
+    // Optional buttons in the row under the screen: Reload (this viewer's screen) and Play/Pause
+    // (only the host sees it). "false" leaves the row as it was before them.
+    this.setOrDefault("reload-button", 'true');
+    this.setOrDefault("play-pause-button", 'true');
     this.setOrDefault("hand-controls", 'false');
-    // Fine-tunes where the hand buttons sit on the left hand, in the hand's own Unity axes:
-    // "x y z" metres and "x y z" degrees. Empty uses the built-in layout.
+    // Where the hand buttons start: auto (left wrist in VR, in view on desktop), left, right,
+    // view, front or off. Each viewer can choose another in the panel (HAND_PLACES).
+    this.setOrDefault("hand-controls-place", 'auto');
+    // Fine-tunes where the hand buttons sit on the wrist, in the left hand's own Unity axes
+    // (mirrored for the right): "x y z" metres and "x y z" degrees. Empty uses the built-in layout.
     this.setOrDefault("hand-controls-position", '');
     this.setOrDefault("hand-controls-rotation", '');
     this.setOrDefault("playlist-panel-front-height", '1.4');
@@ -1334,10 +1993,15 @@ var Core = class {
     this.setOrDefault("playlist-panel-rotation", '');
     this.setOrDefault("playlist-panel-scale", '1');
 
+    // Saved playlists for the Lists view: comma separated YouTube playlists and list links.
+    this.setOrDefault("playlists", "");
+
     if (this.params.playlist) {
-      const extractedId = this.getPlaylistId(this.params.playlist);
+      // A YouTube playlist, or a link to a list of links (a .txt or .m3u file, a Google Doc, a
+      // Drive folder, an archive.org item), which the server reads.
+      const extractedId = this.getPlaylistId(this.params.playlist) || this.getListLink(this.params.playlist);
       if (!extractedId) {
-        console.warn(`Could not extract a valid playlist ID from provided playlist parameter: "${this.params.playlist}". It will be ignored.`);
+        console.warn(`Could not extract a valid playlist ID or list link from provided playlist parameter: "${this.params.playlist}". It will be ignored.`);
       }
       this.params.playlist = extractedId || "";
     }
@@ -1607,6 +2271,9 @@ var Core = class {
           if (track) this.player.duration = track.duration / 1000;
         }
         break;
+      case Commands.LISTS_UPDATED:
+        if (this.player && json.data && Array.isArray(json.data.lists)) this.player.lists = json.data.lists;
+        break;
       case Commands.PLAYLIST_UPDATED:
         if (this.player) {
           this.player.playlist = json.data.playlist;
@@ -1632,11 +2299,13 @@ var Core = class {
         if (this.player) {
           this.player.lastStartTime = json.data.newLastStartTime;
           this.player.currentTime = json.data.newCurrentTime;
+          if (typeof json.data.paused === 'boolean') this.player.paused = json.data.paused;
         }
         break;
     }
     // A file track needs the world's video player in place of the browser, and back again after.
     try { this.updateScreen(json); } catch (e) { console.error('[Core] Could not switch screens:', e); }
+    try { this.updateScreenButtons(); } catch (e) { console.error('[Core] Could not update the screen buttons:', e); }
     this.notifyListeners(json);
   }
   // Passes a message to the panel and the other listeners, as if it came from the server.
@@ -1667,33 +2336,93 @@ var Core = class {
     this.requestState();
     return true;
   }
+  // A YouTube video id from a bare id or a YouTube link, or false (see MediaSources.youtubeId).
   getId(url){
     if (!url) return false;
     url = url.trim();
     if (url.length === 11 && /^[a-zA-Z0-9_-]{11}$/.test(url)) {
       return url;
     }
-    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|shorts\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+    if (window.MediaSources && MediaSources.youtubeId) return MediaSources.youtubeId(url);
+    // Before media-sources.js has loaded: the same rule, only YouTube's own hosts.
+    if (!/^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[a-z0-9-]+\.)*(?:youtube\.com|youtube-nocookie\.com|youtu\.be)(?:[\/?#:]|$)/i.test(url)) return false;
+    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|shorts\/|live\/|watch\?v=|\&v=)([^#\&\?\/]*).*/;
     const match = url.match(regExp);
     return (match && match[2].length === 11) ? match[2] : false;
   }
+  // A YouTube playlist id from a bare id or any link with list= in it (a playlist page, or a
+  // video in a playlist), or null. The same kinds as the server takes (server/lists.js): playlists
+  // (PL), albums (OLAK5uy_), a channel's uploads (UU) and favourites (FL); not mixes (RD).
   getPlaylistId(urlOrId) {
-    // First, check if the input is just a valid playlist ID.
-    // A simple check is to see if it starts with PL and contains no URL characters.
-    if (urlOrId.startsWith('PL') && !urlOrId.includes('/') && !urlOrId.includes('?')) {
-        return urlOrId;
+    const s = String(urlOrId || '').trim();
+    const kind = /^(PL|OLAK5uy_|UU|FL)[A-Za-z0-9_-]{10,}$/;
+    if (kind.test(s)) return s;
+    // Only YouTube's own links, as on the server: a list file's link may have list= in it too.
+    if (!/^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[a-z0-9-]+\.)*(?:youtube\.com|youtube-nocookie\.com|youtu\.be)(?:[\/?#:]|$)/i.test(s)) return null;
+    const match = /[?&]list=([^#&?]+)/.exec(s);
+    return match && kind.test(match[1]) ? match[1] : null;
+  }
+  // A link that may be a list of links (a .txt or .m3u file, a Google Doc, a Drive folder, an
+  // archive.org item), or null. Only the server can tell for sure, as it reads the file; this
+  // only rules out what can't be one (YouTube links, single videos and streams, non-links).
+  getListLink(input) {
+    const s = String(input || '').trim();
+    if (!/^https?:\/\/[^\s]+$/i.test(s) || s.length > 2000) return null;
+    const media = window.MediaSources ? MediaSources.detect(s) : null;
+    // Drive file links play as videos, but as a playlist setting they are text files of links. A
+    // Tubi series is a list of its episodes, and an archive.org item page (not one of its files) a
+    // list of its videos (the server reads both as lists).
+    const archiveItem = media && media.type === 'archive' && !media.file && /^\/details\//i.test(new URL(s).pathname);
+    if (media && !media.drive && !(media.type === 'tubi' && media.kind === 'series') && !archiveItem) return null;
+    return s;
+  }
+  // A single video or stream link (YouTube, Twitch, a .m3u8 or VRCDN stream...), or null. In the
+  // playlists setting one shows in Lists as a list of just that video.
+  getSingleLink(input) {
+    const s = String(input || '').trim();
+    if (!/^https?:\/\/[^\s]+$/i.test(s) || s.length > 2000 || !window.MediaSources) return null;
+    return MediaSources.detect(s) ? s : null;
+  }
+  // The saved playlists for the Lists view: the default playlist (the playlist setting), then the
+  // playlists setting's comma separated YouTube playlists, list links and single video or stream
+  // links, at most 10.
+  getSavedLists() {
+    const out = [];
+    const seen = new Set();
+    const add = (raw, isDefault) => {
+      const s = String(raw || '').trim().replace(/[\s,]+$/, ''); // a stray comma at the end
+      const id = s && (this.getPlaylistId(s) || this.getListLink(s) || (!isDefault && this.getSingleLink(s)));
+      if (!id || seen.has(id) || out.length >= 10) return;
+      seen.add(id);
+      out.push({ id, label: this.listLabel(id), isDefault: !!isDefault });
+    };
+    add(this.params && this.params.playlist, true);
+    String((this.params && this.params.playlists) || '').split(/\s*,\s*(?=https?:\/\/|PL|OLAK5uy_|UU|FL)|\s*\n\s*/).forEach(s => add(s, false));
+    return out;
+  }
+  // A name for a saved list until the server says what it's called.
+  listLabel(id) {
+    if (this.getPlaylistId(id)) return 'YouTube playlist';
+    const single = this.getSingleLink(id) && MediaSources.detect(id);
+    if (single && single.type !== 'archive') {
+      const names = { youtube: 'YouTube video', twitch: single.channel ? `Twitch: ${single.channel}` : 'Twitch video', twitchclip: 'Twitch clip',
+        vimeo: 'Vimeo video', vdoninja: 'VDO.Ninja stream', hls: 'Stream', mpegts: single.live ? 'Live stream' : 'Video', file: 'Video file',
+        tubi: single.kind === 'series' ? 'Tubi series' : 'Tubi video', nasa: 'NASA+ video' };
+      return names[single.type] || 'Video';
     }
-
-    // If it's a URL, try to extract the 'list' parameter.
-    const regex = /[?&]list=([^#&?]+)/;
-    const match = urlOrId.match(regex);
-
-    if (match && match[1] && match[1].startsWith('PL')) {
-        return match[1];
+    try {
+      const u = new URL(id);
+      if (/docs\.google\.com$/i.test(u.hostname)) return 'Google Doc';
+      if (/drive\.google\.com$/i.test(u.hostname)) return /folders|embeddedfolderview/.test(u.pathname) ? 'Google Drive folder' : 'Google Drive file';
+      if (/archive\.org$/i.test(u.hostname)) return `archive.org: ${u.pathname.split('/').filter(Boolean)[1] || 'item'}`;
+      if (/tubitv\.com$/i.test(u.hostname)) return `Tubi: ${(u.pathname.split('/').filter(Boolean)[1] || 'category').replace(/_/g, ' ')}`;
+      if (/plus\.nasa\.gov$/i.test(u.hostname)) return 'NASA+ series';
+      let name = u.pathname.split('/').filter(Boolean).pop() || u.hostname;
+      try { name = decodeURIComponent(name); } catch (e) {}
+      return name.replace(/\.(txt|m3u)$/i, '') || u.hostname;
+    } catch (e) {
+      return 'Playlist';
     }
-
-    // Return null if no valid ID could be extracted.
-    return null;
   }
   async setupToastify() {
     if (typeof Toastify === 'undefined') {
@@ -1788,6 +2517,7 @@ var Core = class {
     clearTimeout(this.handRejoinTimer);
     clearTimeout(this.headRejoinTimer);
     clearInterval(this.blockedTimer);
+    clearInterval(this.secondScreenTimer);
     this.blockedTimer = null;
     clearTimeout(this.adminWriteTimer);
     this.adminWriteTimer = null;
@@ -1820,6 +2550,9 @@ var Core = class {
 
     // The world's objects: the screen, buttons, hand controls and anything else made here.
     this.removeBrowser();
+    this.releaseSecondScreens(); // black, and findable by the next player
+    // The space page goes back to how it was (Altspace's space-page screen).
+    this.releaseSpaceSurface();
     this.removeHandControls();
     this.worldObjects.slice().forEach(go => this.destroyObject(go));
     this.worldObjects = [];
@@ -1841,6 +2574,7 @@ var Core = class {
     this.playlistContainer = null;
     this.playlistButtonHolder = null;
     this.playlistButtonText = null;
+    this.muteButton = this.playPauseButton = null;
     this.ws = null;
     if (window.playlistPlayerInstance) {
       window.playlistPlayerInstance = null;

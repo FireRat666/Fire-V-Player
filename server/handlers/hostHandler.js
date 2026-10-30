@@ -149,20 +149,30 @@ async function hostSkip(app, ws, isForward) {
     // Use the explicit isKaraoke flag for a more reliable check.
     const skipAmount = player.isKaraoke ? SkipJumpTimeKaraoke : SkipJumpTimePlaylist;
 
-    // To skip forward in time, we subtract from the start timestamp.
-    // To skip backward, we add to it.
-    player.lastStartTime += isForward ? -skipAmount : skipAmount;
-    player.paused = false; // Resume playback on skip
-
-    // Calculate the new current time to send to clients for an immediate seek.
-    const newCurrentTime = (new Date().getTime() / 1000) - player.lastStartTime;
+    const now = new Date().getTime() / 1000;
+    const delta = isForward ? skipAmount : -skipAmount;
+    const oldTime = player.paused ? (player.currentTime || 0) : now - player.lastStartTime;
+    let newCurrentTime;
+    if (player.paused) {
+      // Paused stays paused, at the new point (the time is held in currentTime while paused).
+      const trackDuration = ((player.playlist[player.currentTrack] || {}).duration || 0) / 1000;
+      newCurrentTime = Math.max(0, (player.currentTime || 0) + delta);
+      if (trackDuration > 0) newCurrentTime = Math.min(newCurrentTime, trackDuration);
+      player.lastStartTime = now - newCurrentTime;
+    } else {
+      // To skip forward in time, we subtract from the start timestamp.
+      player.lastStartTime -= delta;
+      newCurrentTime = now - player.lastStartTime;
+    }
     player.currentTime = newCurrentTime; // Keep server state consistent.
 
     // Broadcast a seek command to all clients.
     player.sockets.forEach(socket => {
       app.send(socket, Commands.HOST_SEEK, {
         newCurrentTime: newCurrentTime,
-        newLastStartTime: player.lastStartTime
+        newLastStartTime: player.lastStartTime,
+        paused: !!player.paused,
+        skipped: newCurrentTime - oldTime // for the toast: how far it really moved
       });
     });
     await app.savePlayerState(ws.i);
@@ -263,14 +273,19 @@ async function setVideoTime(app, ws, time) {
     if (!Number.isFinite(t)) return;
     const newTime = Math.max(0, trackDuration > 0 ? Math.min(t, trackDuration) : t);
 
-    player.lastStartTime = (new Date().getTime() / 1000) - newTime;
+    const now = new Date().getTime() / 1000;
+    const oldTime = player.paused ? (player.currentTime || 0) : now - player.lastStartTime;
+    player.lastStartTime = now - newTime;
     player.currentTime = newTime;
 
     // Broadcast a seek command to all clients. This is the same command used by host skip.
     player.sockets.forEach(socket => {
       app.send(socket, Commands.HOST_SEEK, {
         newCurrentTime: newTime,
-        newLastStartTime: player.lastStartTime
+        newLastStartTime: player.lastStartTime,
+        paused: !!player.paused,
+        skipped: newTime - oldTime, // for the toast
+        seek: true // a jump to a point, not a skip button
       });
     });
     await app.savePlayerState(ws.i);

@@ -7,7 +7,12 @@
 
 /**
  * @typedef {Object} DetectedMedia
- * @property {'youtube'|'file'|'hls'|'mpegts'|'twitch'|'twitchclip'|'vimeo'|'vdoninja'} type - The detected media stream/source type.
+ * @property {'youtube'|'file'|'hls'|'dash'|'mpegts'|'twitch'|'twitchclip'|'vimeo'|'vdoninja'|'archive'|'loc'|'tubi'|'nasa'} type - The detected media stream/source type.
+ *   'tubi' is a Tubi movie, episode or series page, and 'nasa' a NASA+ video page: the player asks the
+ *   server for the page's stream when it plays (`stream` is true), as Tubi's stream links expire.
+ *   'archive' is an Internet Archive page or item (or a publicdomainmovie.net page) that the server
+ *   turns into one of the item's files before it is played. 'loc' is a Library of Congress film page
+ *   or handle, which the server turns into the film's video file on tile.loc.gov.
  * @property {string} [channel] - Twitch channel name if applicable.
  * @property {string} [video] - Twitch VOD ID if applicable.
  * @property {string} [clip] - Twitch clip slug if applicable.
@@ -15,7 +20,18 @@
  * @property {string} [hash] - Vimeo unlisted hash token if applicable.
  * @property {string} [name] - VDO.Ninja stream/room identifier if applicable.
  * @property {boolean} [live] - True for an MPEG-TS link that is a live stream (VRCDN's .live.ts).
- * @property {string} [url] - The address to play, when it differs from the link (a VRCDN rtspt:// link).
+ * @property {string} [url] - The address to play, when it differs from the link (a VRCDN rtspt:// link,
+ *   a Google Drive or Dropbox share link).
+ * @property {boolean} [drive] - True for a Google Drive file.
+ * @property {string} [archive] - For a 'file' on the Internet Archive: the item's identifier.
+ * @property {boolean} [loc] - For a 'file' on the Library of Congress's tile.loc.gov.
+ * @property {string} [collection] - For a Library of Congress film handle: its collection (ntscrm, say).
+ * @property {string} [number] - For a Library of Congress film handle: its number.
+ * @property {string} [file] - For an Internet Archive link to one of an item's video files: its name.
+ * @property {string} [page] - For a publicdomainmovie.net page: the page to read the item from.
+ * @property {'movie'|'episode'|'series'} [kind] - For Tubi: what the page is. A series is a list of episodes.
+ * @property {string} [slug] - For NASA+: the video's name in its address.
+ * @property {boolean} [stream] - True when the player gets the stream from the server (/api/stream).
  */
 
 var MediaSources = (() => {
@@ -106,7 +122,78 @@ var MediaSources = (() => {
       return name ? { type: 'vdoninja', name: name.slice(0, 100) } : null;
     }
 
+    // Internet Archive: archive.org/details/<id>, archive.org/embed/<id>, archive.org/download/<id>[/<file>],
+    // and its storage servers' .../items/<id>/<file>. A playable file is a file (from the Archive);
+    // anything else is an item the server picks a video file from.
+    if (host === 'archive.org' || /\.archive\.org$/.test(host)) {
+      const ID = /^[A-Za-z0-9._-]{1,200}$/;
+      let i = -1;
+      if (host === 'archive.org' && ['details', 'embed', 'download'].includes(parts[0])) i = 1;
+      else if (host !== 'archive.org' && parts.indexOf('items') !== -1) i = parts.indexOf('items') + 1;
+      const id = i > 0 ? parts[i] || '' : '';
+      if (!ID.test(id)) return null;
+      let file = '';
+      try { file = parts.slice(i + 1).map(decodeURIComponent).join('/'); } catch (e) {}
+      if (!FILE_EXT.test(file)) file = '';
+      if (parts[0] !== 'details' && file) return { type: 'file', archive: id, file };
+      return { type: 'archive', id, file };
+    }
+    // publicdomainmovie.net plays Internet Archive items: movie.php?id=<id> sends you to the file,
+    // and a movie page names its item in a movie.php link (the server reads it).
+    if (host === 'publicdomainmovie.net') {
+      const id = parts[0] === 'movie.php' ? (u.searchParams.get('id') || '') : '';
+      if (id) return /^[A-Za-z0-9._-]{1,200}$/.test(id) ? { type: 'archive', id, file: '' } : null;
+      if (parts[0] === 'movie' && parts[1]) return { type: 'archive', page: `https://publicdomainmovie.net/movie/${encodeURIComponent(parts[1])}` };
+      return null;
+    }
+    // Library of Congress films: an item page (loc.gov/item/<id>/ or lccn.loc.gov/<id>), a film's
+    // handle (hdl.loc.gov/loc.mbrsmi/<collection>.<number>) or resource page
+    // (loc.gov/resource/mbrsmi.<collection>.<number>/), which the server turns into the film's
+    // tile.loc.gov video file. A file there is played as it is.
+    if (host === 'loc.gov' || host === 'lccn.loc.gov' || host === 'hdl.loc.gov') {
+      const ID = /^[A-Za-z]{0,8}\d{6,14}$/;
+      if (host === 'loc.gov' && parts[0] === 'item' && ID.test(parts[1] || '')) return { type: 'loc', id: parts[1] };
+      if (host === 'lccn.loc.gov' && parts.length === 1 && ID.test(parts[0])) return { type: 'loc', id: parts[0] };
+      const handle = host === 'hdl.loc.gov' && parts[0] === 'loc.mbrsmi' ? parts[1]
+        : (host === 'loc.gov' && parts[0] === 'resource' && /^mbrsmi\./.test(parts[1] || '') ? parts[1].slice(7) : '');
+      const m = /^([a-z]{2,20})\.(\d{1,12})$/.exec(handle || '');
+      if (m) return { type: 'loc', collection: m[1], number: m[2] };
+    }
+    if (host === 'tile.loc.gov' && FILE_EXT.test(u.pathname)) return { type: 'file', loc: true };
+    // Tubi: tubitv.com/movies/<id>, /tv-shows/<id> (an episode) and /series/<id> (a list of episodes).
+    if (host === 'tubitv.com') {
+      const kinds = { movies: 'movie', 'tv-shows': 'episode', series: 'series' };
+      const kind = kinds[parts[0]];
+      const id = parts[1] || '';
+      if (!kind || !/^\d{1,12}$/.test(id)) return null;
+      return kind === 'series' ? { type: 'tubi', kind, id } : { type: 'tubi', kind, id, stream: true };
+    }
+    // NASA+: plus.nasa.gov/video/<name>/
+    if (host === 'plus.nasa.gov') {
+      const slug = parts[0] === 'video' ? parts[1] || '' : '';
+      return /^[a-z0-9-]{1,200}$/.test(slug) ? { type: 'nasa', slug, stream: true } : null;
+    }
+    // A Google Drive file shared with anyone who has the link: played from its download address.
+    // confirm=t skips the page Drive shows instead of a big file ("can't scan for viruses").
+    if (host === 'drive.google.com') {
+      const id = (parts[0] === 'file' && parts[1] === 'd') ? parts[2] : (/^(open|uc)$/.test(parts[0] || '') ? u.searchParams.get('id') : '');
+      return id && /^[A-Za-z0-9_-]{10,}$/.test(id) ? { type: 'file', drive: true, url: `https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t` } : null;
+    }
+    if (host === 'drive.usercontent.google.com') {
+      const id = u.searchParams.get('id') || '';
+      return parts[0] === 'download' && /^[A-Za-z0-9_-]{10,}$/.test(id) ? { type: 'file', drive: true } : null;
+    }
+    // A Dropbox share link opens Dropbox's page about the file; raw=1 gives the file itself.
+    if (host === 'dropbox.com' && FILE_EXT.test(u.pathname)) {
+      const url = new URL(u.href);
+      url.searchParams.delete('dl');
+      url.searchParams.set('raw', '1');
+      return { type: 'file', url: url.href };
+    }
+
     if (/\.m3u8$/i.test(u.pathname)) return { type: 'hls' };
+    // A DASH stream; browsers need dash.js to play it.
+    if (/\.mpd$/i.test(u.pathname)) return { type: 'dash' };
     // An MPEG-TS stream over HTTP (VRCDN's .live.ts links); browsers need mpegts.js to play it.
     if (/\.ts$/i.test(u.pathname)) return { type: 'mpegts', live: /\.live\.ts$/i.test(u.pathname) };
     if (FILE_EXT.test(u.pathname)) return { type: 'file' };
@@ -121,6 +208,7 @@ var MediaSources = (() => {
    */
   function nameFromLink(link) {
     const m = detect(link);
+    if (m && m.drive) return 'Google Drive video';
     const u = parseUrl(m && m.url || link);
     if (!u) return 'Video';
     const file = u.pathname.split('/').filter(Boolean).pop() || '';
@@ -128,12 +216,18 @@ var MediaSources = (() => {
     try { name = decodeURIComponent(file); } catch (e) {}
     name = name.replace(/(\.live)?\.[a-z0-9]{2,5}$/i, '').replace(/[_+]+/g, ' ').trim();
     // Streams are often called index.m3u8 or playlist.m3u8, so say where they're from instead.
-    if (!name || /^(index|playlist|master|live|stream|chunklist)$/i.test(name)) name = `Stream from ${u.hostname}`;
+    if (!name || /^(index|playlist|master|live|stream|chunklist|manifest|dash)$/i.test(name)) name = `Stream from ${u.hostname}`;
     return name.slice(0, 120);
   }
 
-  /** Set of media source types considered trusted by default. */
-  const TRUSTED = new Set(['youtube', 'twitch', 'twitchclip', 'vimeo']);
+  /**
+   * Set of media source types considered trusted by default. The Internet Archive is trusted too
+   * (its links and its files): it is a well-known library hosting public-domain and Creative
+   * Commons films, not an arbitrary server, much like Vimeo. So are Tubi (a free, licensed
+   * streaming service) and NASA+ (NASA's own videos), whose streams the server looks up, and the
+   * Library of Congress's films (its pages and its tile.loc.gov files).
+   */
+  const TRUSTED = new Set(['youtube', 'twitch', 'twitchclip', 'vimeo', 'archive', 'loc', 'tubi', 'nasa']);
 
   /**
    * Checks whether a detected media source is from an inherently trusted service.
@@ -142,13 +236,39 @@ var MediaSources = (() => {
    * @returns {boolean} True if media source is trusted without requiring untrusted-links override.
    */
   function isTrusted(media) {
-    return !!media && TRUSTED.has(media.type);
+    return !!media && (TRUSTED.has(media.type) || (media.type === 'file' && (!!media.archive || !!media.loc)));
   }
 
   /** Rejection message displayed when untrusted direct media links are queued in restricted rooms. */
-  const UNTRUSTED_MESSAGE = 'This world only plays YouTube, Twitch and Vimeo links. Its owner can allow other links with the untrusted-links snippet setting.';
+  const UNTRUSTED_MESSAGE = 'This world only plays YouTube, Twitch, Vimeo, Tubi, NASA+, Internet Archive and Library of Congress links. Its owner can allow other links with the untrusted-links snippet setting.';
 
-  return { detect, nameFromLink, parseUrl, isTrusted, UNTRUSTED_MESSAGE };
+  /**
+   * The 11-character id of a YouTube video, from a bare id or a YouTube link (with or without
+   * https://), or false. Only YouTube's own hosts count: a pattern like "v/<11 letters>" turns up
+   * in other links too (twitch.tv/quarterjade is "tv/" and an 11-letter name).
+   *
+   * @param {string} link
+   * @returns {string|false}
+   */
+  function youtubeId(link) {
+    const s = String(link || '').trim();
+    if (/^[A-Za-z0-9_-]{11}$/.test(s)) return s;
+    const full = /^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : `https://${s}`;
+    const media = detect(full);
+    if (!media || media.type !== 'youtube') return false;
+    // Only the link's own path and query: a URL nested in another parameter doesn't count.
+    const u = parseUrl(full);
+    if (!u) return false;
+    const parts = u.pathname.split('/').filter(Boolean);
+    const host = u.hostname.toLowerCase().replace(/^(www|m)\./, ''); // as detect() does
+    let id = '';
+    if (host === 'youtu.be') id = parts[0] || '';
+    else if (['embed', 'shorts', 'live', 'v', 'e'].includes(parts[0])) id = parts[1] || '';
+    else id = u.searchParams.get('v') || '';
+    return /^[A-Za-z0-9_-]{11}$/.test(id) ? id : false;
+  }
+
+  return { detect, nameFromLink, parseUrl, isTrusted, youtubeId, UNTRUSTED_MESSAGE };
 })();
 
 if ((typeof process !== 'undefined') && process.release && process.release.name.search(/node|io.js/) !== -1) {

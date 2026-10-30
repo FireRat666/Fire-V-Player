@@ -24,10 +24,20 @@ async function addToPlayers(app, ws, video) {
   if (!player) return;
 
   // Songs from other sites follow the same rules as the playlist (see media.allowedFor).
-  const link = video && video.link;
+  let link = video && video.link;
   if (!link || (!app.getYoutubeId(link) && (!media.detect(link) || !media.allowedFor(ws, link)))) {
     app.send(ws, Commands.ERROR, { message: media.detect(link) ? media.UNTRUSTED_MESSAGE : "That song's link can't be played here." });
     return;
+  }
+  // An Internet Archive item's page isn't playable itself: use one of its files.
+  if (!app.getYoutubeId(link) && media.detect(link).type === 'archive') {
+    try {
+      video = { ...video, ...(await media.resolveMediaLink(link)) };
+      link = video.link;
+    } catch (err) {
+      app.send(ws, Commands.ERROR, { message: err.message });
+      return;
+    }
   }
 
   // Prevent a user from adding themselves to the queue more than once.

@@ -20,6 +20,7 @@ const MEDIA_STATE = { UNSTARTED: -1, ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING:
 const MEDIA_SCRIPTS = {
   hls: 'https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js',
   mpegts: 'https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.js',
+  dash: 'https://cdn.jsdelivr.net/npm/dashjs@4.7.4/dist/dash.all.min.js',
   twitch: 'https://player.twitch.tv/js/embed/v1.js',
   vimeo: 'https://player.vimeo.com/api/player.js'
 };
@@ -27,8 +28,66 @@ const MEDIA_SCRIPTS = {
 const mediaScriptLoads = {};
 
 /**
+ * An hls.js loader that loads with fetch and sends no Referer, for streams whose servers refuse
+ * requests from other sites' pages (NASA+). hls.js's own loader uses XHR, which always sends one.
+ */
+class NoReferrerLoader {
+  constructor() {
+    this.stats = { aborted: false, loaded: 0, retry: 0, total: 0, chunkCount: 0, bwEstimate: 0,
+      loading: { start: 0, first: 0, end: 0 }, parsing: { start: 0, end: 0 }, buffering: { start: 0, first: 0, end: 0 } };
+    this.controller = null;
+  }
+  load(context, config, callbacks) {
+    const stats = this.stats;
+    stats.loading.start = performance.now();
+    const controller = this.controller = new AbortController();
+    const headers = {};
+    if (context.rangeEnd) headers.Range = `bytes=${context.rangeStart || 0}-${context.rangeEnd - 1}`;
+    // A request ends once: by timing out, failing or loading. Whatever comes after (the fetch
+    // failing because the timeout aborted it, say) is ignored, as is everything after abort().
+    let settled = false;
+    const settle = () => {
+      if (settled || stats.aborted) return false;
+      settled = true;
+      clearTimeout(timer);
+      return true;
+    };
+    const timer = setTimeout(() => {
+      if (!settle()) return;
+      controller.abort();
+      callbacks.onTimeout(stats, context, null);
+    }, (config && config.timeout) || 20000);
+    this.timer = timer;
+    fetch(context.url, { referrerPolicy: 'no-referrer', credentials: 'omit', signal: controller.signal, headers })
+      .then(res => {
+        if (settled || stats.aborted) return null;
+        stats.loading.first = Math.max(performance.now(), stats.loading.start);
+        if (!res.ok) {
+          if (settle()) callbacks.onError({ code: res.status, text: res.statusText }, context, res, stats);
+          return null;
+        }
+        return (context.responseType === 'arraybuffer' ? res.arrayBuffer() : res.text()).then(data => {
+          if (!settle()) return;
+          stats.loading.end = Math.max(performance.now(), stats.loading.first);
+          stats.loaded = stats.total = typeof data === 'string' ? data.length : data.byteLength;
+          callbacks.onSuccess({ url: res.url, data, code: res.status }, stats, context, res);
+        });
+      })
+      .catch(err => {
+        if (settle()) callbacks.onError({ code: 0, text: err.message }, context, null, stats);
+      });
+  }
+  abort() {
+    this.stats.aborted = true;
+    clearTimeout(this.timer);
+    if (this.controller) this.controller.abort();
+  }
+  destroy() { this.abort(); }
+}
+
+/**
  * Dynamically loads an external media player JavaScript SDK by name.
- * @param {'hls'|'mpegts'|'twitch'|'vimeo'} name - Player library key.
+ * @param {'hls'|'dash'|'mpegts'|'twitch'|'vimeo'} name - Player library key.
  * @returns {Promise<Event>} Resolves when script is loaded.
  */
 function loadMediaScript(name) {
@@ -60,7 +119,8 @@ class BaseMediaSource {
    * @param {function(string): void} opts.onError - Callback invoked on player errors.
    */
   constructor(opts) {
-    this.opts = opts;           // { container, link, start, volume, muted, onDuration, onError }
+    this.opts = opts;           // { container, link, start, volume, muted, captions, onDuration, onError }
+    this.captions = opts.captions !== false;
     this.wantPaused = false;
     this.live = false;
     this.ready = false;
@@ -71,6 +131,12 @@ class BaseMediaSource {
   rate() { return 1; }
   /** Checks if media is a live stream. @returns {boolean} */
   isLive() { return this.live; }
+  /**
+   * Shows or hides the video's own captions, where the player has any (English when there is a
+   * choice). Players without captions ignore it.
+   * @param {boolean} on
+   */
+  setCaptions(on) { this.captions = !!on; }
   /**
    * Reports discovered media duration to host/server.
    * @param {number} seconds - Media duration in seconds.
@@ -84,19 +150,20 @@ class BaseMediaSource {
 }
 
 /**
- * Player adapter for direct HTML5 video/audio files (.mp4, .webm, etc.), HLS streams (.m3u8)
- * and MPEG-TS streams (VRCDN's .live.ts).
+ * Player adapter for direct HTML5 video/audio files (.mp4, .webm, etc.), HLS streams (.m3u8),
+ * DASH streams (.mpd) and MPEG-TS streams (VRCDN's .live.ts).
  * @class VideoElementSource
  * @extends {BaseMediaSource}
  */
 class VideoElementSource extends BaseMediaSource {
   /**
    * @param {Object} opts - Source configuration options.
-   * @param {Object} media - What MediaSources.detect found: type 'file', 'hls' or 'mpegts'.
+   * @param {Object} media - What MediaSources.detect found: type 'file', 'hls', 'dash' or 'mpegts'.
    */
   constructor(opts, media) {
     super(opts);
-    const hls = media.type === 'hls';
+    // A Tubi or NASA+ page: its HLS stream comes from the server first (see loadStream).
+    const hls = media.type === 'hls' || !!media.stream;
     // A live MPEG-TS stream has no length or position to seek to, as with a live .m3u8.
     if (media.type === 'mpegts' && media.live) this.live = true;
     const el = this.el = document.createElement('video');
@@ -121,32 +188,124 @@ class VideoElementSource extends BaseMediaSource {
     el.addEventListener('durationchange', () => { this.reportDuration(el.duration); this.applyPendingSeek(); });
     el.addEventListener('progress', () => this.applyPendingSeek());
     el.addEventListener('error', () => opts.onError("Couldn't play this video. The link may be wrong, or the site may not allow it here."));
+    // Caption tracks can turn up at any point while a stream loads.
+    if (el.textTracks && el.textTracks.addEventListener) el.textTracks.addEventListener('addtrack', () => this.applyCaptions());
     this.pendingSeek = opts.start > 0 ? opts.start : null; // a seek waiting until the file can go there
 
+    if (media.stream) {
+      this.loadStream(opts, el);
+      return;
+    }
+    this.load(opts, media, el, opts.link);
+  }
+
+  /** Asks the server for a Tubi or NASA+ page's stream, then plays it as an HLS stream. */
+  loadStream(opts, el) {
+    fetch(`/api/stream?link=${encodeURIComponent(opts.link)}`)
+      .then(res => res.json().catch(() => ({})).then(body => {
+        if (!res.ok || !body.url) throw new Error(body.error || "Couldn't find this video's stream.");
+        return body;
+      }))
+      .then(body => {
+        if (this.destroyed) return;
+        if (body.live) this.live = true;
+        this.load(opts, { type: 'hls', noReferrer: !!body.noReferrer }, el, body.url);
+      })
+      .catch(err => { if (!this.destroyed) opts.onError(err.message); });
+  }
+
+  /** Starts loading `url` into the video element, as the media's type needs. */
+  load(opts, media, el, url) {
+    const hls = media.type === 'hls';
     if (media.type === 'mpegts') {
       // Browsers can't play MPEG-TS themselves; mpegts.js feeds it to the video element.
       loadMediaScript('mpegts').then(() => {
         if (this.destroyed) return;
         if (!window.mpegts || !mpegts.isSupported()) { opts.onError("This browser can't play this stream."); return; }
-        const m = this.mpegts = mpegts.createPlayer({ type: 'mpegts', isLive: !!media.live, url: media.url || opts.link },
+        const m = this.mpegts = mpegts.createPlayer({ type: 'mpegts', isLive: !!media.live, url: media.url || url },
           { liveBufferLatencyChasing: !!media.live, lazyLoad: !media.live });
         m.on(mpegts.Events.ERROR, () => opts.onError("Couldn't play this stream. It may be offline, or the site may not allow it here."));
         m.attachMediaElement(el);
         m.load();
       }).catch(err => opts.onError(err.message));
-    } else if (!hls || el.canPlayType('application/vnd.apple.mpegurl')) {
-      el.src = opts.link;
+    } else if (media.type === 'dash') {
+      loadMediaScript('dash').then(() => {
+        if (this.destroyed) return;
+        if (!window.dashjs || !dashjs.supportsMediaSource()) { opts.onError("This browser can't play this stream."); return; }
+        const d = this.dash = dashjs.MediaPlayer().create();
+        d.updateSettings({ debug: { logLevel: dashjs.Debug.LOG_LEVEL_WARNING } });
+        d.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => { if (d.isDynamic()) this.live = true; this.applyCaptions(); });
+        d.on(dashjs.MediaPlayer.events.TEXT_TRACKS_ADDED, () => this.applyCaptions());
+        d.on(dashjs.MediaPlayer.events.ERROR, e => {
+          if (this.dashFailed) return; // dash.js reports one failure several times
+          this.dashFailed = true;
+          // A protected (DRM) stream needs a licence this player doesn't have.
+          const code = e && e.error && e.error.code;
+          const drm = code >= 100 && code < 120 || /key|licen[cs]e|protection|drm/i.test(String(e && e.error && e.error.message || ''));
+          opts.onError(drm ? "This stream is protected (DRM), so it can't play here."
+            : "Couldn't play this stream. It may be offline, or the site may not allow it here.");
+        });
+        d.initialize(el, url, true);
+      }).catch(err => opts.onError(err.message));
+    } else if (!hls) {
+      el.src = url;
     } else {
+      // hls.js wherever it runs: some browsers say they "maybe" play HLS themselves and then can't
+      // (streams with separate audio, like Tubi's). The browser's own player is the fallback (Safari, iOS).
       loadMediaScript('hls').then(() => {
         if (this.destroyed) return;
-        if (!window.Hls || !Hls.isSupported()) { el.src = opts.link; return; }
-        const h = this.hls = new Hls({ liveDurationInfinity: true });
+        if (!window.Hls || !Hls.isSupported()) { el.src = url; return; }
+        const h = this.hls = new Hls(media.noReferrer ? { liveDurationInfinity: true, loader: NoReferrerLoader } : { liveDurationInfinity: true });
         h.on(Hls.Events.LEVEL_LOADED, (e, data) => { if (data.details && data.details.live) this.live = true; });
+        h.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, () => this.applyCaptions());
         h.on(Hls.Events.ERROR, (e, data) => { if (data.fatal) opts.onError("Couldn't play this stream. It may be offline, or the site may not allow it here."); });
-        h.loadSource(opts.link);
+        h.loadSource(url);
         h.attachMedia(el);
-      }).catch(err => opts.onError(err.message));
+      }).catch(err => {
+        if (this.destroyed) return;
+        if (el.canPlayType('application/vnd.apple.mpegurl')) el.src = url;
+        else opts.onError(err.message);
+      });
     }
+  }
+
+  setCaptions(on) {
+    super.setCaptions(on);
+    this.applyCaptions();
+  }
+
+  /**
+   * Shows the stream's captions (English when there is a choice) or hides them all, through
+   * hls.js or dash.js when they're playing it, and the video element's own text tracks (captions
+   * inside the video, as many HLS streams have).
+   */
+  applyCaptions() {
+    if (this.destroyed) return;
+    const on = this.captions;
+    const english = list => list.findIndex(t => /^en/i.test(String((t && (t.lang || t.language)) || '')));
+    try {
+      if (this.hls && this.hls.subtitleTracks) {
+        const list = this.hls.subtitleTracks;
+        this.hls.subtitleDisplay = on;
+        if (list.length) this.hls.subtitleTrack = on ? Math.max(0, english(list)) : -1;
+      }
+      if (this.dash) {
+        const list = this.dash.getTracksFor('text') || [];
+        this.dash.enableText(on && list.length > 0);
+        if (on && list.length) this.dash.setTextTrack(Math.max(0, english(list)));
+      }
+    } catch (e) {
+      console.warn('[Media] Could not change captions:', e);
+    }
+    // hls.js (when the stream lists subtitles) and dash.js show their pick through the video's
+    // tracks themselves; captions inside the video are chosen here, as for a file's own tracks.
+    if (this.dash || (this.hls && this.hls.subtitleTracks && this.hls.subtitleTracks.length)) {
+      if (!on) Array.from(this.el.textTracks || []).forEach(t => { if (t.mode === 'showing') t.mode = 'hidden'; });
+      return;
+    }
+    const tracks = Array.from(this.el.textTracks || []).filter(t => t.kind === 'captions' || t.kind === 'subtitles');
+    const pick = on ? (tracks[Math.max(0, english(tracks))] || null) : null;
+    tracks.forEach(t => { t.mode = t === pick ? 'showing' : 'disabled'; });
   }
 
   /**
@@ -212,6 +371,7 @@ class VideoElementSource extends BaseMediaSource {
       document.removeEventListener('click', this.unmuteOnClick, true);
     }
     if (this.hls) this.hls.destroy();
+    if (this.dash) { try { this.dash.reset(); } catch (e) {} }
     if (this.mpegts) this.mpegts.destroy();
     this.el.pause();
     this.el.removeAttribute('src');
@@ -221,7 +381,83 @@ class VideoElementSource extends BaseMediaSource {
 }
 
 /**
+ * The hosts Twitch must be told about in its `parent` option: the player page's own, plus every
+ * page it's framed inside (the 2D fallback outside a world puts it in an iframe on another page).
+ * Twitch refuses to play if any ancestor frame's host is missing.
+ * @returns {string[]}
+ */
+function twitchParents() {
+  const hosts = [location.hostname];
+  const add = url => {
+    try { const h = new URL(url).hostname; if (h && !hosts.includes(h)) hosts.push(h); } catch (e) {}
+  };
+  if (location.ancestorOrigins) Array.from(location.ancestorOrigins).forEach(add);
+  else if (window.top !== window && document.referrer) add(document.referrer);
+  return hosts;
+}
+
+/**
+ * What Twitch's autoplay check can see, for the log when a stream won't start: Twitch refuses to
+ * autoplay an embed it doesn't think is visible ("style visibility").
+ * @returns {string}
+ */
+function twitchVisibility() {
+  const frame = twitchEmbed.div && twitchEmbed.div.querySelector('iframe');
+  const parts = [`page ${document.visibilityState}`, `focus ${document.hasFocus()}`, `dpr ${window.devicePixelRatio}`];
+  const stage = document.getElementById('stage');
+  if (stage) parts.push(`stage transform ${getComputedStyle(stage).transform}`);
+  if (frame) {
+    const r = frame.getBoundingClientRect();
+    parts.push(`embed ${Math.round(r.width)}x${Math.round(r.height)} at ${Math.round(r.left)},${Math.round(r.top)}`);
+    for (let el = frame; el && el !== document.documentElement; el = el.parentElement) {
+      const s = getComputedStyle(el);
+      if (s.display === 'none' || s.visibility !== 'visible' || Number(s.opacity) < 1) {
+        parts.push(`hidden by ${el.id || el.tagName} (display ${s.display}, visibility ${s.visibility}, opacity ${s.opacity})`);
+      }
+    }
+  }
+  return parts.join(', ');
+}
+
+/** Logs whether the browser itself counts the embed as visible (IntersectionObserver v2). */
+function logTwitchSeen() {
+  const frame = twitchEmbed.div && twitchEmbed.div.querySelector('iframe');
+  if (!frame || typeof IntersectionObserver !== 'function') return;
+  try {
+    const io = new IntersectionObserver(entries => {
+      const e = entries[entries.length - 1];
+      console.log(`[Twitch] the browser says the embed is ${e.isVisible === undefined ? 'of unknown visibility' : e.isVisible ? 'visible' : 'not visible'} (${Math.round(e.intersectionRatio * 100)}% in view)`);
+      io.disconnect();
+    }, { trackVisibility: true, delay: 100 });
+    io.observe(frame);
+  } catch (e) {
+    console.log('[Twitch] could not ask the browser about visibility:', e.message);
+  }
+}
+
+/** Twitch's `time` parameter for a VOD start offset, e.g. 1h2m3s. */
+function twitchTime(seconds) {
+  const s = Math.max(0, Math.floor(seconds || 0));
+  return `${Math.floor(s / 3600)}h${Math.floor((s % 3600) / 60)}m${s % 60}s`;
+}
+
+/**
+ * The one Twitch embed for the life of the page. Twitch.Player's constructor adds a window
+ * 'message' listener that its destroy() never removes, so every `new Twitch.Player` would leak
+ * one. It's built once, kept in the page (hidden while something else plays) and re-pointed with
+ * setChannel/setVideo, or by reloading its iframe. `owner` is the TwitchSource using it now and
+ * `key` its channel or video; `loaded` is what the embed was last pointed at, which differs from
+ * `key` until a re-point waiting for the embed to be ready has happened.
+ */
+const twitchEmbed = { player: null, div: null, ready: false, owner: null, key: '', loaded: '' };
+
+/**
  * Player adapter for live Twitch channels and recorded Twitch VODs.
+ *
+ * After pause() the embed sits in "Idle", and neither play(), seek() nor setVideo() brings it
+ * back; reloading its iframe with autoplay=true does. So whenever playback is asked for, it gets a
+ * moment to start, and if it hasn't the iframe is reloaded. A simulated click on the screen is the
+ * last resort.
  * @class TwitchSource
  * @extends {BaseMediaSource}
  */
@@ -232,85 +468,283 @@ class TwitchSource extends BaseMediaSource {
    */
   constructor(opts, media) {
     super(opts);
+    this.media = media;
     this.live = !!media.channel;
+    this.channel = media.channel || '';
+    this.video = media.video ? 'v' + String(media.video).replace(/^v/, '') : '';
+    this.key = this.live ? 'c:' + this.channel : 'v:' + this.video;
     this.muted = !!opts.muted;
-    this.div = document.createElement('div');
-    this.div.id = 'twitch-' + Date.now();
-    Object.assign(this.div.style, { width: '100%', height: '100%' });
-    opts.container.appendChild(this.div);
-    this.pendingSeek = opts.start;
+    this.volume = opts.volume;
+    this.playing = false;
+    this.pendingSeek = this.live ? 0 : Math.max(0, opts.start || 0);
+    this.setPos(this.pendingSeek);
     loadMediaScript('twitch').then(() => {
       if (this.destroyed) return;
+      if (!window.Twitch || !Twitch.Player) throw new Error('Could not load the Twitch player.');
+      this.attach();
+    }).catch(err => { if (!this.destroyed) opts.onError(err.message); });
+  }
+
+  /** True while this source is the one using the shared embed. */
+  mine() { return !this.destroyed && twitchEmbed.owner === this; }
+  get p() { return twitchEmbed.player; }
+
+  /** Builds the shared embed, or points it at this source's channel or video. */
+  attach() {
+    const e = twitchEmbed;
+    e.owner = this;
+    if (!e.div) {
+      e.div = document.createElement('div');
+      e.div.id = 'twitch-embed';
+      Object.assign(e.div.style, { width: '100%', height: '100%' });
+    }
+    // Moving an iframe reloads it, so it's only moved if the container has changed.
+    if (e.div.parentNode !== this.opts.container) this.opts.container.appendChild(e.div);
+    e.div.style.display = '';
+    if (!e.player) {
       const o = {
-        width: '100%', height: '100%', autoplay: true, muted: !!opts.muted,
-        // Twitch only plays inside pages on the sites listed here, so this is the player page's own.
-        parent: [location.hostname]
+        width: '100%', height: '100%', autoplay: true, muted: this.muted, parent: twitchParents()
       };
-      if (media.channel) o.channel = media.channel; else o.video = media.video;
-      const p = this.p = new Twitch.Player(this.div.id, o);
-      p.addEventListener(Twitch.Player.READY, () => {
-        this.ready = true;
-        this.setVolume(opts.volume);
-        if (!this.live && this.pendingSeek > 0) p.seek(this.pendingSeek);
-        this.wantPaused ? p.pause() : p.play();
-        this.kick = setTimeout(() => this.ensurePlaying(0), 3000);
-      });
-      // isPaused() can say "playing" while Twitch is still waiting for a click, so these events
-      // are what count as playing.
-      p.addEventListener(Twitch.Player.PLAYING, () => {
-        this.playing = true;
-        if (!this.live) this.reportDuration(p.getDuration());
-      });
-      p.addEventListener(Twitch.Player.PAUSE, () => { this.playing = false; });
-      if (Twitch.Player.ENDED) p.addEventListener(Twitch.Player.ENDED, () => { this.playing = false; });
-      if (Twitch.Player.OFFLINE) p.addEventListener(Twitch.Player.OFFLINE, () => opts.onError(`${media.channel} isn't live on Twitch right now.`));
-    }).catch(err => opts.onError(err.message));
+      if (this.live) o.channel = this.channel; else o.video = this.video;
+      if (this.pendingSeek > 0) o.time = twitchTime(this.pendingSeek);
+      e.key = e.loaded = this.key;
+      e.player = new Twitch.Player(e.div.id, o);
+      this.listen(e.player);
+      this.ensurePlaying(6000); // a new embed takes a few seconds to load
+      return;
+    }
+    e.key = this.key;
+    // An embed still loading (another source's) is re-pointed in onReady instead.
+    if (!e.ready) {
+      if (!this.wantPaused) this.ensurePlaying(6000);
+      return;
+    }
+    if (e.loaded !== this.key) this.repoint();
+    else if (!this.live) {
+      // The same VOD again: start where this play asks (even 0), not where the embed was left.
+      this.seekOnPlay = true;
+      try { e.player.seek(this.pendingSeek); } catch (err) {}
+    }
+    this.ready = true;
+    this.applyAudio();
+    if (this.wantPaused) { try { e.player.pause(); } catch (err) {} return; }
+    try { e.player.play(); } catch (err) {}
+    this.ensurePlaying();
+  }
+
+  /** Points the embed at this source's channel or video, and notes that it was. */
+  repoint() {
+    const e = twitchEmbed;
+    try { this.live ? e.player.setChannel(this.channel) : e.player.setVideo(this.video); } catch (err) {
+      console.log('[Twitch] re-point failed', err);
+    }
+    e.loaded = this.key;
+  }
+
+  /** The embed's events, added once for the life of the page and passed to whichever source owns it. */
+  listen(p) {
+    const T = Twitch.Player;
+    const owner = () => twitchEmbed.owner && twitchEmbed.owner.mine() ? twitchEmbed.owner : null;
+    p.addEventListener(T.READY, () => {
+      twitchEmbed.ready = true;
+      const s = owner();
+      if (s) s.onReady();
+    });
+    // isPaused() can say "playing" while Twitch is still waiting for a click, so these events
+    // are what count as playing.
+    p.addEventListener(T.PLAYING, () => { const s = owner(); if (s) s.onPlaying(); });
+    p.addEventListener(T.PAUSE, () => { const s = owner(); if (s) s.setPlaying(false); });
+    if (T.ENDED) p.addEventListener(T.ENDED, () => { const s = owner(); if (s) { s.setPlaying(false); s.ended = true; } });
+    if (T.OFFLINE) p.addEventListener(T.OFFLINE, () => {
+      const s = owner();
+      if (s && s.live) { s.offline = true; s.opts.onError(`${s.channel} isn't live on Twitch right now.`); }
+    });
+    if (T.ONLINE) p.addEventListener(T.ONLINE, () => { const s = owner(); if (s) s.offline = false; });
+  }
+
+  onReady() {
+    // It may have been loading something else when this source took it over.
+    if (twitchEmbed.loaded !== this.key) this.repoint();
+    this.ready = true;
+    this.applyAudio();
+    if (this.wantPaused) { try { this.p.pause(); } catch (e) {} return; }
+    try { this.p.play(); } catch (e) {}
+  }
+
+  onPlaying() {
+    this.setPlaying(true);
+    this.ended = false;
+    this.offline = false;
+    if (!this.live) {
+      try { this.reportDuration(this.p.getDuration()); } catch (e) {}
+      // setVideo() takes only an id, so a start offset is a seek once the video is running.
+      if (this.pendingSeek > 0 || this.seekOnPlay) {
+        const t = this.pendingSeek;
+        this.pendingSeek = 0;
+        this.seekOnPlay = false;
+        try { if (Math.abs(this.p.getCurrentTime() - t) > 2) this.p.seek(t); } catch (e) {}
+        this.setPos(t);
+      }
+    }
+    if (this.wantPaused) { try { this.p.pause(); } catch (e) {} }
+  }
+
+  // getCurrentTime() reports ~0 for VODs in some embed builds even while playing, so the position
+  // is also counted here.
+  setPos(t) { this.posBase = Math.max(0, t || 0); this.posAt = performance.now(); }
+  setPlaying(on) {
+    if (on === this.playing) return;
+    if (!on) this.posBase = this.localTime();
+    this.posAt = performance.now();
+    this.playing = on;
+  }
+  localTime() { return this.posBase + (this.playing ? (performance.now() - this.posAt) / 1000 : 0); }
+
+  applyAudio() {
+    if (!this.p) return;
+    try {
+      this.p.setVolume(Math.max(0, Math.min(1, Number(this.volume) / 100)));
+      this.p.setMuted(this.muted);
+    } catch (e) {}
   }
 
   /**
-   * Ensures the Twitch stream starts playing and unmuted after browser user gesture policies.
-   * @param {number} tries - Number of retry attempts.
+   * Reloads the embed's iframe pointed at this source, playing from `startAt`. Unlike a new
+   * Twitch.Player it adds no listener, and it's the one thing that wakes an Idle embed.
    */
-  ensurePlaying(tries) {
-    clearTimeout(this.kick);
-    if (this.destroyed || this.wantPaused || !this.p || tries > 6) return;
-    const playing = this.playing && !this.p.isPaused();
-    if (playing) {
-      if (this.muted || !this.p.getMuted()) return; // playing as it should
-      // It started muted: unmute it, then check it didn't pause because of that.
-      this.p.setMuted(false);
-    } else if (tries === 0) {
-      this.p.play();
+  reloadIframe(startAt) {
+    const frame = twitchEmbed.div && twitchEmbed.div.querySelector('iframe');
+    if (!frame || !frame.src) return false;
+    let url;
+    try { url = new URL(frame.src); } catch (e) { return false; }
+    if (this.live) {
+      url.searchParams.set('channel', this.channel);
+      url.searchParams.delete('video');
+      url.searchParams.delete('time');
     } else {
-      console.log('[Twitch] not playing yet, clicking the screen');
-      this.opts.requestClick();
+      url.searchParams.set('video', this.video);
+      url.searchParams.delete('channel');
+      if (startAt > 0) url.searchParams.set('time', twitchTime(startAt)); else url.searchParams.delete('time');
+      this.pendingSeek = startAt;
     }
-    this.kick = setTimeout(() => this.ensurePlaying(tries + 1), 2500);
+    url.searchParams.set('autoplay', 'true');
+    url.searchParams.set('muted', String(this.muted));
+    url.searchParams.delete('parent');
+    twitchParents().forEach(h => url.searchParams.append('parent', h));
+    this.setPlaying(false);
+    frame.src = url.toString();
+    twitchEmbed.loaded = this.key;
+    return true;
+  }
+
+  /**
+   * Makes sure the stream starts, and with sound unless muted is wanted. Each step waits, then
+   * checks: play() is given ~1.5s (a newly built embed longer), then the iframe is reloaded; if
+   * that didn't work either, the screen is clicked (twice at most).
+   */
+  ensurePlaying(ms = 1500) {
+    if (this.kick) return; // already watching
+    this.step = 0;
+    this.check(ms);
+  }
+  check(ms) {
+    this.kick = setTimeout(() => {
+      this.kick = null;
+      if (!this.mine() || this.wantPaused || !this.p || this.offline || this.ended) return;
+      const step = this.step++;
+      if (step > 8) return;
+      let paused = true, muted = false;
+      try { paused = this.p.isPaused(); muted = this.p.getMuted(); } catch (e) {}
+      if (this.playing && !paused) {
+        this.pendingSeek = 0;
+        if (this.muted || !muted) return; // playing as it should
+        // It started muted (the browser wouldn't allow sound): unmute it, then check that didn't
+        // stop it.
+        console.log('[Twitch] playing muted, unmuting');
+        try { this.p.setMuted(false); } catch (e) {}
+        this.unmuted = (this.unmuted || 0) + 1;
+        if (this.unmuted <= 3) this.check(2500);
+        return;
+      }
+      if (!this.reloaded) {
+        this.reloaded = true;
+        console.log('[Twitch] not playing yet, reloading the embed. ' + twitchVisibility());
+        logTwitchSeen();
+        // A VOD can take a while to start after a reload (an ad first), so it's given time
+        // before the screen is clicked.
+        if (this.reloadIframe(this.live ? 0 : (this.pendingSeek || this.time()))) { this.check(10000); return; }
+      }
+      if ((this.clicks || 0) < 2) {
+        this.clicks = (this.clicks || 0) + 1;
+        console.log('[Twitch] still not playing, clicking the screen');
+        try { this.p.play(); } catch (e) {}
+        this.opts.requestClick();
+        this.check(3000);
+      }
+    }, ms);
   }
 
   play() {
     this.wantPaused = false;
-    if (this.ready) { this.p.play(); this.kick = setTimeout(() => this.ensurePlaying(1), 2500); }
+    if (!this.mine() || !this.p) return;
+    if (this.playing) return;
+    try { this.p.play(); } catch (e) {}
+    // A new play after a pause gets its own reload, since the pause left the embed Idle.
+    this.reloaded = false;
+    this.ensurePlaying();
   }
-  pause() { this.wantPaused = true; clearTimeout(this.kick); if (this.ready) this.p.pause(); }
+  pause() {
+    this.wantPaused = true;
+    clearTimeout(this.kick); this.kick = null;
+    if (this.mine() && this.p) { try { this.p.pause(); } catch (e) {} }
+  }
   seek(t) {
     if (this.live) return;
-    if (!this.ready) { this.pendingSeek = t; return; }
-    this.p.seek(Math.max(0, t));
+    t = Math.max(0, t);
+    this.setPos(t);
+    // Kept until the video is seen playing, so an iframe reload (or the PLAYING after an Idle
+    // embed wakes) goes to the asked-for place rather than where the embed last was.
+    this.pendingSeek = t;
+    if (!this.ready || !this.mine()) return;
+    try { this.p.seek(t); } catch (e) {}
+    // A seek on an Idle embed does nothing either, so a seek while playing is checked too.
+    if (!this.wantPaused) this.ensurePlaying();
   }
-  time() { return this.ready ? this.p.getCurrentTime() : (this.pendingSeek || 0); }
+  time() {
+    if (this.pendingSeek > 0 && !this.playing) return this.pendingSeek;
+    let real = 0;
+    try { if (this.ready && this.mine()) real = this.p.getCurrentTime() || 0; } catch (e) {}
+    if (real > 1) { this.posBase = real; this.posAt = performance.now(); return real; }
+    return this.localTime();
+  }
   state() {
-    if (!this.ready) return MEDIA_STATE.UNSTARTED;
-    if (this.p.getEnded && this.p.getEnded()) return MEDIA_STATE.ENDED;
-    return this.p.isPaused() ? MEDIA_STATE.PAUSED : MEDIA_STATE.PLAYING;
+    if (!this.ready || !this.mine()) return MEDIA_STATE.UNSTARTED;
+    try {
+      if (this.ended || (this.p.getEnded && this.p.getEnded())) return MEDIA_STATE.ENDED;
+      if (this.playing) return MEDIA_STATE.PLAYING;
+      // Asked to play but not started yet (or being revived): buffering, so the sync code
+      // doesn't keep calling play().
+      if (!this.wantPaused && this.kick) return MEDIA_STATE.BUFFERING;
+      return this.p.isPaused() ? MEDIA_STATE.PAUSED : MEDIA_STATE.PLAYING;
+    } catch (e) { return MEDIA_STATE.UNSTARTED; }
   }
-  setVolume(v) { this.volume = v; if (this.ready) this.p.setVolume(Math.max(0, Math.min(1, Number(v) / 100))); }
-  setMuted(m) { this.muted = !!m; if (this.ready) this.p.setMuted(!!m); }
+  setVolume(v) {
+    this.volume = v;
+    if (this.mine() && this.p) { try { this.p.setVolume(Math.max(0, Math.min(1, Number(v) / 100))); } catch (e) {} }
+  }
+  setMuted(m) {
+    this.muted = !!m;
+    if (this.mine() && this.p) { try { this.p.setMuted(!!m); } catch (e) {} }
+  }
   destroy() {
+    const owned = this.mine();
     this.destroyed = true;
-    clearTimeout(this.kick);
-    try { if (this.p) this.p.pause(); } catch (e) {}
-    this.div.remove();
+    clearTimeout(this.kick); this.kick = null;
+    if (!owned) return;
+    // The embed is kept for the next Twitch link (see twitchEmbed); it's only silenced and hidden.
+    twitchEmbed.owner = null;
+    try { this.p.pause(); } catch (e) {}
+    if (twitchEmbed.div) twitchEmbed.div.style.display = 'none';
   }
 }
 
@@ -335,7 +769,7 @@ class TwitchClipSource extends BaseMediaSource {
   load() {
     if (this.frame) this.frame.remove();
     const f = this.frame = document.createElement('iframe');
-    f.src = `https://clips.twitch.tv/embed?clip=${encodeURIComponent(this.clip)}&parent=${encodeURIComponent(location.hostname)}&autoplay=true&muted=${this.muted}`;
+    f.src = `https://clips.twitch.tv/embed?clip=${encodeURIComponent(this.clip)}&${twitchParents().map(h => `parent=${encodeURIComponent(h)}`).join('&')}&autoplay=true&muted=${this.muted}`;
     f.allow = 'autoplay; fullscreen';
     Object.assign(f.style, { width: '100%', height: '100%', border: '0' });
     this.opts.container.appendChild(f);
@@ -467,6 +901,7 @@ class VimeoSource extends BaseMediaSource {
         if (this.t > 0) p.setCurrentTime(this.t).catch(() => {});
         (this.wantPaused ? p.pause() : p.play()).catch(() => {});
         p.getDuration().then(d => this.reportDuration(d)).catch(() => {});
+        this.applyCaptions();
       });
       p.on('timeupdate', d => { this.t = d.seconds; this.tAt = performance.now(); });
       p.on('playing', () => { this.playing = true; this.tAt = performance.now(); });
@@ -497,6 +932,18 @@ class VimeoSource extends BaseMediaSource {
   rate() { return this.r; }
   setVolume(v) { if (this.ready) this.p.setVolume(Math.max(0, Math.min(1, Number(v) / 100))).catch(() => {}); }
   setMuted(m) { if (this.ready) this.p.setMuted(!!m).catch(() => {}); }
+  setCaptions(on) { super.setCaptions(on); this.applyCaptions(); }
+  /** Vimeo's own captions: an English track when there is one, else the first; or none. */
+  applyCaptions() {
+    if (!this.ready || this.destroyed) return;
+    const p = this.p;
+    if (!this.captions) { p.disableTextTrack().catch(() => {}); return; }
+    p.getTextTracks().then(tracks => {
+      if (this.destroyed || !this.captions || !tracks || !tracks.length) return;
+      const t = tracks.find(x => /^en/i.test(x.language || '')) || tracks[0];
+      return p.enableTextTrack(t.language, t.kind);
+    }).catch(() => {});
+  }
   destroy() {
     this.destroyed = true;
     if (this.p) this.p.destroy().catch(() => {});
@@ -557,6 +1004,7 @@ class MediaSwitch {
     this.source = null; // the player for a non-YouTube link, while one is playing
     this.volume = 100;
     this.muted = false;
+    this.captions = true;
     this.container = document.getElementById('media-other');
     if (!this.container) {
       this.container = document.createElement('div');
@@ -589,6 +1037,7 @@ class MediaSwitch {
     }
     const opts = {
       container: this.container, link, start: Number(start) || 0, volume: this.volume, muted: this.muted,
+      captions: this.captions,
       onDuration: seconds => this.opts.onDuration(link, seconds),
       onError: message => this.opts.onError(message),
       requestClick: () => { if (this.opts.requestClick) this.opts.requestClick(); }
@@ -637,7 +1086,9 @@ class MediaSwitch {
   }
   mute() { this.muted = true; this.yt.mute(); if (this.source) this.source.setMuted(true); }
   unMute() { this.muted = false; this.yt.unMute(); if (this.source) this.source.setMuted(false); }
-  // Captions are YouTube's own, so these do nothing while another source is playing.
+  /** Captions on or off for the other players (YouTube's are set through its captions module). */
+  setCaptions(on) { this.captions = !!on; if (this.source) this.source.setCaptions(this.captions); }
+  // YouTube's captions module, so these do nothing while another source is playing.
   getVideoData() { return this.source ? { video_id: '' } : this.yt.getVideoData(); }
   loadModule(n) { if (!this.source) this.yt.loadModule(n); }
   unloadModule(n) { if (!this.source) this.yt.unloadModule(n); }

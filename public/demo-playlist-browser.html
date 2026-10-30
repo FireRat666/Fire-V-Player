@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html>
+  <head>
+  </head>
+  <body>
+    <script>
+      // A floor to stand on and a second screen, made with the BS SDK. The SDK and the scene may
+      // already be ready by the time this runs, so each is checked before waiting for its event.
+      // Older clients only have the Banter* constructors, which take the settings in order.
+      async function buildFloor() {
+        const modern = !!BS.Scene;
+        const color = new BS.Vector4(0.5, 0.5, 0, 1);
+        const center = new BS.Vector3(0, 0, 0), size = new BS.Vector3(1, 1, 1);
+        const floor = await new BS.GameObject({ name: "Floor", localScale: new BS.Vector3(30, 0.1, 30) }).Async();
+        try {
+          if (modern && BS.Box) await floor.AddComponent(new BS.Box({ width: 1, height: 1, depth: 1 }));
+          else if (BS.BanterGeometry && BS.GeometryType) await floor.AddComponent(new BS.BanterGeometry(BS.GeometryType.BoxGeometry, null, 1, 1, 1));
+          if (modern && BS.Material) await floor.AddComponent(new BS.Material({ shaderName: "Unlit/Diffuse", color }));
+          else if (BS.BanterMaterial) await floor.AddComponent(new BS.BanterMaterial("Unlit/Diffuse", "", color, 0, true));
+          await floor.AddComponent(modern ? new BS.BoxCollider({ isTrigger: false, center, size }) : new BS.BoxCollider(false, center, size));
+        } catch (e) {
+          try { floor.Destroy(); } catch (err) {}
+          throw e;
+        }
+      }
+      // A second screen: a plane with a BS Material, named "Fire-V-Player...", which the player finds
+      // and shows its own screen on (its browser's texture, no camera). Any object with a BS
+      // Material and that name works, in any shape; Texture "Fire-V-Player" marks one too.
+      // Its Texture starts as the player's loading picture, from the snippet's own server, so it
+      // shows that instead of plain white until the player puts its screen there.
+      // It's 2 x 1.125 m, to the right of the main screen and turned toward the middle of the room.
+      // A plane faces -Z, so turning it 36.87 degrees points it at the origin from (6, 1.5, 8).
+      async function buildSecondScreen() {
+        if (!BS.Scene || !BS.Plane || !BS.Material) return; // older clients: no second screen
+        const snippet = document.querySelector('bs-snippet[name="fire-v-player"]');
+        let loading = "Fire-V-Player";
+        try { loading = new URL("/assets/SecondScreenLoading.png", snippet.getAttribute("script")).href; } catch (e) {}
+        const screen = await new BS.GameObject({
+          name: "Fire-V-Player Second Screen",
+          localPosition: new BS.Vector3(6, 1.5, 8),
+          localEulerAngles: new BS.Vector3(0, 36.87, 0)
+        }).Async();
+        try {
+          await screen.AddComponent(new BS.Plane({ width: 2, height: 1.125 }));
+          await screen.AddComponent(new BS.Material({ shaderName: "Unlit/Diffuse", texture: loading, color: new BS.Vector4(1, 1, 1, 1) }));
+        } catch (e) {
+          try { screen.Destroy(); } catch (err) {}
+          throw e;
+        }
+      }
+      // Each part is made once; a failed attempt can be tried again the next time the scene says
+      // it's ready.
+      function once(name, build) {
+        let made = false, making = null;
+        return () => {
+          if (made) return;
+          if (!making) {
+            making = build()
+              .then(() => { made = true; })
+              .catch(e => console.warn(`[Demo] Could not make the ${name}:`, e))
+              .finally(() => { making = null; });
+          }
+        };
+      }
+      const makeFloor = once("floor", buildFloor), makeSecondScreen = once("second screen", buildSecondScreen);
+      function buildScene() {
+        makeFloor();
+        makeSecondScreen();
+      }
+      function whenSceneReady() {
+        const scene = (BS.Scene || BS.BanterScene).GetInstance();
+        if (scene.unityLoaded) buildScene();
+        scene.On("unity-loaded", buildScene);
+      }
+      if (window.BS) whenSceneReady();
+      else window.addEventListener("bs-loaded", whenSceneReady);
+    </script>
+
+    <bs-snippet name="fire-v-player" title="Fire-V-Player" single="true"
+      description="Synced YouTube player with an in-world panel. Tick karaoke for a singer queue instead of a shared playlist."
+      script="https://vidya.firer.at/snippet.js"
+      room=""
+      karaoke="false"
+      playlist="PLW6eWcnjkgkqZi69W2upHWHnpsdeDAdbq"
+      playlists="PLZWiw-xxQ4SPDmADhvme7-pU2bx3s7nKX,https://vidya.firer.at/assets/example-playlist.txt,https://www.loc.gov/free-to-use/public-domain-films-from-the-national-film-registry/"
+      youtube=""
+      volume="10"
+      mute="false"
+      captions="true"
+      untrusted-links="true"
+      hand-controls="true"
+      position="0 1.5 2"
+      rotation="0 0 0"
+      scale="2"
+      resolution="1600"
+      space-screen="auto"
+      spatial="true"
+      spatial-min-distance="5"
+      spatial-max-distance="40"
+      controls-follow-screen="false"
+      button-position="0 0.83 2"
+      button-rotation=""
+      button-scale="1"
+      reload-button="true"
+      play-pause-button="true"
+      playlist-ui="auto"
+      playlist-panel-position="-1.8 1.5 1.85"
+      playlist-panel-rotation="0 -20 0"
+      playlist-panel-scale="1"
+      singer-button-position="0 0 0"
+      singer-button-rotation="0 0 0">
+      <bs-gizmo type="position" attribute="position"/>
+      <bs-gizmo type="plane" attribute="position" size="2 1.125" rotation="0 180 0"/>
+      <bs-gizmo type="position" attribute="playlist-panel-position"/>
+      <bs-gizmo type="plane" attribute="playlist-panel-position" size="1.4 1.2" rotation="0 160 0"/>
+      <bs-gizmo type="position" attribute="button-position"/>
+      <bs-gizmo type="plane" attribute="button-position" size="1.6 0.35" rotation="0 180 0"/>
+    </bs-snippet>
+  </body> 
+</html> 

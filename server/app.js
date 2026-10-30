@@ -9,9 +9,11 @@ const { WebSocketServer } = require('ws');
 const express = require('express');
 const http = require('http');
 const path = require('path');
-const Youtube = require('./youtube/scraper.js');
-const youtube = new Youtube();
+const { searchVideos, videoById } = require('./youtube/search.js');
+const archive = require('./archive.js');
+const streaming = require('./streaming.js');
 const media = require('./media.js');
+const MediaSources = require('../public/media-sources.js');
 const Commands = require('../public/commands.js');
 const playlistHandler = require('./handlers/playlistHandler.js');
 const karaokeHandler = require('./handlers/karaokeHandler.js');
@@ -105,6 +107,7 @@ class App {
         singers: player.singers,
         currentTrack: player.currentTrack,
         lastStartTime: player.lastStartTime,
+        currentTime: player.currentTime || 0, // where a paused track is held
         locked: player.locked,
         canTakeOver: player.canTakeOver,
         canVote: player.canVote,
@@ -112,7 +115,8 @@ class App {
         autoAdvance: player.autoAdvance,
         isKaraoke: player.isKaraoke,
         savedPlaylist: savedPlaylist,
-        paused: player.paused
+        paused: player.paused,
+        lists: player.lists || []
       };
 
       // Use Sequelize's "upsert" method to insert or update the record.
@@ -193,6 +197,17 @@ class App {
     // page's wrong-password limit.
     this.app.set('trust proxy', 1);
     this.blacklist.setupRoutes(this.app);
+    // The stream to play for a Tubi or NASA+ link, asked for by the player page when it plays one
+    // (Tubi's stream links expire, so the playlist keeps the page's link). Only those sites' pages
+    // are looked up, from the id in the link.
+    this.app.get('/api/stream', async (req, res) => {
+      const link = String(req.query.link || '').slice(0, 500);
+      try {
+        res.set('Cache-Control', 'no-store').json(await streaming.streamFor(link));
+      } catch (e) {
+        res.status(422).json({ error: e.message || "Couldn't find that video's stream." });
+      }
+    });
     this.app.use(express.static(path.join(__dirname, '..', 'public')));
   }
   /**
@@ -299,8 +314,9 @@ class App {
       }
     }
 
-    // If the user had votes, remove them
-    if (ws.u) {
+    // If the user had votes, remove them, once their last connection has gone: a screen reload or
+    // a closed panel leaves them in the room.
+    if (ws.u && !videoPlayer.sockets.some(s => s.u && s.u.id === ws.u.id)) {
       const voteCount = videoPlayer.votes.length;
       videoPlayer.votes = videoPlayer.votes.filter(vote => vote.u.id !== ws.u.id);
       // If the disconnected user had active votes, we need to update the clients.
@@ -331,10 +347,11 @@ class App {
    * @param {Object} socket - Target WebSocket connection.
    * @param {string} path - Command action path (e.g. from Commands constants).
    * @param {any} [data] - Command payload data.
+   * @param {Object} [extra] - More top-level fields for the message (e.g. a search's `searchId`).
    * @returns {void}
    */
-  send(socket, path, data) {
-    const payload = JSON.stringify({ path, data });
+  send(socket, path, data, extra) {
+    const payload = JSON.stringify(extra ? { path, data, ...extra } : { path, data });
     if (process.env.NODE_ENV !== 'production') {
       console.log(`[SEND] user: ${socket.u ? socket.u.name : 'N/A'}, instance: ${socket.i || 'N/A'}, type: ${socket.type || 'N/A'}, path: ${path}, payload_size: ${payload.length}`);
     }
@@ -431,6 +448,15 @@ class App {
         break;
       case Commands.FROM_PLAYLIST:
         await playlistHandler.fromPlaylist(this, ws, msg.data);
+        break;
+      case Commands.LIST_PREVIEW:
+        await playlistHandler.previewList(this, ws, msg.data);
+        break;
+      case Commands.SAVE_LIST:
+        await playlistHandler.saveList(this, ws, msg.data);
+        break;
+      case Commands.REMOVE_LIST:
+        await playlistHandler.removeList(this, ws, msg.data);
         break;
       case Commands.CLEAR_PLAYLIST:
         await playlistHandler.clearPlaylist(this, ws, msg.skipUpdate);
@@ -733,75 +759,106 @@ class App {
     await this.savePlayerState(ws.i);
   }
   /**
-   * Searches for YouTube or external media items based on user search query or pasted link.
+   * Searches YouTube or the Internet Archive, or looks up a pasted media link.
    * Transmits `SEARCH_RESULTS` back to the requesting WebSocket client.
    *
-   * @param {string} term - Search query string or media URL.
+   * The SEARCH message's data is either a plain string (a YouTube search or a link) or
+   * `{ term: string, source: 'youtube' | 'archive' | 'tubi' | 'nasa', searchId?: string|number }`;
+   * 'archive' searches the Internet Archive's public-domain movies and TV, 'tubi' the titles in Tubi's
+   * categories and 'nasa' NASA+ (see server/streaming.js). A pasted link is looked up whichever source
+   * is picked. A `searchId` comes back on the SEARCH_RESULTS reply (and on the search's ERROR), so
+   * a client can tell which of its searches a reply answers. Every search gets one SEARCH_RESULTS.
+   *
+   * @param {string|{term: string, source?: string, searchId?: string|number}} data - Search text or link, optionally with a source and ID.
    * @param {Object} ws - Client WebSocket requesting the search.
    * @returns {Promise<void>}
    */
-  async search(term, ws) {
-    // Twitch, Vimeo and direct video/stream links become a single result, as a YouTube link does.
-    if (media.detect(term) && media.detect(term).type !== 'youtube') {
+  async search(data, ws) {
+    const isObject = data && typeof data === 'object';
+    const term = String((isObject ? data.term : data) || '').trim().slice(0, 500);
+    const source = isObject && ['archive', 'tubi', 'nasa'].includes(data.source) ? data.source : 'youtube';
+    const rawId = isObject ? data.searchId : undefined;
+    const tag = (typeof rawId === 'number' && Number.isFinite(rawId)) || (typeof rawId === 'string' && rawId.length <= 64)
+      ? { searchId: rawId } : undefined;
+    const results = videos => this.send(ws, Commands.SEARCH_RESULTS, videos, tag);
+    const fail = message => {
+      results([]);
+      this.send(ws, Commands.ERROR, { message }, tag);
+    };
+    if (!term) {
+      results([]);
+      return;
+    }
+    // Twitch, Vimeo, Internet Archive and direct video/stream links become results, as a YouTube
+    // link does. An Archive link lists each video in its item.
+    const detected = media.detect(term);
+    if (detected && detected.type !== 'youtube') {
       if (!media.allowedFor(ws, term)) {
-        this.send(ws, Commands.SEARCH_RESULTS, []);
-        this.send(ws, Commands.ERROR, { message: media.UNTRUSTED_MESSAGE });
+        fail(media.UNTRUSTED_MESSAGE);
         return;
       }
       try {
-        const video = await media.resolveMediaLink(term);
-        if (video) this.send(ws, Commands.SEARCH_RESULTS, [video]);
+        results(await media.resolveMediaLinks(term));
       } catch (error) {
-        this.send(ws, Commands.SEARCH_RESULTS, []);
-        this.send(ws, Commands.ERROR, { message: error.message });
+        fail(error.message);
       }
       return;
     }
-    const videoId = this.getYoutubeId(term);
+    // A bare 11-character word is a video ID only for YouTube; another source's search for it searches.
+    const videoId = source !== 'youtube' && !/^(https?:\/\/|www\.)/i.test(term) ? false : this.getYoutubeId(term);
 
     if (videoId) {
-      // It's a URL, fetch the single video details
+      // It's a URL, fetch the single video details. A failure still gets an (empty) results reply.
       try {
-        // Reconstruct a full, canonical URL to ensure fetch works and to standardize the input.
-        const fullUrl = `https://www.youtube.com/watch?v=${videoId}`;
-        const videoDetails = await youtube.getVideoByUrl(fullUrl);
-        if (videoDetails) {
-          // The client expects an array of videos.
-          this.send(ws, Commands.SEARCH_RESULTS, [videoDetails]);
-        }
+        const videoDetails = await videoById(videoId);
+        // The client expects an array of videos.
+        results(videoDetails ? [videoDetails] : []);
       } catch (error) {
         // The error message from the scraper is user-friendly enough to send to the client.
-        console.error(`Error fetching video by URL (${JSON.stringify(String(term))}):`, error.message);
-        this.send(ws, Commands.ERROR, { message: error.message });
+        console.error(`Error fetching video by URL (${JSON.stringify(term)}):`, error.message);
+        fail(error.message);
       }
-    } else {
-      // Check if it looks like a URL but didn't match getYoutubeId.
-      // If it starts with http://, https://, or www., we should return an error
-      // or empty results, rather than searching YouTube for the URL string.
-      const isUrl = /^(https?:\/\/|www\.)/i.test(term.trim());
-      if (isUrl) {
-        this.send(ws, Commands.SEARCH_RESULTS, []);
-        this.send(ws, Commands.ERROR, { message: "I can't play that link. Try YouTube, Twitch, Vimeo, or a direct video link (.mp4, .m3u8, VRCDN .live.ts)." });
-        return;
-      }
-
-      // It's a search term, perform a regular search
-      const started = Date.now();
-      try {
-        const results = await youtube.search(term, {
-          language: 'en-US',
-          searchType: 'video'
-        });
-        const videos = results.videos || [];
-        // JSON-encode the user's text so newlines in it can't start a fake log line.
-        console.log(`[SEARCH] ${JSON.stringify(String(term))}: ${videos.length} results in ${Date.now() - started}ms (socket type: ${ws.type || 'N/A'}).`);
-        this.send(ws, Commands.SEARCH_RESULTS, videos);
-      } catch (error) {
-        console.error(`Error searching YouTube for ${JSON.stringify(String(term))}:`, error.message);
-        this.send(ws, Commands.SEARCH_RESULTS, []);
-        this.send(ws, Commands.ERROR, { message: "YouTube search failed or returned no results." });
-      }
+      return;
     }
+    // Check if it looks like a URL but didn't match getYoutubeId.
+    // If it starts with http://, https://, or www., we should return an error
+    // or empty results, rather than searching YouTube for the URL string.
+    if (/^(https?:\/\/|www\.)/i.test(term)) {
+      fail("I can't play that link. Try YouTube, Twitch, Vimeo, Internet Archive, Library of Congress, or a direct video link (.mp4, .m3u8, .mpd, VRCDN .live.ts).");
+      return;
+    }
+
+    const started = Date.now();
+    if (source === 'tubi' || source === 'nasa') {
+      const name = source === 'tubi' ? 'Tubi' : 'NASA+';
+      try {
+        const videos = source === 'tubi' ? await streaming.searchTubi(term) : await streaming.searchNasa(term);
+        console.log(`[SEARCH] ${source} ${JSON.stringify(term)}: ${videos.length} results in ${Date.now() - started}ms (socket type: ${ws.type || 'N/A'}).`);
+        results(videos);
+      } catch (error) {
+        console.error(`Error searching ${name} for ${JSON.stringify(term)}:`, error.message);
+        fail(`${name} search failed. Try again in a moment.`);
+      }
+      return;
+    }
+    if (source === 'archive') {
+      try {
+        const videos = await archive.search(term);
+        // JSON-encode the user's text so newlines in it can't start a fake log line.
+        console.log(`[SEARCH] archive ${JSON.stringify(term)}: ${videos.length} results in ${Date.now() - started}ms (socket type: ${ws.type || 'N/A'}).`);
+        results(videos);
+      } catch (error) {
+        console.error(`Error searching the Internet Archive for ${JSON.stringify(term)}:`, error.message);
+        fail("Internet Archive search failed. Try again in a moment.");
+      }
+      return;
+    }
+
+    // It's a search term, perform a regular search
+    const { videos, via } = await searchVideos(term);
+    // JSON-encode the user's text so newlines in it can't start a fake log line.
+    console.log(`[SEARCH] ${JSON.stringify(term)}: ${videos.length} results in ${Date.now() - started}ms via ${via} (socket type: ${ws.type || 'N/A'}).`);
+    results(videos);
   }
   /**
    * Guards an action, executing callback only if client is the host or if instance is unlocked.
@@ -962,10 +1019,12 @@ class App {
     console.log(`Video '${blockedVideo.title}' is unavailable for ${ws.u.name}. Searching for alternative.`);
 
     // Search for a replacement using the title
-    const results = await youtube.search(blockedVideo.title, { searchType: 'video' });
-    if (results.videos && results.videos.length > 0) {
+    // Only YouTube videos have YouTube alternatives.
+    if (!this.getYoutubeId(blockedVideo.link)) return;
+    const { videos } = await searchVideos(blockedVideo.title);
+    if (videos.length > 0) {
       // Find the first result that is not the same as the blocked video, or default to the first one.
-      const alternative = results.videos.find(v => v.link !== blockedVideo.link) || results.videos[0];
+      const alternative = videos.find(v => v.link !== blockedVideo.link) || videos[0];
 
       console.log(`Found alternative: '${alternative.title}'. Prompting host.`);
 
@@ -1032,14 +1091,7 @@ class App {
    * @returns {string|false} 11-char ID or false if invalid.
    */
   getYoutubeId(url) {
-    if (!url) return false;
-    url = url.trim();
-    if (url.length === 11 && /^[a-zA-Z0-9_-]{11}$/.test(url)) {
-      return url;
-    }
-    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|shorts\/|watch\?v=|\&v=)([^#\&\?]*).*/;
-    const match = url.match(regExp);
-    return (match && match[2].length === 11) ? match[2] : false;
+    return MediaSources.youtubeId(url);
   }
   /**
    * Initializes or reconnects to an instance room player.
@@ -1129,7 +1181,8 @@ class App {
         lastStartTime: new Date().getTime() / 1000,
         saveStateTimeout: null, // For debouncing database writes
         lastSyncTime: 0,
-        paused: false
+        paused: false,
+        lists: [] // the room's shared saved lists (see playlistHandler.saveList)
       };
 
       if (existingState) {
@@ -1137,6 +1190,9 @@ class App {
         // Ensure the singers array exists if loading older state from the DB.
         if (!this.videoPlayers[instanceId].singers) {
           this.videoPlayers[instanceId].singers = [];
+        }
+        if (!Array.isArray(this.videoPlayers[instanceId].lists)) {
+          this.videoPlayers[instanceId].lists = [];
         }
       }
 
@@ -1236,6 +1292,7 @@ class App {
 
       if (includePlaylist) {
         videoObject.playlist = player.playlist;
+        videoObject.lists = player.lists || [];
       }
 
       // Optionally include the singer list for karaoke mode.

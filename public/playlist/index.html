@@ -23,6 +23,7 @@
             <div class="button teal " id="voting">Voting: Off</div>
             <div class="button teal" id="clearPlaylist">Clear List</div>
             <div class="button teal" id="loadDefaultPlaylist" style="display: none;">Load Default</div>
+            <div class="button teal" id="savedLists" style="display: none;">Saved Lists</div>
             <div class="button teal" id="addPlaylist">Add Playlist</div>
             <div class="button teal" id="addVideo">Add Video</div>
             <div class="button teal " id="autoSync">Auto Sync: Off</div>
@@ -57,13 +58,27 @@
     <div class="add-playlist-overlay" style="display: none;">
       <div class="search-overlay-box">
         <div class="search-input-wrapper">
-          <input type="text" id="addItemInput" class="addPlaylistInput" placeholder="Playlist URL or ID. Will REPLACE PLAYLIST">
+          <input type="text" id="addItemInput" class="addPlaylistInput" placeholder="YouTube playlist, or a list of links (.txt, .m3u, Google Doc, Drive folder)">
           <div class="button red slim" id="clear-playlist-url-btn">Clear</div>
         </div>
         <div class="search-button-wrapper">
           <div class="button grey" id="close-playlist-url-btn">Close</div>
-          <div class="button teal" id="load-playlist-url-btn">Load Playlist</div>
+          <div class="button grey" id="browse-playlist-url-btn" title="Look through it in Saved Lists">Browse</div>
+          <div class="button purple" id="save-playlist-url-btn" title="Keep it in Saved Lists for everyone in this room">Save to Lists</div>
+          <div class="button teal" id="append-playlist-url-btn" title="Add everything in it to the end of the playlist">Add All to End</div>
+          <div class="button teal" id="load-playlist-url-btn" title="Replace the playlist with it">Load Playlist</div>
         </div>
+      </div>
+    </div>
+
+    <!-- Saved lists: the snippet's playlist and playlists settings, the room's shared lists, and lists opened with Browse -->
+    <div class="lists-overlay" style="display: none;">
+      <div class="search-overlay-box lists-box">
+        <div class="lists-header">
+          <div class="lists-title">Saved Lists</div>
+          <div class="button grey" id="close-lists-btn">Close</div>
+        </div>
+        <div class="lists-container"></div>
       </div>
     </div>
 
@@ -85,6 +100,12 @@
       <div class="search-overlay-box">
         <!-- Row for the input field and clear button -->
         <div class="search-input-wrapper">
+          <select id="search-source" class="searchSource" title="What to search">
+            <option value="youtube">YouTube</option>
+            <option value="archive">Archive Films</option>
+            <option value="tubi">Tubi</option>
+            <option value="nasa">NASA+</option>
+          </select>
           <input type="text" class="searchInput" placeholder="Search for Songs or Videos...">
           <div class="button red slim" id="clear-search-btn">Clear</div>
         </div>

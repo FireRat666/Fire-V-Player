@@ -11,6 +11,7 @@
 // Console shows errors instead. It draws while the snippet's GameObject is selected, and with
 // karaoke on gives the Singers button a drag handle (the SDK has none for it).
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Xml.Linq;
@@ -36,7 +37,7 @@ namespace FireVPlayer.EditorTools
         const float ButtonsDrop = 0.335f;         // buttons sit this far under the screen's middle, times its Y scale
         const float PanelWidth = 1.4f;            // playlist panel, times playlist-panel-scale
         const float PanelAspect = 940f / 1100f;
-        static readonly float[] ButtonX = { -0.633f, -0.332f, -0.081f, 0.23f, 0.471f, 0.693f };
+        static readonly float[] OriginalButtonX = { -0.633f, -0.332f, -0.081f, 0.23f, 0.471f, 0.693f };
         const float IconSize = 0.2f;
         static readonly Vector2 SingerSize = new Vector2(1f, 0.3f);
         static readonly Vector3 SingerTilt = new Vector3(30, -180, 0);
@@ -99,15 +100,16 @@ namespace FireVPlayer.EditorTools
             var bRot = br.HasValue ? (follow ? sRot * Quaternion.Euler(br.Value) : Quaternion.Euler(br.Value)) : sRot;
             var bScale = Vec(e, "button-scale") ?? Vector3.one;
             var bMatrix = frame * Matrix4x4.TRS(bPos, bRot, bScale);
+            var buttonX = ButtonLayout(e);
             using (new Handles.DrawingScope(Outline, bMatrix))
             {
-                float left = ButtonX[0] - IconSize / 2 - 0.02f, right = ButtonX[ButtonX.Length - 1] + IconSize / 2 + 0.02f;
+                float left = buttonX[0] - IconSize / 2 - 0.02f, right = buttonX[buttonX.Length - 1] + IconSize / 2 + 0.02f;
                 RectAt(new Vector2((left + right) / 2, -0.05f), new Vector2(right - left, 0.34f), Fill, Outline);
-                foreach (var x in ButtonX)
+                foreach (var x in buttonX)
                     RectAt(new Vector2(x, 0), new Vector2(IconSize, IconSize), Color.clear, Outline);
             }
             Handles.color = Outline;
-            Handles.Label(bMatrix.MultiplyPoint3x4(new Vector3(ButtonX[0] - IconSize / 2, 0.2f, 0)), "Buttons");
+            Handles.Label(bMatrix.MultiplyPoint3x4(new Vector3(buttonX[0] - IconSize / 2, 0.2f, 0)), "Buttons");
 
             // Playlist panel (playlist-panel.js): a world position, or an offset from the screen.
             float ps = FirstNumber(e, "playlist-panel-scale", 1f);
@@ -210,6 +212,27 @@ namespace FireVPlayer.EditorTools
         }
 
         // Rounded to 3 decimals. "0 0 0" means the default, so a value that rounds to it is nudged.
+        // The x of each button under the screen, as core.js's screenButtonLayout: the original row, or
+        // with Reload (after Playlist) and Play/Pause (before the skips) when they're on.
+        static float[] ButtonLayout(XElement e)
+        {
+            bool playPause = Flag(e, "play-pause-button", true);
+            bool reload = Flag(e, "reload-button", true);
+            if (!playPause && !reload) return OriginalButtonX;
+            const float Step = 0.24f, Gap = 0.31f, Centre = 0.03f;
+            var groups = new[] { reload ? 2 : 1, playPause ? 3 : 2, 3 };
+            var xs = new List<float>();
+            float x = 0;
+            for (int g = 0; g < groups.Length; g++)
+            {
+                if (g > 0) x += Gap - Step;
+                for (int k = 0; k < groups[g]; k++) { xs.Add(x); x += Step; }
+            }
+            float shift = Centre - (x - Step) / 2;
+            for (int k = 0; k < xs.Count; k++) xs[k] += shift;
+            return xs.ToArray();
+        }
+
         static string Format(Vector3 v)
         {
             var n = new[] { v.x, v.y, v.z }.Select(x => Mathf.Round(x * 1000f) / 1000f).ToArray();
@@ -327,6 +350,22 @@ namespace FireVPlayer.EditorTools
         /// <param name="name">Attribute name.</param>
         /// <returns>Trimmed string value or empty string if missing.</returns>
         static string Attr(XElement e, string name) => ((string)e.Attribute(name) ?? "").Trim();
+
+        /// <summary>
+        /// Reads a true/false setting as core.js's setOrDefault does: missing gives the default,
+        /// "true"/"false" in any case count as written, and empty (an unticked checkbox) is false.
+        /// </summary>
+        /// <param name="e">Snippet XML element.</param>
+        /// <param name="name">Attribute name.</param>
+        /// <param name="fallback">Value when the attribute is missing or something else.</param>
+        static bool Flag(XElement e, string name, bool fallback)
+        {
+            if (e.Attribute(name) == null) return fallback;
+            var v = Attr(e, name).ToLowerInvariant();
+            if (v == "true") return true;
+            if (v == "false" || v == "") return false;
+            return fallback;
+        }
 
         /// <summary>
         /// Parses whitespace- or comma-delimited numbers from a snippet attribute.

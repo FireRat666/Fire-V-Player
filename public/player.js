@@ -15,6 +15,7 @@ const SkipJumpTimeKaraoke = 0.25; // 250ms for karaoke, to allow for more precis
 // --- Adaptive Sync Constants ---
 /** @constant {number} Fast sync interval in ms used when drift is high or after track changes */
 const SYNC_INTERVAL_FAST = 800;    // Sync every 0.8s when drift is high or after a change.
+const DEFAULT_VIDEO_WAIT_MS = 8000; // The longest the world's track waits for the default video to play.
 /** @constant {number} Normal sync interval in ms for moderate drift */
 const SYNC_INTERVAL_NORMAL = 2000;   // Sync every 2s for moderate drift.
 /** @constant {number} Slow sync interval in ms when player is well-synchronized */
@@ -32,6 +33,29 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
 
 (() => {
   const playerScript = document.currentScript;
+
+  // In Altspace this page can run in an iframe on the space page instead of in a browser of its
+  // own (core.js, the `space-screen` setting). The space page then says so in the address
+  // (embed=space, po = its origin), and messages go both ways by postMessage, with that page only.
+  // Listening starts now, so messages that come before the player is set up aren't lost.
+  const spaceFrame = (() => {
+    const query = new URLSearchParams(location.search);
+    if (query.get('embed') !== 'space' || window.parent === window) return null;
+    const origin = query.get('po') || '';
+    // Where the browser says which page embeds this one, it has to be the one named.
+    const ancestors = location.ancestorOrigins;
+    if (!origin || (ancestors && ancestors.length && ancestors[0] !== origin)) {
+      console.warn('[Player] Framed by a page other than the one named, so not talking to it.');
+      return null;
+    }
+    const frame = { origin, target: origin === 'null' ? '*' : origin, buffer: [], listener: null };
+    window.addEventListener('message', e => {
+      if (e.source !== window.parent || e.origin !== origin || typeof e.data !== 'string') return;
+      if (frame.listener) frame.listener(e.data);
+      else if (frame.buffer.length < 100) frame.buffer.push(e.data);
+    });
+    return frame;
+  })();
 
   const baseScript = document.createElement("script");
   const currentScriptUrl = new URL(playerScript.src);
@@ -94,6 +118,10 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
      */
     setupBrowserMessaging() {
       const seen = [];
+      // Messages from the world wait until the YouTube player is ready (its onReady), as most of
+      // them act on it, and MediaSwitch passes volume and mute to it whatever is playing;
+      // drainBrowserMessages runs them then, in order.
+      this.browserQueue = [];
       const onMessage = (e) => {
         const message = e && e.detail && e.detail.message;
         try {
@@ -104,10 +132,18 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
             if (seen.length > 50) seen.shift();
           }
         } catch (err) {}
+        if (!this.player || !this.ytReady) {
+          if (this.browserQueue.length < 100) this.browserQueue.push(message);
+          return;
+        }
         this.parseMessage(message);
       };
       window.addEventListener("bsmessage", onMessage);
       window.addEventListener("bantermessage", onMessage);
+      if (spaceFrame) {
+        spaceFrame.listener = message => onMessage({ detail: { message } });
+        spaceFrame.buffer.splice(0).forEach(spaceFrame.listener);
+      }
     }
 
     /**
@@ -115,7 +151,9 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
      * @param {Object} msg - Message payload.
      */
     sendBrowserMessage(msg) {
-      if (window.O && typeof window.O.sendMessage === 'function') {
+      if (spaceFrame) {
+        window.parent.postMessage(JSON.stringify(msg), spaceFrame.target);
+      } else if (window.O && typeof window.O.sendMessage === 'function') {
         window.O.sendMessage("app", JSON.stringify(msg));
       } else if (window.bantermessage) {
         window.bantermessage(JSON.stringify(msg));
@@ -265,25 +303,7 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
           onStateChange: event => {
             if (event.data === YT.PlayerState.PLAYING) {
               this.applyCaptions(); // each new video loads with the player's caption default
-              if (!this.readyToPlay) {
-                this.readyToPlay = true;
-                // First time player is playing. Check for pending changes or initial sync.
-                if (this.pendingTrackChange && this.playerData) {
-                  // A track change was received before we were ready. Apply it now.
-                  const data = this.pendingTrackChange;
-                  this.pendingTrackChange = null; // Clear the cached message
-                  this.applyTrackChange(data);
-                } else if (this.playerData && this.playerData.playlist && this.playerData.playlist.length > 0 && !this.initialSyncComplete) {
-                  // This handles rejoining an instance that already has a playlist.
-                  this.playVidya(this.playerData.currentTrack, this.playerData.currentTime, true);
-                  this.initialSyncComplete = true;
-                  // This is the first sync, so we should start with a fast interval.
-                  if (this.autoSync) {
-                    this.syncIntervalMs = SYNC_INTERVAL_FAST;
-                    this.scheduleNextSync();
-                  }
-                }
-              }
+              this.startPlaying();
             } // The aggressive `playVideo()` call on non-playing states has been removed.
               // The auto-sync logic is the robust way to handle unexpected pauses or buffering
               // by correcting the resulting time drift.
@@ -299,13 +319,25 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
               }
             }
             console.log("YT Player Error:", event.data);
+            // The default video failed (YouTube may want this viewer to sign in): go on to the
+            // world's track anyway, or the screen would stay on the error.
+            this.startPlaying();
           },
           onApiChange: async event => {
           },
           onReady: event => {
+            this.ytReady = true;
             this.setVolume();
             this.setMute();
             this.player.playVideo(); // Explicitly start playback.
+            this.drainBrowserMessages();
+            // The track waits for the default video to play, but YouTube can block it for some
+            // viewers ("Sign in to confirm you're not a bot") without an error, so not for long.
+            setTimeout(() => {
+              if (this.readyToPlay) return;
+              console.log('[PLAYER] The default video never played, so starting the world\'s track.');
+              this.startPlaying();
+            }, DEFAULT_VIDEO_WAIT_MS);
             // setTimeout(() => this.startPlayerOrNot(), 500);
           }
         }
@@ -321,6 +353,62 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
         // won't start on their own until someone does.
         requestClick: () => this.clickMiddle()
       }) : this.yt;
+      if (this.player.setCaptions) this.player.setCaptions(this.core.captions !== false);
+    }
+
+    /**
+     * The first time the player can play: plays the world's track, which waited for this.
+     * Runs once the default video plays, fails, or takes too long (see onYouTubeIframeAPIReady).
+     */
+    startPlaying() {
+      if (this.readyToPlay) return;
+      this.readyToPlay = true;
+      if (this.pendingTrackChange && this.playerData) {
+        // A track change was received before we were ready. Apply it now.
+        const data = this.pendingTrackChange;
+        this.pendingTrackChange = null;
+        this.applyTrackChange(data);
+      } else {
+        this.playInitialSync();
+      }
+    }
+
+    /** Plays where the world is (joining, or rejoining, an instance that has a playlist), once. */
+    playInitialSync() {
+      if (!this.playerData || !this.playerData.playlist || !this.playerData.playlist.length || this.initialSyncComplete) return;
+      // The sync may have waited (up to DEFAULT_VIDEO_WAIT_MS) for the player, so a playing track
+      // starts where it is now; a paused one at its stored time.
+      const d = this.playerData;
+      const live = (Date.now() / 1000) - (this.clockSkew || 0) - d.lastStartTime;
+      const start = !d.paused && Number.isFinite(live) ? Math.max(0, live) : d.currentTime;
+      this.playVidya(d.currentTrack, start, true);
+      this.initialSyncComplete = true;
+      // This is the first sync, so we should start with a fast interval.
+      if (this.autoSync) {
+        this.syncIntervalMs = SYNC_INTERVAL_FAST;
+        this.scheduleNextSync();
+      }
+    }
+
+    /**
+     * A length of time for a toast: "5s", "0.25s", "1:40", "1:02:03". `clock` always uses the
+     * m:ss form, for a point in the video.
+     * @param {number} seconds
+     * @param {boolean} [clock]
+     * @returns {string}
+     */
+    durationText(seconds, clock) {
+      seconds = Math.max(0, Number(seconds) || 0);
+      if (seconds < 60 && !clock) return `${Math.round(seconds * 100) / 100}s`;
+      const t = Math.round(seconds);
+      const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, sec = String(t % 60).padStart(2, '0');
+      return h ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+    }
+
+    /** Runs the world's messages that came before the player was ready (see setupBrowserMessaging). */
+    drainBrowserMessages() {
+      const queued = (this.browserQueue || []).splice(0);
+      queued.forEach(message => this.parseMessage(message));
     }
 
     /**
@@ -421,12 +509,17 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
           // This prevents the playlist from being wiped out on updates that don't include it.
           this.playerData = Object.assign(this.playerData || {}, json.data.video);
         }
+        // How far this device's clock is from the server's, for working out the live position later.
+        if (json.data.video && Number.isFinite(Number(json.data.video.lastStartTime)) && Number.isFinite(Number(json.data.video.currentTime)) && !json.data.video.paused) {
+          this.clockSkew = (Date.now() / 1000) - (Number(json.data.video.lastStartTime) + Number(json.data.video.currentTime));
+        }
 
         // The specific 'set-track' logic is now handled by the TRACK_CHANGED command.
         if (json.data.type === "stop" && this.readyToPlay) {
           this.player.loadVideoById(this.core.getId("https://www.youtube.com/watch?v=GiwStUzx8fg"), 0);
         }
-        // The initial sync is now handled by the onStateChange event when the player is ready.
+        // The initial sync waits for the player (startPlaying), unless the player was first.
+        if (json.data.type === 'initial-sync' && this.readyToPlay) this.playInitialSync();
         break;
       case Commands.PLAYLIST_UPDATED:
         // This message is sent when the playlist order changes (e.g., move up/down).
@@ -487,13 +580,18 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
           const diff = newTime - oldTime;
 
           this.player.seekTo(newTime);
-          this.player.playVideo(); // Ensure playback continues after host seek
+          // A seek while paused stays paused, as the buttons and panel show.
+          if (typeof json.data.paused === 'boolean') this.playerData.paused = json.data.paused;
+          if (this.playerData.paused) this.player.pauseVideo();
+          else this.player.playVideo();
           this.playerData.lastStartTime = json.data.newLastStartTime;
 
-          // Show a toast indicating the skip direction and amount.
-          const skipAmount = this.core.isKaraoke ? SkipJumpTimeKaraoke : SkipJumpTimePlaylist;
-          const direction = diff > 0 ? 'FORWARDS +' : 'BACKWARDS -';
-          this.core.showToast(`Host skip: ${direction}${skipAmount}s`);
+          // How far it really moved, from the server (older servers: from this screen's time).
+          const moved = Number.isFinite(Number(json.data.skipped)) ? Number(json.data.skipped) : diff;
+          const amount = `${moved < 0 ? '-' : '+'}${this.durationText(Math.abs(moved))}`;
+          this.core.showToast(json.data.seek
+            ? `Host seek to ${this.durationText(newTime, true)} (${amount})`
+            : `Host skip: ${amount}`);
           this.disableAutoSync(true);
         }
         break;
@@ -682,6 +780,9 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
       const p = this.player;
       if (!p || typeof p.getVideoData !== 'function') return;
       const on = this.core.captions !== false;
+      // Twitch, Vimeo, streams and files have their own captions (where they have any).
+      if (typeof p.setCaptions === 'function') p.setCaptions(on);
+      if (p.isYouTube && !p.isYouTube()) return;
       const key = `${(p.getVideoData() || {}).video_id || ''}:${on}`;
       if (!force && this.captionsApplied === key) return;
       this.captionsApplied = key;
@@ -700,22 +801,33 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
     }
 
     /**
-     * Polls the YouTube captions module for available tracks and selects English
-     * or the first available caption track.
+     * Polls the YouTube captions module for a track and shows English: an English track when
+     * there is one, else YouTube's English translation of the video's track. Auto-generated
+     * captions aren't in the track list, only the current track, so that one counts too.
      * @param {number} tries - Retries counter.
      */
     pickCaptionTrack(tries) {
       clearTimeout(this.captionsTimer);
       const p = this.player;
       if (!p || this.core.captions === false) return;
-      let list = [];
+      const isEnglish = t => /^en/i.test((t && t.languageCode) || '');
+      let list = [], current = null, languages = [];
       try { list = p.getOption('captions', 'tracklist') || []; } catch (e) {}
-      if (list.length) {
-        const track = list.find(t => /^en/i.test(t.languageCode || '')) || list[0];
-        try { p.setOption('captions', 'track', { languageCode: track.languageCode }); } catch (e) {}
+      try { current = p.getOption('captions', 'track'); } catch (e) {}
+      const base = list.find(isEnglish) || list[0] || (current && current.languageCode ? current : null);
+      if (base) {
+        try { languages = p.getOption('captions', 'translationLanguages') || []; } catch (e) {}
+        const english = languages.find(isEnglish);
+        try {
+          if (!isEnglish(base) && english && base.is_translateable !== false) {
+            p.setOption('captions', 'track', Object.assign({}, base, { translationLanguage: english }));
+          } else if (base !== current) {
+            p.setOption('captions', 'track', { languageCode: base.languageCode });
+          }
+        } catch (e) {}
         return;
       }
-      if (tries < 10) this.captionsTimer = setTimeout(() => this.pickCaptionTrack(tries + 1), 500);
+      if (tries < 20) this.captionsTimer = setTimeout(() => this.pickCaptionTrack(tries + 1), 500);
     }
 
     /**

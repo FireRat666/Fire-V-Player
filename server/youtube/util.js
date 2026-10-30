@@ -207,16 +207,7 @@ const shareLink = (id, short = true) => {
  * @param {string} url - The YouTube URL or string.
  * @returns {string|false} The 11-character video ID, or false if not matched.
  */
-exports.getYoutubeId = (url) => {
-    if (!url) return false;
-    url = url.trim();
-    if (url.length === 11 && /^[a-zA-Z0-9_-]{11}$/.test(url)) {
-        return url;
-    }
-    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|shorts\/|watch\?v=|\&v=)([^#\&\?]*).*/;
-    const match = url.match(regExp);
-    return (match && match[2].length === 11) ? match[2] : false;
-};
+exports.getYoutubeId = (url) => require('../../public/media-sources.js').youtubeId(url);
 
 /**
  * Parses complete channel data from a search channel renderer.

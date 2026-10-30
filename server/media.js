@@ -1,11 +1,14 @@
 /**
  * @fileoverview Media link resolver and validator for non-YouTube media sources.
- * Resolves external links (Twitch, Vimeo, VDO.Ninja, audio/video files, and HLS streams)
+ * Resolves external links (Twitch, Vimeo, VDO.Ninja, the Internet Archive, audio/video files, and HLS streams)
  * into standardized playlist items, and enforces security trust policies.
  * @module server/media
  */
 
 const MediaSources = require('../public/media-sources.js');
+const archive = require('./archive.js');
+const loc = require('./loc.js');
+const streaming = require('./streaming.js');
 
 const FETCH_TIMEOUT_MS = 5000;
 
@@ -110,6 +113,22 @@ async function resolveMediaLink(link) {
     }
   }
 
+  // An Internet Archive page or item (or a publicdomainmovie.net page) becomes one of the item's
+  // mp4 files; a link straight to an Archive file keeps that file and gets the item's title.
+  if (media.type === 'archive') return archive.resolveLink(link);
+  if (media.type === 'file' && media.archive) {
+    try {
+      return await archive.resolveLink(link);
+    } catch (e) { /* played as a plain file below */ }
+  }
+
+  // A Library of Congress film page or handle becomes its tile.loc.gov video file, and a file there
+  // gets the film's title when the server knows it.
+  if (media.type === 'loc' || (media.type === 'file' && media.loc)) return loc.resolveLink(link);
+
+  // Tubi and NASA+ pages keep their page link; the player asks for the stream (/api/stream).
+  if (media.type === 'tubi' || media.type === 'nasa') return streaming.resolveLink(link);
+
   if (media.type === 'vdoninja') {
     return { title: `VDO.Ninja: ${media.name}`, thumbnail: '', duration: 0, link };
   }
@@ -122,8 +141,24 @@ async function resolveMediaLink(link) {
 }
 
 /**
+ * Like resolveMediaLink, but an Internet Archive link gives every video in its item (each episode
+ * of a TV season, say), for showing as search results.
+ *
+ * @param {string} link - Media URL to resolve.
+ * @returns {Promise<Array<PlaylistItem>>}
+ */
+async function resolveMediaLinks(link) {
+  const media = MediaSources.detect(link);
+  if (media && media.type === 'archive') return archive.resolveLinkAll(String(link).trim());
+  // A Tubi series lists its episodes.
+  if (media && media.type === 'tubi') return streaming.resolveLinks(String(link).trim());
+  const one = await resolveMediaLink(link);
+  return one ? [one] : [];
+}
+
+/**
  * Checks whether a WebSocket client connection is permitted to queue the specified media link.
- * Known trusted providers (YouTube, Twitch, Vimeo) are always permitted.
+ * Known trusted providers (YouTube, Twitch, Vimeo, the Internet Archive, the Library of Congress) are always permitted.
  * Direct links and files require untrusted link permissions enabled on the connection.
  *
  * @param {Object} ws - The client WebSocket connection object.
@@ -136,4 +171,4 @@ function allowedFor(ws, link) {
   return MediaSources.isTrusted(m) || !!(ws && ws.allowUntrusted);
 }
 
-module.exports = { resolveMediaLink, detect: MediaSources.detect, allowedFor, UNTRUSTED_MESSAGE: MediaSources.UNTRUSTED_MESSAGE };
+module.exports = { resolveMediaLink, resolveMediaLinks, detect: MediaSources.detect, allowedFor, UNTRUSTED_MESSAGE: MediaSources.UNTRUSTED_MESSAGE };

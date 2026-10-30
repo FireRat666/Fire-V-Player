@@ -164,6 +164,9 @@ body{
 .green{
   background: green;
 }
+.purple{
+  background: #6a1b9a;
+}
 .extra-padding{
   padding: 5px 10px;
 }
@@ -220,6 +223,18 @@ body{
   font-size: 1.8em; /* Much larger text */
   width: auto; /* Reset width to allow flex-grow to work */
   margin: 0; /* Reset margin */
+}
+
+/* YouTube or Internet Archive movies and TV, beside the search box. */
+.searchSource {
+  height: 48px;
+  font-size: 1.2em;
+  background: rgba(0,0,0,0.2);
+  color: white;
+  border: 1px solid white;
+}
+.searchSource option {
+  color: black;
 }
 
 /* A flex container to align the 'Close' and 'Submit' buttons to the right */
@@ -363,4 +378,83 @@ body{
   box-shadow: 0 0 5px rgba(0,0,0,0.5);
   left: 0%; /* Initially at the start */
   pointer-events: none; /* So it doesn't interfere with the container's click event */
+}
+/* --- Saved Lists overlay --- */
+.lists-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.85);
+  z-index: 100;
+  display: none; /* Shown via JavaScript (flex). */
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 4vh;
+}
+.lists-box {
+  max-width: 1000px;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  color: white;
+}
+.lists-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.lists-title {
+  font-size: 1.5em;
+}
+.lists-container {
+  overflow-y: auto;
+  min-height: 0;
+}
+.list-card {
+  background: #2b2b33;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  padding: 8px;
+}
+.list-card-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap; /* the buttons go under the name when there isn't room */
+  gap: 8px;
+}
+.list-card-name {
+  flex-grow: 1;
+  flex-basis: 220px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.list-card-sub {
+  color: #bbb;
+  font-size: 0.9em;
+}
+.list-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0 4px 16px;
+  border-top: 1px solid #3a3a44;
+}
+.list-item img {
+  width: 96px;
+  height: 54px;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: #000;
+}
+.list-item-title {
+  flex-grow: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

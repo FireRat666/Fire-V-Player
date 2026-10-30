@@ -25,7 +25,9 @@ In the world, the player shows whatever its own screen draws on it:
 - **Twitch:** the player's own browser.
 - **Video files on the world's video player:** there's no picture to share, so second screens go black.
 
-For a ready-made one, copy [`unity/Editor/FireVPlayerSecondScreen.cs`](unity/Editor/FireVPlayerSecondScreen.cs) into the same `Editor` folder. Then use **GameObject > Fire-V-Player > Second Screen** (or right-click in the Hierarchy). It makes a 16:9 quad named `Fire-V-Player`, as wide as the player's screen.
+While the player loads, second screens show a "Fire-V-Player loading" picture. Before the player starts, Unity draws a Texture of `Fire-V-Player` as plain white, so for a screen marked by its name, put the picture's link in **Texture** instead to show it from the moment the world loads: `https://vidya.firer.at/assets/SecondScreenLoading.png` (or the same path on your own server).
+
+For a ready-made one, copy [`unity/Editor/FireVPlayerSecondScreen.cs`](unity/Editor/FireVPlayerSecondScreen.cs) into the same `Editor` folder. Then use **GameObject > Fire-V-Player > Second Screen** (or right-click in the Hierarchy). It makes a 16:9 quad named `Fire-V-Player`, as wide as the player's screen, with the loading picture as its Texture.
 
 Second screens only show the video in the world.
 

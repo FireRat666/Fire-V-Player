@@ -159,6 +159,8 @@ var Core = class {
       console.log(`Player is in 2D mode. Open the playlist controls here: ${playlistUrl}`);
       return;
     }
+    // Second screens show the loading picture until the screen is up (see syncSecondScreens).
+    try { this.syncSecondScreens(); } catch (e) { console.warn('[Core] Could not set up second screens yet:', e); }
     // In Altspace the screen can be the space page's own browser (see claimSpaceSurface). Finding
     // out can take a few seconds, so it runs while the buttons are made.
     const claim = this.spaceSurface ? Promise.resolve() : this.claimSpaceSurface().catch(e => {
@@ -705,6 +707,10 @@ var Core = class {
     const id = browser.component && browser.component.unityId;
     return id != null && id !== '' ? `asset_browser_${id}` : null;
   }
+  // The picture second screens show while the player loads (public/assets).
+  secondScreenLoadingUrl() {
+    return this.hostUrl ? `${this.getProtocol()}://${this.hostUrl}/assets/SecondScreenLoading.png` : null;
+  }
   // The BS Materials of the scene's second screens. The page knows every object with a BS
   // component, so these are among scene.objects.
   findSecondScreens() {
@@ -784,7 +790,11 @@ var Core = class {
       this.secondScreenCount = screens.length;
       console.log(`[Core] ${screens.length} second screen(s) in the scene. ${this.secondScreenSummary()}`);
     }
-    const texture = this.secondScreenTexture();
+    let texture = this.secondScreenTexture();
+    // Until the screen has a texture to share, a picture saying the player is loading (instead of
+    // the white Unity draws for the "Fire-V-Player" marker). While the world's video player plays
+    // a file there's nothing to share, so they go black.
+    if (!texture && !this.nativeScreen && !this.destroyed) texture = this.secondScreenLoadingUrl();
     screens.forEach(material => {
       if (material.__fvpShowing === texture) return;
       material.__fvpShowing = texture;

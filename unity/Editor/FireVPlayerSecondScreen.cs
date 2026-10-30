@@ -1,7 +1,8 @@
 // Second screens for the Fire-V-Player snippet (Banter Creator SDK).
 //
 // Any object with a BS Material, named "Fire-V-Player" (or starting with it) or with "Fire-V-Player"
-// as its Texture, shows the same picture as the player's screen, with no camera or render texture: the player finds those materials and keeps
+// as its Texture, shows the same picture as the player's screen (and a "Fire-V-Player loading"
+// picture until the screen is up), with no camera or render texture: the player finds those materials and keeps
 // them on whatever its screen draws, the space page (asset_browser_world, YouTube and most links)
 // or its own browser (Twitch). While a video file plays on the world's video player there is no
 // texture to share, so they go black. Any mesh works, a curved screen or a sphere included.
@@ -34,6 +35,10 @@ namespace FireVPlayer.EditorTools
         // Material's Texture, which the player replaces with the screen's own texture.
         const string ScreenName = "Fire-V-Player";
         const string MarkerTexture = "Fire-V-Player";
+        // What a new second screen's Texture starts as: the player's loading picture, so it shows
+        // that (not plain white) until the player sets it. The object's name marks it as a screen.
+        const string LoadingImage = "/assets/SecondScreenLoading.png";
+        const string DefaultHost = "https://vidya.firer.at";
         const string SnippetName = "fire-v-player";
         const float ScreenAspect = 9f / 16f; // the player's screen is 1 m wide at scale 1, 16:9
         const float DefaultWidth = 2f;
@@ -81,7 +86,7 @@ namespace FireVPlayer.EditorTools
             var material = go.AddComponent<BSMaterial>();
             var so = new SerializedObject(material);
             SetString(so, "shaderName", "Unlit/Diffuse");
-            SetString(so, "texture", MarkerTexture);
+            SetString(so, "texture", LoadingImageUrl(player));
             var color = so.FindProperty("color");
             if (color != null) color.vector4Value = Vector4.one;
             so.ApplyModifiedPropertiesWithoutUndo();
@@ -153,6 +158,19 @@ namespace FireVPlayer.EditorTools
                     return e;
             }
             return null;
+        }
+
+        /// <summary>
+        /// The loading picture on the server the snippet's script comes from (vidya.firer.at if unknown).
+        /// </summary>
+        static string LoadingImageUrl(XElement player)
+        {
+            var host = DefaultHost;
+            Uri script;
+            if (player != null && Uri.TryCreate(((string)player.Attribute("script") ?? "").Trim(), UriKind.Absolute, out script) &&
+                (script.Scheme == Uri.UriSchemeHttps || script.Scheme == Uri.UriSchemeHttp))
+                host = script.GetLeftPart(UriPartial.Authority);
+            return host + LoadingImage;
         }
 
         /// <summary>

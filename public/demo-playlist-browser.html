@@ -26,10 +26,15 @@
       // A second screen: a plane with a BS Material, named "Fire-V-Player...", which the player finds
       // and shows its own screen on (its browser's texture, no camera). Any object with a BS
       // Material and that name works, in any shape; Texture "Fire-V-Player" marks one too.
+      // Its Texture starts as the player's loading picture, from the snippet's own server, so it
+      // shows that instead of plain white until the player puts its screen there.
       // It's 2 x 1.125 m, to the right of the main screen and turned toward the middle of the room.
       // A plane faces -Z, so turning it 36.87 degrees points it at the origin from (6, 1.5, 8).
       async function buildSecondScreen() {
         if (!BS.Scene || !BS.Plane || !BS.Material) return; // older clients: no second screen
+        const snippet = document.querySelector('bs-snippet[name="fire-v-player"]');
+        let loading = "Fire-V-Player";
+        try { loading = new URL("/assets/SecondScreenLoading.png", snippet.getAttribute("script")).href; } catch (e) {}
         const screen = await new BS.GameObject({
           name: "Fire-V-Player Second Screen",
           localPosition: new BS.Vector3(6, 1.5, 8),
@@ -37,7 +42,7 @@
         }).Async();
         try {
           await screen.AddComponent(new BS.Plane({ width: 2, height: 1.125 }));
-          await screen.AddComponent(new BS.Material({ shaderName: "Unlit/Diffuse", texture: "Fire-V-Player", color: new BS.Vector4(1, 1, 1, 1) }));
+          await screen.AddComponent(new BS.Material({ shaderName: "Unlit/Diffuse", texture: loading, color: new BS.Vector4(1, 1, 1, 1) }));
         } catch (e) {
           try { screen.Destroy(); } catch (err) {}
           throw e;

@@ -2359,8 +2359,10 @@ var Core = class {
     if (!/^https?:\/\/[^\s]+$/i.test(s) || s.length > 2000) return null;
     const media = window.MediaSources ? MediaSources.detect(s) : null;
     // Drive file links play as videos, but as a playlist setting they are text files of links. A
-    // Tubi series is a list of its episodes (the server reads it as one).
-    if (media && !media.drive && !(media.type === 'tubi' && media.kind === 'series')) return null;
+    // Tubi series is a list of its episodes, and an archive.org item page (not one of its files) a
+    // list of its videos (the server reads both as lists).
+    const archiveItem = media && media.type === 'archive' && !media.file && /^\/details\//i.test(new URL(s).pathname);
+    if (media && !media.drive && !(media.type === 'tubi' && media.kind === 'series') && !archiveItem) return null;
     return s;
   }
   // A single video or stream link (YouTube, Twitch, a .m3u8 or VRCDN stream...), or null. In the

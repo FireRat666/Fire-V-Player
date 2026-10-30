@@ -260,7 +260,7 @@ var MediaSources = (() => {
     const u = parseUrl(full);
     if (!u) return false;
     const parts = u.pathname.split('/').filter(Boolean);
-    const host = u.hostname.toLowerCase();
+    const host = u.hostname.toLowerCase().replace(/^(www|m)\./, ''); // as detect() does
     let id = '';
     if (host === 'youtu.be') id = parts[0] || '';
     else if (['embed', 'shorts', 'live', 'v', 'e'].includes(parts[0])) id = parts[1] || '';

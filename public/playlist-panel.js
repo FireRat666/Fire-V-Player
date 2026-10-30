@@ -1564,8 +1564,16 @@ var FirePlaylistPanel = class {
   // this viewer's own (My lists), then any opened for this visit.
   getLists() {
     if (!this.savedLists) this.savedLists = typeof this.core.getSavedLists === 'function' ? this.core.getSavedLists() : [];
-    const seen = new Set();
-    return this.savedLists.concat(this.sharedLists(), this.userLists, this.extraLists).filter(l => !seen.has(l.id) && seen.add(l.id));
+    // A link in more than one keeps its first entry, with the shared details added (on a copy) so
+    // it still gets its Remove button.
+    const byId = new Map();
+    const out = [];
+    this.savedLists.concat(this.sharedLists(), this.userLists, this.extraLists).forEach(l => {
+      const had = byId.get(l.id);
+      if (!had) { const copy = Object.assign({}, l); byId.set(l.id, copy); out.push(copy); }
+      else if (l.shared && !had.shared) { had.shared = l.shared; had.by = l.by; }
+    });
+    return out;
   }
 
   // The Lists tab's rows: each list, and the videos of the one that's open under it.

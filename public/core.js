@@ -291,9 +291,10 @@ var Core = class {
     // Files come from anywhere, so only where the world's owner allows them (as in the browser).
     const media = MediaSources.detect(link);
     if (!media || media.type !== 'file' || this.allowUntrusted !== true) return false;
-    // Unity's player can't play Ogg or Opus audio (on PC or Quest), and the browser can.
+    // Audio files play in the browser: Unity's player on Quest doesn't play audio without video,
+    // and can't play Ogg or Opus anywhere.
     const u = MediaSources.parseUrl(media.url || link);
-    return !(u && /\.(ogg|opus)$/i.test(u.pathname));
+    return !(u && /\.(ogg|oga|opus|mp3|m4a|aac|wav|flac)$/i.test(u.pathname));
   }
   // Twitch won't start until someone clicks its player, and the space-page screen can't be clicked
   // (it's a picture of a page nobody can reach), so Twitch gets a BS Browser screen, as on clients

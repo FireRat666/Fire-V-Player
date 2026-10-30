@@ -40,14 +40,14 @@ https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.webm Flower
 # MP4 and WebM (H.265/HEVC and AV1 play only where the device can decode them), and one
 # recorded MPEG-TS file (H.264, played with mpegts.js).
 https://archive.org/download/Flickr-5196300199/The_lake-5196300199.mov The lake, 31 seconds (MOV, H.264 and AAC)
-https://archive.org/download/Flickr-5196300199/The_lake-5196300199.ogv The lake, 31 seconds (OGV, Theora and Vorbis)
+https://archive.org/download/Flickr-5196300199/The_lake-5196300199.ogv The lake, 31 seconds (OGV, Theora and Vorbis; Theora doesn't play on Quest)
 https://test-videos.co.uk/vids/bigbuckbunny/mp4/h265/360/Big_Buck_Bunny_360_10s_1MB.mp4 Big Buck Bunny, 10 seconds (MP4, H.265/HEVC)
 https://test-videos.co.uk/vids/bigbuckbunny/mp4/av1/360/Big_Buck_Bunny_360_10s_1MB.mp4 Big Buck Bunny, 10 seconds (MP4, AV1)
 https://test-videos.co.uk/vids/bigbuckbunny/webm/av1/360/Big_Buck_Bunny_360_10s_1MB.webm Big Buck Bunny, 10 seconds (WebM, AV1)
 https://test-streams.mux.dev/x36xhzz/url_0/url_462/193039199_mp4_h264_aac_hd_7.ts Big Buck Bunny, 10 seconds (MPEG-TS file, H.264 and AAC)
 
-# Audio files, one of each format. In a world, Ogg and Opus play in the browser screen and
-# the rest on the world's video player.
+# Audio files, one of each format. In a world, audio files play in the browser screen (Unity's
+# player on Quest doesn't play audio on its own).
 https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg Example audio, 6 seconds (Ogg Vorbis)
 https://upload.wikimedia.org/wikipedia/commons/d/dd/8-bit_Music_for_GameDev_-_02._Perilous_Dungeon.opus Perilous Dungeon, 2 minutes (Opus)
 https://upload.wikimedia.org/wikipedia/commons/d/d6/Fatigue_-_Concert_Band_-_United_States_Air_Force_Heritage_of_America_Band.mp3 Fatigue - US Air Force band, 15 seconds (MP3)

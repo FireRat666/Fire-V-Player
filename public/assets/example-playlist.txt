@@ -19,7 +19,6 @@ https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tear
 https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8 Big Buck Bunny (HLS)
 https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8 Apple bipbop test stream (HLS, fMP4)
 https://storage.googleapis.com/shaka-demo-assets/angel-one-hls/hls.m3u8 Angel One, multi-audio - Shaka demo assets HLS (m3u8)
-https://demo.unified-streaming.com/k8s/low-latency/stable/channel1/channel1.isml/.m3u8 Low-latency live origin - Unified Streaming HLS (m3u8)
 
 # DASH (.mpd) streams. Angel One and Sintel have subtitles for the Captions button.
 https://storage.googleapis.com/shaka-demo-assets/angel-one/dash.mpd Angel One (DASH, subtitles in 4 languages)
@@ -28,7 +27,6 @@ https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tear
 https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd Big Buck Bunny (DASH)
 https://dash.akamaized.net/dash264/TestCases/3b/fraunhofer/aac-lc_stereo_with_video/ElephantsDream/elephants_dream_480p_aaclc_stereo_sidx.mpd Elephants Dream (DASH)
 https://livesim2.dashif.org/livesim2/testpic_2s/Manifest.mpd DASH-IF live test picture (live DASH)
-https://demo.unified-streaming.com/k8s/low-latency/stable/channel1/channel1.isml/.mpd Low-latency live origin - Unified Streaming (live DASH)
 
 # Video files (.mp4 and .webm). In a world they play on the world's video player, which on PC
 # takes MP4 (H.264) and WebM with VP8 video, but not VP9.

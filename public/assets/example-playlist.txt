@@ -3,7 +3,7 @@
 # comments, and text after a link names it. Host your own .txt anywhere with a direct link
 # (or on Dropbox, Google Drive or as a Google Doc) and put its link in playlists.
 # Links to files and streams (everything below Twitch) need untrusted-links="true",
-# except the Library of Congress film.
+# except the Internet Archive files and the Library of Congress film.
 
 # A YouTube live stream
 https://www.youtube.com/watch?v=rFZHOHl-L8A
@@ -34,9 +34,26 @@ https://download.blender.org/durian/trailer/sintel_trailer-480p.mp4 Sintel trail
 https://test-videos.co.uk/vids/bigbuckbunny/webm/vp8/360/Big_Buck_Bunny_360_10s_1MB.webm Big Buck Bunny, 10 seconds (WebM, VP8)
 https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4 Flower, 5 seconds (MP4)
 https://mdn.github.io/learning-area/html/multimedia-and-embedding/video-and-audio-content/rabbit320.webm Rabbit, 8 seconds (WebM, VP8)
+https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.webm Flower, 5 seconds (WebM, VP8 and Vorbis)
 
-# An audio file
-https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg Example audio (Ogg Vorbis)
+# More video formats, to see which play where: QuickTime and Ogg Theora files, newer codecs in
+# MP4 and WebM (H.265/HEVC and AV1 play only where the device can decode them), and one
+# recorded MPEG-TS file (H.264, played with mpegts.js).
+https://archive.org/download/Flickr-5196300199/The_lake-5196300199.mov The lake, 31 seconds (MOV, H.264 and AAC)
+https://archive.org/download/Flickr-5196300199/The_lake-5196300199.ogv The lake, 31 seconds (OGV, Theora and Vorbis)
+https://test-videos.co.uk/vids/bigbuckbunny/mp4/h265/360/Big_Buck_Bunny_360_10s_1MB.mp4 Big Buck Bunny, 10 seconds (MP4, H.265/HEVC)
+https://test-videos.co.uk/vids/bigbuckbunny/mp4/av1/360/Big_Buck_Bunny_360_10s_1MB.mp4 Big Buck Bunny, 10 seconds (MP4, AV1)
+https://test-videos.co.uk/vids/bigbuckbunny/webm/av1/360/Big_Buck_Bunny_360_10s_1MB.webm Big Buck Bunny, 10 seconds (WebM, AV1)
+https://test-streams.mux.dev/x36xhzz/url_0/url_462/193039199_mp4_h264_aac_hd_7.ts Big Buck Bunny, 10 seconds (MPEG-TS file, H.264 and AAC)
+
+# Audio files, one of each format. In a world, Ogg and Opus play in the browser screen and
+# the rest on the world's video player.
+https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg Example audio, 6 seconds (Ogg Vorbis)
+https://upload.wikimedia.org/wikipedia/commons/d/dd/8-bit_Music_for_GameDev_-_02._Perilous_Dungeon.opus Perilous Dungeon, 2 minutes (Opus)
+https://upload.wikimedia.org/wikipedia/commons/d/d6/Fatigue_-_Concert_Band_-_United_States_Air_Force_Heritage_of_America_Band.mp3 Fatigue - US Air Force band, 15 seconds (MP3)
+https://archive.org/download/ptice_pjevice-demerska-suma-28.4.2020/2_ptice_demerska_suma_28.4.2020.m4a Birdsong, 1 minute (M4A, AAC)
+https://upload.wikimedia.org/wikipedia/commons/f/f1/Wagner_Fire_Music_from_Die_Walkure_01.wav Wagner - Fire Music, 12 seconds (WAV)
+https://upload.wikimedia.org/wikipedia/commons/5/5e/Gubben_Noach.flac Gubben Noach, 12 seconds (FLAC)
 
 # A Library of Congress film: its loc.gov page, handle or video file all work.
 # The whole public-domain National Film Registry list is

@@ -22,6 +22,8 @@ const TIMEOUT_MS = 12000;
 const PAGE_TTL_MS = 3 * 60 * 60 * 1000;
 /** How long the titles in every Tubi category are kept for searching. */
 const CATALOG_TTL_MS = 6 * 60 * 60 * 1000;
+/** How long a catalogue missing a category that wouldn't load is kept before that category is tried again. */
+const CATALOG_RETRY_MS = 5 * 60 * 1000;
 const NASA_TTL_MS = 60 * 60 * 1000;
 /** Most episodes a Tubi series gives, and results a search gives. */
 const MAX_EPISODES = 200;
@@ -162,7 +164,7 @@ function tubiCategories() {
 
 /**
  * Every title in Tubi's categories, for searching. Loaded a few categories at a time. If a category
- * won't load, this search uses the rest, but they aren't kept, so a later search tries it again.
+ * won't load, the rest are kept for a few minutes, then a search tries it again.
  */
 async function tubiCatalog() {
   const { entries, partial } = await cache.remember('tubi:catalog', CATALOG_TTL_MS, async () => {
@@ -187,7 +189,7 @@ async function tubiCatalog() {
     if (!seen.size) throw new Error("Couldn't load Tubi's titles. Try again in a moment.");
     return { entries: [...seen.values()], partial };
   });
-  if (partial) cache.delete('tubi:catalog');
+  if (partial) cache.set('tubi:catalog', { entries, partial }, CATALOG_RETRY_MS);
   return entries;
 }
 

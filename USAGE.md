@@ -274,7 +274,7 @@ These only work with `untrusted-links="true"` in the snippet, as they can come f
 
 | Link | Example | Notes |
 |---|---|---|
-| Video or audio file | `https://.../movie.mp4` (also .webm, .mov, .m4v, .mp3, .m4a, .ogg) | Plays on the world's own video player, which takes the browser screen's place while it plays (see below). Stays in sync to within about a second. Audio files (.mp3, .m4a, .wav, .flac, .ogg, .opus) play in the browser screen instead, as Unity's player on Quest doesn't play audio on its own. |
+| Video or audio file | `https://.../movie.mp4` (also .webm, .mov, .m4v, .mp3, .m4a, .ogg) | Plays on the world's own video player, which takes the browser screen's place while it plays (see below). Stays in sync to within about a second. Audio files (.mp3, .m4a, .aac, .wav, .flac, .ogg, .opus) play in the browser screen instead, as Unity's player on Quest doesn't play audio on its own. |
 | Google Drive file | `https://drive.google.com/file/d/<id>/view` | Shared with anyone who has the link. Played from Drive's download address, like a file. |
 | Dropbox file | `https://www.dropbox.com/scl/fi/<id>/movie.mp4?rlkey=<key>&dl=0` | Its share link. Played like a file (the link is changed to give the file itself). |
 | HLS stream | `https://.../index.m3u8` | Live streams play until someone skips; recorded ones stay in sync. The server must allow other sites to load it (CORS). |

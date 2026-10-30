@@ -160,11 +160,15 @@ function tubiCategories() {
   });
 }
 
-/** Every title in Tubi's categories, for searching. Loaded a few categories at a time. */
-function tubiCatalog() {
-  return cache.remember('tubi:catalog', CATALOG_TTL_MS, async () => {
+/**
+ * Every title in Tubi's categories, for searching. Loaded a few categories at a time. If a category
+ * won't load, this search uses the rest, but they aren't kept, so a later search tries it again.
+ */
+async function tubiCatalog() {
+  const { entries, partial } = await cache.remember('tubi:catalog', CATALOG_TTL_MS, async () => {
     const categories = await tubiCategories();
     const seen = new Map();
+    let partial = false;
     let next = 0;
     const worker = async () => {
       while (next < categories.length) {
@@ -176,13 +180,15 @@ function tubiCatalog() {
             if (known) known.categories.push(title);
             else seen.set(item.link, { item, categories: [title] });
           }
-        } catch (e) { /* a category that won't load is left out */ }
+        } catch (e) { partial = true; /* left out of this search */ }
       }
     };
     await Promise.all(Array.from({ length: 4 }, worker));
     if (!seen.size) throw new Error("Couldn't load Tubi's titles. Try again in a moment.");
-    return [...seen.values()];
+    return { entries: [...seen.values()], partial };
   });
+  if (partial) cache.delete('tubi:catalog');
+  return entries;
 }
 
 /** Searches Tubi's titles (and category names) for every word of the search. */

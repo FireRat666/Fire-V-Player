@@ -737,6 +737,7 @@ var Core = class {
       asked = scene.QueryComponents(query);
     } catch (e) {
       console.warn('[Core] Could not ask for the scene\'s material textures:', e);
+      materials.forEach(material => { delete material.__fvpAsked; }); // a later scan asks again
       return;
     }
     Promise.resolve(asked)

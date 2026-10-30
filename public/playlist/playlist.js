@@ -226,6 +226,8 @@ var Playlist = class {
           this.core.player.lastStartTime = json.data.newLastStartTime;
           this.core.player.currentTime = json.data.newCurrentTime;
           if (typeof json.data.paused === 'boolean') this.core.player.paused = json.data.paused;
+          this.togglePause.innerText = this.core.player.paused ? 'Play' : 'Pause';
+          this.togglePause.className = this.core.player.paused ? 'button green' : 'button red';
           // The UI updater will pick up the new lastStartTime on its next interval.
           // To make the change immediate, we can manually update the relevant elements.
           const currentTimeBar = document.querySelector('.currentTime');
@@ -600,8 +602,16 @@ var Playlist = class {
     const raw = (this.core.player && Array.isArray(this.core.player.lists)) ? this.core.player.lists : [];
     const shared = raw.filter(l => l && typeof l.link === 'string' && typeof l.id === 'string')
       .map(l => ({ id: l.link, label: String(l.title || 'Playlist'), shared: l.id, by: l.by && l.by.name ? String(l.by.name) : '' }));
-    const seen = new Set();
-    return this.savedLists.concat(shared, this.extraLists || []).filter(l => !seen.has(l.id) && seen.add(l.id));
+    // A link in both the snippet's lists and the shared ones keeps its first entry, with the shared
+    // details added (on a copy) so it still gets its Remove button.
+    const byId = new Map();
+    const out = [];
+    this.savedLists.concat(shared, this.extraLists || []).forEach(l => {
+      const had = byId.get(l.id);
+      if (!had) { const copy = Object.assign({}, l); byId.set(l.id, copy); out.push(copy); }
+      else if (l.shared && !had.shared) { had.shared = l.shared; had.by = l.by; }
+    });
+    return out;
   }
   // Saves a list to the room's shared lists (the host, or anyone while unlocked). The server checks it works.
   shareList(id) {

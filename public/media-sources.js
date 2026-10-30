@@ -256,8 +256,16 @@ var MediaSources = (() => {
     const full = /^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : `https://${s}`;
     const media = detect(full);
     if (!media || media.type !== 'youtube') return false;
-    const match = /^.*(youtu\.be\/|v\/|u\/\w\/|embed\/|shorts\/|live\/|watch\?v=|&v=)([^#&?\/]*)/.exec(full);
-    return match && /^[A-Za-z0-9_-]{11}$/.test(match[2]) ? match[2] : false;
+    // Only the link's own path and query: a URL nested in another parameter doesn't count.
+    const u = parseUrl(full);
+    if (!u) return false;
+    const parts = u.pathname.split('/').filter(Boolean);
+    const host = u.hostname.toLowerCase();
+    let id = '';
+    if (host === 'youtu.be') id = parts[0] || '';
+    else if (['embed', 'shorts', 'live', 'v', 'e'].includes(parts[0])) id = parts[1] || '';
+    else id = u.searchParams.get('v') || '';
+    return /^[A-Za-z0-9_-]{11}$/.test(id) ? id : false;
   }
 
   return { detect, nameFromLink, parseUrl, isTrusted, youtubeId, UNTRUSTED_MESSAGE };

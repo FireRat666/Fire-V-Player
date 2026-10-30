@@ -107,6 +107,7 @@ class App {
         singers: player.singers,
         currentTrack: player.currentTrack,
         lastStartTime: player.lastStartTime,
+        currentTime: player.currentTime || 0, // where a paused track is held
         locked: player.locked,
         canTakeOver: player.canTakeOver,
         canVote: player.canVote,

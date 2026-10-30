@@ -325,8 +325,8 @@ All parameters are optional unless marked as **(Required)**.
 | :--- | :--- | :--- |
 | `src` | **(Required)** The URL to your running Fire-V-Player instance's `playlist.js` or `karaoke.js` file. | N/A |
 | `instance` | **(Required)** A unique ID for the player instance. All users with the same ID will see the same player. | The current page URL |
-| `playlist` | The playlist to load by default if the instance is empty: a YouTube playlist ID (e.g., `PL...`) or link, or a link to a list of links (a `.txt` or `.m3u` file, a Google Doc, a Drive folder or an archive.org item; see [Playlists of links](#playlists-of-links)). | `""` |
-| `playlists` | Saved playlists for the Lists tab: comma separated YouTube playlists (IDs or links), links to lists of links, and single video or stream links, up to 10 with `playlist`. See [Saved lists](#saved-lists). | `""` |
+| `playlist` | The playlist to load by default if the instance is empty: a YouTube playlist ID (e.g., `PL...`) or link, or a link to a list of links (a `.txt` or `.m3u` file, a Google Doc, a Drive folder or an archive.org item; see [Playlists of links](#playlists-of-links)), a Tubi category or series, or a NASA+ series (see [Links from other sites](#links-from-other-sites)). | `""` |
+| `playlists` | Saved playlists for the Lists tab: comma separated YouTube playlists (IDs or links), links to lists of links, Tubi categories and series, NASA+ series, and single video or stream links, up to 10 with `playlist`. See [Saved lists](#saved-lists). | `""` |
 | `youtube` | The URL of a single YouTube video to use as the default "silent" video when nothing is playing. | A silent visual video |
 | `volume` | The initial volume, from `0` to `100`. | `40` |
 | `mute` | Whether the player should start muted. | `false` |

@@ -155,7 +155,9 @@ async function hostSkip(app, ws, isForward) {
     let newCurrentTime;
     if (player.paused) {
       // Paused stays paused, at the new point (the time is held in currentTime while paused).
+      const trackDuration = ((player.playlist[player.currentTrack] || {}).duration || 0) / 1000;
       newCurrentTime = Math.max(0, (player.currentTime || 0) + delta);
+      if (trackDuration > 0) newCurrentTime = Math.min(newCurrentTime, trackDuration);
       player.lastStartTime = now - newCurrentTime;
     } else {
       // To skip forward in time, we subtract from the start timestamp.

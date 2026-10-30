@@ -376,7 +376,12 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
     /** Plays where the world is (joining, or rejoining, an instance that has a playlist), once. */
     playInitialSync() {
       if (!this.playerData || !this.playerData.playlist || !this.playerData.playlist.length || this.initialSyncComplete) return;
-      this.playVidya(this.playerData.currentTrack, this.playerData.currentTime, true);
+      // The sync may have waited (up to DEFAULT_VIDEO_WAIT_MS) for the player, so a playing track
+      // starts where it is now; a paused one at its stored time.
+      const d = this.playerData;
+      const live = (Date.now() / 1000) - (this.clockSkew || 0) - d.lastStartTime;
+      const start = !d.paused && Number.isFinite(live) ? Math.max(0, live) : d.currentTime;
+      this.playVidya(d.currentTrack, start, true);
       this.initialSyncComplete = true;
       // This is the first sync, so we should start with a fast interval.
       if (this.autoSync) {
@@ -503,6 +508,10 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
           // Merge new data into the existing player state.
           // This prevents the playlist from being wiped out on updates that don't include it.
           this.playerData = Object.assign(this.playerData || {}, json.data.video);
+        }
+        // How far this device's clock is from the server's, for working out the live position later.
+        if (json.data.video && Number.isFinite(Number(json.data.video.lastStartTime)) && Number.isFinite(Number(json.data.video.currentTime)) && !json.data.video.paused) {
+          this.clockSkew = (Date.now() / 1000) - (Number(json.data.video.lastStartTime) + Number(json.data.video.currentTime));
         }
 
         // The specific 'set-track' logic is now handled by the TRACK_CHANGED command.

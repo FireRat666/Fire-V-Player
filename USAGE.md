@@ -162,7 +162,9 @@ When someone can't play a video, the panel shows the suggested replacement with 
 In karaoke mode the Singers button (and the Join/Leave Queue button) opens the same panel as a **Singers panel**:
 
 - **Now singing** shows who is singing which song. The host and the person singing get **Restart Song** and **Stop Song**.
-- **Singers** is the queue. The host can **Play & Sing** anyone, move singers **Up** / **Down** and **Remove** them. The singer at the top can start their own song, and anyone can **Remove Me**.
+- **Singers** is the queue. The host can **Play & Sing** anyone, move singers **Up** / **Down** and **Remove** them, and anyone can **Remove Me**.
+- While the player is unlocked, the singer at the top can start their own song with **Play & Sing**, but only when no song is playing, so nobody can cut into someone else's song. While it's locked, only the host can start songs.
+- While it's locked, other people can still pick a song with **Sing It**. It waits in the queue until the host presses **Approve** or **Reject**. Unlocking approves every waiting song.
 - **Search** finds a song (or takes a pasted video link). **Sing It** adds you to the queue with that song. You can be in the queue once.
 - **More...** has the host controls (lock, take over, Auto Advance, which starts the next singer when a song ends), seek, and your own player's skip, Auto Sync and Captions.
 

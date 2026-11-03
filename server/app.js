@@ -501,6 +501,9 @@ class App {
       case Commands.MOVE_SINGER:
         await karaokeHandler.moveSinger(this, ws, msg.data);
         break;
+      case Commands.APPROVE_SINGER:
+        await karaokeHandler.approveSinger(this, ws, msg.data);
+        break;
       case Commands.PLAY_KARAOKE_TRACK:
         await karaokeHandler.playKaraokeTrack(this, ws, msg.data);
         break;
@@ -921,7 +924,7 @@ class App {
             // A track has finished.
             if (player.isKaraoke) {
               // In a karaoke context, a song ending means we either stop or auto-advance.
-              if (player.autoAdvance && player.singers.length > 0) {
+              if (player.autoAdvance && player.singers.some(karaokeHandler.isApproved)) {
                 await karaokeHandler.playNextKaraokeSong(this, instanceId);
               } else {
                 // If auto-advance is off, or the singer list is empty, stop the player.
@@ -1302,7 +1305,8 @@ class App {
           name: s.user.name,
           p: s.timestamp,
           id: s.user.id,
-          v: s.video
+          v: s.video,
+          a: karaokeHandler.isApproved(s)
         }));
       }
 
@@ -1427,7 +1431,8 @@ class App {
       name: s.user.name,
       p: s.timestamp,
       id: s.user.id,
-      v: s.video
+      v: s.video,
+      a: karaokeHandler.isApproved(s)
     }));
 
     // Send the specific update to all connected UIs.

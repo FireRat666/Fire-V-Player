@@ -77,6 +77,7 @@ var Commands = {
   MOVE_SINGER: 'move-singer',
   SINGER_MOVED: 'singer-moved',
   PLAY_KARAOKE_TRACK: 'play-karaoke-track',
+  APPROVE_SINGER: 'approve-singer', // the host's UI -> server: userId of a singer whose song waits for approval
   SINGER_LIST_UPDATED: 'singer-list-updated',
   RESTART_SONG: 'restart-song',
   TOGGLE_AUTO_ADVANCE: 'toggle-auto-advance',

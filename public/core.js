@@ -1099,11 +1099,15 @@ var Core = class {
       inside.add(part(d));
       if (!wasOutside) return;
       clearTimeout(hasStartedTimeout);
-      if(triggerEnter && this.player && this.player.players && this.player.players.length && this.player.players[0].id === window.user.id && !hasStarted) {
+      // The next approved singer starts their song by stepping in, unless one is already playing.
+      const next = this.nextSinger();
+      if(triggerEnter && next && next.id === window.user.id && !hasStarted) {
         if(this.player.locked) {
           this.showToast("Player is locked! The host needs to unlock it first!");
+        }else if(this.player.playlist && this.player.playlist.length) {
+          this.showToast("Wait for the current song to finish!");
         }else{
-          this.sendMessage({path: Commands.ADD_TO_PLAYLIST, data: this.player.players[0].v, isYoutubeWebsite: false, skipUpdate: true });
+          this.sendMessage({path: Commands.ADD_TO_PLAYLIST, data: next.v, isYoutubeWebsite: false, skipUpdate: true });
           this.sendMessage({path: Commands.SET_TRACK, data: 0});
           hasStarted = true;
         }
@@ -1116,8 +1120,8 @@ var Core = class {
       if (inside.size > 0) return;
       clearTimeout(hasStartedTimeout);
       hasStartedTimeout = setTimeout(() => {
-        if(triggerExit && this.player && this.player.players && this.player.players.length && hasStarted) {
-          const player = this.player.players[0];
+        const player = this.nextSinger();
+        if(triggerExit && player && hasStarted) {
           if(player.id === window.user.id) {
               this.sendMessage({path: Commands.REMOVE_FROM_PLAYERS, data: player.id });
               this.sendMessage({path: Commands.STOP});
@@ -1468,6 +1472,12 @@ var Core = class {
       : 'Only space admins can take control this way.';
     this.showToast(msg);
     if (this.playlistPanel) this.playlistPanel.setStatus(msg);
+  }
+
+  // Karaoke: the next singer in the queue whose song is approved (see karaokeHandler).
+  nextSinger() {
+    const list = this.player && Array.isArray(this.player.players) ? this.player.players : [];
+    return list.find(p => p.a !== false) || null;
   }
 
   // ---------------------------------------------------------------- blacklist

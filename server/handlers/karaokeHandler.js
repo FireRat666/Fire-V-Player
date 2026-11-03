@@ -9,6 +9,13 @@ const Commands = require('../../public/commands.js');
 const hostHandler = require('./hostHandler.js');
 const media = require('../media.js');
 
+// A song added by someone other than the host while the player is locked waits for the host
+// to approve it. Singers saved before approvals existed have no flag and count as approved.
+const isApproved = singer => singer.approved !== false;
+
+// The singer whose song plays next: the first approved one in the queue.
+const nextSingerIndex = player => player.singers.findIndex(isApproved);
+
 /**
  * Adds a user and their selected karaoke track to the instance singer queue.
  * Validates link permissions, ensures no duplicate user queues, and broadcasts
@@ -47,14 +54,16 @@ async function addToPlayers(app, ws, video) {
   }
 
   // Add a singer object to the persistent queue.
+  const approved = !player.locked || player.host.id === ws.u.id;
   player.singers.push({
     user: ws.u,
     video: video,
-    timestamp: new Date().getTime()
+    timestamp: new Date().getTime(),
+    approved
   });
   
   // Send a granular update instead of the whole list for efficiency.
-  const newSingerPayload = { name: ws.u.name, p: player.singers[player.singers.length - 1].timestamp, id: ws.u.id, v: video };
+  const newSingerPayload = { name: ws.u.name, p: player.singers[player.singers.length - 1].timestamp, id: ws.u.id, v: video, a: approved };
   player.sockets.forEach(socket => app.send(socket, Commands.SINGER_ADDED, { player: newSingerPayload }));
   console.log(`${ws.u.name} was added to the singer list. Broadcasting SINGER_ADDED.`);
   await app.savePlayerState(ws.i);
@@ -162,10 +171,12 @@ async function moveSinger(app, ws, { userId, direction }) {
  */
 async function playNextKaraokeSong(app, instanceId) {
   const player = app.videoPlayers[instanceId];
-  if (!player || player.singers.length === 0) return;
-  
-  // The singer at the top of the queue is next.
-  const nextSinger = player.singers[0];
+  if (!player) return;
+  const index = nextSingerIndex(player);
+  if (index === -1) return;
+
+  // The first approved singer in the queue is next.
+  const nextSinger = player.singers[index];
   const videoToPlay = nextSinger.video;
   if (!videoToPlay) return;
 
@@ -182,7 +193,7 @@ async function playNextKaraokeSong(app, instanceId) {
   player.lastStartTime = (new Date().getTime() / 1000);
   
   // Remove the singer from the upcoming queue *after* getting their info.
-  player.singers.shift();
+  player.singers.splice(index, 1);
   
   console.log(`Karaoke track started for ${nextSinger.user.name} in instance ${instanceId}`);
 
@@ -240,25 +251,66 @@ async function playKaraokeTrack(app, ws, data) {
       return;
     }
 
-    // Move the selected singer to the front of the queue.
+    // The host playing a waiting song approves it. Move the singer to the front of the queue.
+    player.singers[singerIndex].approved = true;
     if (singerIndex > 0) {
       const [singerToPlay] = player.singers.splice(singerIndex, 1);
       player.singers.unshift(singerToPlay);
     }
   } else {
-    // No specific singer, play the one at the top.
-    // The person initiating must be the host, or the singer whose turn it is.
-    const nextSinger = player.singers.length > 0 ? player.singers[0] : null;
-    if (!nextSinger) return; // No one to play
-    const isTheSinger = nextSinger.user.id === ws.u.id;
-
-    if (!isHost && !isTheSinger) {
-        app.send(ws, Commands.ERROR, { message: "Only the host or the current singer can start the song." });
+    // No specific singer: play the next approved one. The host can always start it. Anyone
+    // else only while the player is unlocked, when it's their turn, and no song is playing, so
+    // nobody can cut into someone's song.
+    const index = nextSingerIndex(player);
+    if (index === -1) return; // No one to play
+    if (!isHost) {
+      let message = null;
+      if (player.locked) message = "The player is locked: only the host can start songs.";
+      else if (player.singers[index].user.id !== ws.u.id) message = "Only the host or the next singer can start the song.";
+      else if (player.playlist.length > 0) message = "Wait for the current song to finish.";
+      if (message) {
+        app.send(ws, Commands.ERROR, { message });
         return;
+      }
     }
   }
   // Now that the correct singer is at the front, play the song.
   await playNextKaraokeSong(app, ws.i);
+}
+
+/**
+ * Approves a song waiting in the singer queue (added while the player was locked). Host-only.
+ * Rejecting one is removeFromPlayers.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - Client WebSocket requesting the approval.
+ * @param {string} userId - The waiting singer's user ID.
+ * @returns {Promise<void>}
+ */
+async function approveSinger(app, ws, userId) {
+  app.onlyIfHost(ws, async () => {
+    const player = app.videoPlayers[ws.i];
+    const singer = player && player.singers.find(s => s.user.id === userId);
+    if (!singer || isApproved(singer)) return;
+    singer.approved = true;
+    app.broadcastSingerList(ws.i);
+    await app.savePlayerState(ws.i);
+  });
+}
+
+/**
+ * Approves every waiting song, for when the host unlocks the player (anyone can add then).
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {string} instanceId - Room/instance identifier.
+ * @returns {boolean} Whether any song was waiting.
+ */
+function approveAll(app, instanceId) {
+  const player = app.videoPlayers[instanceId];
+  const waiting = player ? player.singers.filter(s => !isApproved(s)) : [];
+  waiting.forEach(s => { s.approved = true; });
+  if (waiting.length) app.broadcastSingerList(instanceId);
+  return waiting.length > 0;
 }
 
 /**
@@ -317,15 +369,8 @@ module.exports = {
     playKaraokeTrack,
     restartSong,
     toggleAutoAdvance,
-    playNextKaraokeSong
-};
-
-module.exports = {
-    addToPlayers,
-    removeFromPlayers,
-    moveSinger,
-    playKaraokeTrack,
-    restartSong,
-    toggleAutoAdvance,
-    playNextKaraokeSong
+    playNextKaraokeSong,
+    approveSinger,
+    approveAll,
+    isApproved
 };

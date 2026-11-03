@@ -1554,7 +1554,7 @@ var FirePlaylistPanel = class {
   singIt(v) {
     if (this.isInQueue()) { this.setStatus('You are already in the singer queue.'); return; }
     this.send(Commands.ADD_TO_PLAYERS, v);
-    this.setStatus(`You're in the queue to sing "${v.title}"`);
+    this.setStatus(this.canAdd() ? `You're in the queue to sing "${v.title}"` : `"${v.title}" will be added once the host approves it`);
     this.setTab('playlist');
   }
 
@@ -2090,23 +2090,38 @@ var FirePlaylistPanel = class {
     this.setButtons(slot, defs.slice(0, 4));
   }
 
-  // Karaoke: one singer in the queue. `s` is { id, name, v: video }.
+  // Karaoke: one singer in the queue. `s` is { id, name, v: video, a: approved }. A song added
+  // while the player was locked waits (a === false) until the host approves or rejects it.
   fillSingerRow(slot, s, i, singers, host) {
     const me = !!(window.user && s.id === window.user.id);
     const v = s.v || {};
-    this.setStyle(slot.row, 'backgroundColor', me ? '#2e4a3a' : (i % 2 === 0 ? '#2a2a33' : '#31313c'));
+    const waiting = s.a === false;
+    this.setStyle(slot.row, 'backgroundColor', waiting ? '#4a3f1e' : me ? '#2e4a3a' : (i % 2 === 0 ? '#2a2a33' : '#31313c'));
     this.setText(slot.title, `${i + 1}. ${s.name || 'Someone'}${me ? ' (you)' : ''}`);
     const dur = v.duration ? this.timeCode(v.duration / 1000) : '';
-    this.setText(slot.sub, `will sing ${v.title || 'a song'}${dur ? '  -  ' + dur : ''}`);
+    this.setText(slot.sub, `${waiting ? 'Waiting for the host to approve:  ' : 'will sing '}${v.title || 'a song'}${dur ? '  -  ' + dur : ''}`);
     this.setThumb(slot, v.thumbnail, v.link);
 
     const defs = [];
-    // The host can start any singer; a singer can start themselves when they're up next.
-    if (host || (i === 0 && me)) {
-      defs.push({ text: 'Play & Sing', color: '#2e7d32', fn: () => this.send(Commands.PLAY_KARAOKE_TRACK, (host && i > 0) ? { userId: s.id } : null) });
-    }
-    if (host || me) {
-      defs.push({ text: me ? 'Remove Me' : 'Remove', color: '#c62828', fn: () => this.send(Commands.REMOVE_FROM_PLAYERS, s.id) });
+    if (waiting) {
+      if (host) {
+        defs.push({ text: 'Approve', color: '#2e7d32', fn: () => this.send(Commands.APPROVE_SINGER, s.id) });
+        defs.push({ text: 'Reject', color: '#c62828', fn: () => this.send(Commands.REMOVE_FROM_PLAYERS, s.id) });
+      } else if (me) {
+        defs.push({ text: 'Remove Me', color: '#c62828', fn: () => this.send(Commands.REMOVE_FROM_PLAYERS, s.id) });
+      }
+    } else {
+      // The host can start any singer. Otherwise, while unlocked, only the next singer can start
+      // their own song, and only once nothing is playing, so nobody cuts into someone's song.
+      const p = this.core.player || {};
+      const next = singers.find(x => x.a !== false);
+      const playing = !!(p.playlist && p.playlist.length);
+      if (host || (me && next === s && !p.locked && !playing)) {
+        defs.push({ text: 'Play & Sing', color: '#2e7d32', fn: () => this.send(Commands.PLAY_KARAOKE_TRACK, (host && next !== s) ? { userId: s.id } : null) });
+      }
+      if (host || me) {
+        defs.push({ text: me ? 'Remove Me' : 'Remove', color: '#c62828', fn: () => this.send(Commands.REMOVE_FROM_PLAYERS, s.id) });
+      }
     }
     if (host) {
       if (i > 0) defs.push({ text: 'Up', fn: () => this.send(Commands.MOVE_SINGER, { userId: s.id, direction: 'up' }) });

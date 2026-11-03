@@ -22,6 +22,8 @@ var SCREEN_RESOLUTIONS = [1280, 1600, 1920];
 var RESOLUTION_PREF_KEY = 'fire-v-player-resolution';
 // Where each viewer keeps their hand controls (see HAND_PLACES), remembered on their device.
 var HAND_PLACE_PREF_KEY = 'fire-v-player-hand-place';
+// Whether each viewer has folded their hand controls away to just the show/hide button.
+var HAND_COLLAPSED_PREF_KEY = 'fire-v-player-hand-collapsed';
 // The places the hand controls can go, in the order the panel's button steps through them.
 // attach is the SDK's LegacyAttachmentPosition (HEAD 0, LEFT_HAND 2, RIGHT_HAND 3); position and
 // rotation are in that attachment's own Unity axes. On a hand, -X is the back of the left hand
@@ -32,6 +34,8 @@ var HAND_PLACES = {
   right: { label: 'Right Wrist', attach: 3, position: [0, 0.046, 0.07], rotation: [0, 270, 180], scale: 0.1 },
   // The bottom right of what the player sees, for desktop players, whose hands don't turn.
   view: { label: 'In View', attach: 0, position: [0.2, -0.16, 0.5], rotation: [0, 0, 0], scale: 0.1 },
+  // Further into the bottom right corner and a little smaller, out of the way.
+  corner: { label: 'View Corner', attach: 0, position: [0.3, -0.2, 0.5], rotation: [0, 0, 0], scale: 0.075 },
   front: { label: 'In Front', scale: 0.15 },
   off: { label: 'Off' }
 };
@@ -85,6 +89,8 @@ var Core = class {
     this.setOrDefault("data-vol-up-icon-url", `${proto}://${this.hostUrl}/assets/VolUp.png`);
     this.setOrDefault("data-vol-down-icon-url", `${proto}://${this.hostUrl}/assets/VolDown.png`);
     this.setOrDefault("data-mute-icon-url", `${proto}://${this.hostUrl}/assets/Mute.png`);
+    this.setOrDefault("data-controls-show-icon-url", `${proto}://${this.hostUrl}/assets/ControlsShow.png`);
+    this.setOrDefault("data-controls-hide-icon-url", `${proto}://${this.hostUrl}/assets/ControlsHide.png`);
     this.setOrDefault("data-skip-forward-icon-url", `${proto}://${this.hostUrl}/assets/Forward.png`);
     this.setOrDefault("data-skip-backward-icon-url", `${proto}://${this.hostUrl}/assets/Backwards.png`);
     this.setOrDefault("data-reload-icon-url", `${proto}://${this.hostUrl}/assets/Reload.png`);
@@ -1847,15 +1853,22 @@ var Core = class {
       rotation: this.toVector3(rotation),
       scale: new BS.Vector3(place.scale, place.scale, place.scale)
     });
-    // Four on top, three staggered under them.
+    // The show/hide button on the left, then the volume row on top and the playback row under it.
+    // Reload is at the far end from Volume Up, so reaching for the volume doesn't reload the screen.
+    const group = await this.makeObject('FireVPlayer_HandButtons', { parent: wrapper });
+    this.handToggleButton = await this.setupSwapButton(wrapper, 'HandToggle', new BS.Vector3(-1.0, 0.175, -0.3),
+      { show: this.params["data-controls-show-icon-url"], hide: this.params["data-controls-hide-icon-url"] },
+      () => this.toggleHandControls(), 0.36);
+    this.handButtonGroup = group;
+    this.showHandButtons();
     const buttons = [
-      ['Mute', -0.57, 0.4, "data-mute-icon-url", () => this.mute()],
-      ['VolumeDown', -0.19, 0.4, "data-vol-down-icon-url", () => this.volume(false)],
-      ['VolumeUp', 0.19, 0.4, "data-vol-up-icon-url", () => this.volume(true)],
-      ['Reload', 0.57, 0.4, "data-reload-icon-url", () => this.reloadScreen()],
-      ['SkipBack', -0.38, -0.05, "data-skip-backward-icon-url", () => this.sendBrowserMessage({path: Commands.SKIP_BACK})],
-      ['SkipForward', 0, -0.05, "data-skip-forward-icon-url", () => this.sendBrowserMessage({path: Commands.SKIP_FORWARD})],
-      ['Playlist', 0.38, -0.05, "data-playlist-icon-url", () => this.openPlaylist('front')]
+      ['Mute', -0.38, 0.4, "data-mute-icon-url", () => this.mute()],
+      ['VolumeDown', 0, 0.4, "data-vol-down-icon-url", () => this.volume(false)],
+      ['VolumeUp', 0.38, 0.4, "data-vol-up-icon-url", () => this.volume(true)],
+      ['Reload', -0.57, -0.05, "data-reload-icon-url", () => this.reloadScreen()],
+      ['SkipBack', -0.19, -0.05, "data-skip-backward-icon-url", () => this.sendBrowserMessage({path: Commands.SKIP_BACK})],
+      ['SkipForward', 0.19, -0.05, "data-skip-forward-icon-url", () => this.sendBrowserMessage({path: Commands.SKIP_FORWARD})],
+      ['Playlist', 0.57, -0.05, "data-playlist-icon-url", () => this.openPlaylist('front')]
     ];
     for (const [button, x, y, icon, callback] of buttons) {
       if (root !== this.handControls) return; // removed meanwhile
@@ -1864,11 +1877,11 @@ var Core = class {
       const click = () => { Promise.resolve(callback()).catch(() => {}); };
       if (button === 'Mute') {
         // Shows Unmute while muted, like the one under the screen.
-        this.handMuteButton = await this.setupSwapButton(wrapper, 'HandMute', at,
+        this.handMuteButton = await this.setupSwapButton(group, 'HandMute', at,
           { mute: this.params[icon], unmute: this.params["data-unmute-icon-url"] }, click, 0.36);
         this.updateScreenButtons();
       } else {
-        await this.makeIconButton(`FireVPlayer_Hand${button}`, wrapper, at, 0.36, this.params[icon], click);
+        await this.makeIconButton(`FireVPlayer_Hand${button}`, group, at, 0.36, this.params[icon], click);
       }
     }
     if (root !== this.handControls) return;
@@ -1906,9 +1919,25 @@ var Core = class {
       rotation: new BS.Vector3(30, yaw * 180 / Math.PI, 0)
     };
   }
+  // Folded away, the hand controls are just the show/hide button. Remembered on this device.
+  handControlsCollapsed() {
+    try { return localStorage.getItem(HAND_COLLAPSED_PREF_KEY) === 'true'; } catch (e) { return false; }
+  }
+  toggleHandControls() {
+    const collapsed = !this.handControlsCollapsed();
+    try { localStorage.setItem(HAND_COLLAPSED_PREF_KEY, String(collapsed)); } catch (e) {}
+    this.showHandButtons();
+  }
+  showHandButtons() {
+    const collapsed = this.handControlsCollapsed();
+    this.setActive(this.handButtonGroup, !collapsed);
+    this.showSwapButton(this.handToggleButton, collapsed ? 'show' : 'hide');
+  }
   removeHandControls() {
     this.handPose = null;
     this.handMuteButton = null;
+    this.handToggleButton = null;
+    this.handButtonGroup = null;
     if (!this.handControls) return;
     console.log('[Core] Removing the hand controls.');
     this.destroyObject(this.handControls);
@@ -1979,7 +2008,7 @@ var Core = class {
     this.setOrDefault("play-pause-button", 'true');
     this.setOrDefault("hand-controls", 'false');
     // Where the hand buttons start: auto (left wrist in VR, in view on desktop), left, right,
-    // view, front or off. Each viewer can choose another in the panel (HAND_PLACES).
+    // view, corner, front or off. Each viewer can choose another in the panel (HAND_PLACES).
     this.setOrDefault("hand-controls-place", 'auto');
     // Fine-tunes where the hand buttons sit on the wrist, in the left hand's own Unity axes
     // (mirrored for the right): "x y z" metres and "x y z" degrees. Empty uses the built-in layout.

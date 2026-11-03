@@ -77,6 +77,9 @@ var Commands = {
   MOVE_SINGER: 'move-singer',
   SINGER_MOVED: 'singer-moved',
   PLAY_KARAOKE_TRACK: 'play-karaoke-track',
+  PASTE_CODE_REQUEST: 'paste-code-request', // a UI -> server: give me a code for pasting from my phone (see server/paste.js)
+  PASTE_CODE: 'paste-code', // server -> that UI: { code, expiresIn }
+  PASTE_RECEIVED: 'paste-received', // server -> that UI: { text } sent from the phone, for the search box
   APPROVE_SINGER: 'approve-singer', // the host's UI -> server: userId of a singer whose song waits for approval
   SINGER_LIST_UPDATED: 'singer-list-updated',
   RESTART_SONG: 'restart-song',

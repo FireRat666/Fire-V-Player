@@ -25,6 +25,42 @@ var ROW_CHUNK = 4;
 var SEARCH_CACHE_SIZE = 10;
 var SEARCH_CACHE_MS = 6 * 60 * 60 * 1000;
 var SEARCH_COLOR = '#00897b';
+// Set on a device whose app didn't answer a Speak request, so the button stays hidden there.
+var STT_FAILED_KEY = 'fire-v-player-stt-failed';
+// The Info view's QR code: pixels per square, and the white border in squares.
+var QR_MODULE_PX = 9;
+var QR_MARGIN = 3;
+// Where the Info view sends people who want the player in their own world.
+var SETUP_GUIDE_URL = 'https://firer.at/fvp'; // redirects to firer.at/pages/FireVPlayer/
+// SETUP_GUIDE_URL's QR code (1 = dark), drawn from boxes on the Info view, as a picture there
+// didn't reliably show. Made with: qrencode -t ASCII -m 0 -l Q 'https://firer.at/fvp'
+var SETUP_GUIDE_QR = [
+  '1111111011000011001111111',
+  '1000001000111111001000001',
+  '1011101010110001001011101',
+  '1011101011110010001011101',
+  '1011101000000101001011101',
+  '1000001011001001001000001',
+  '1111111010101010101111111',
+  '0000000011010001000000000',
+  '0101011111110110011101101',
+  '0010000010111110111000001',
+  '0100001011011110100100011',
+  '1000100001000111010010000',
+  '1110111110011010111001011',
+  '0101000110101000001101101',
+  '1000001100001010111110101',
+  '0110010111111100111010010',
+  '1111011001000011111111100',
+  '0000000011100101100011001',
+  '1111111010100001101011011',
+  '1000001011101101100011110',
+  '1011101000101010111111001',
+  '1011101010000001100111100',
+  '1011101001011110000110101',
+  '1000001011100010110001000',
+  '1111111001110111111100011'
+];
 // The server works on 3 list previews at a time per connection and refuses more, so the rest wait.
 // What Search & Add can search: the source button goes through them in this order.
 var SEARCH_SOURCES = {
@@ -91,7 +127,7 @@ var FirePlaylistPanel = class {
     this.renderTimer = null;
     this.tickTimer = null;
     this.statusTimer = null;
-    this.view = 'main';       // 'main' | 'more'
+    this.view = 'main';       // 'main' | 'more' | 'info'
     this.autoSync = false;
     this.seekQuery = '';
     this.linkQuery = '';
@@ -498,8 +534,12 @@ var FirePlaylistPanel = class {
     await this.label(header, this.karaoke ? 'Fire-V-Player Karaoke' : 'Fire-V-Player', { fontSize: '30px', fontWeight: 'bold', flexGrow: 1 });
     this.hostLabel = await this.label(header, '', { fontSize: '20px', color: '#bbbbbb', marginRight: '12px' });
     await this.button(header, 'Refresh', () => this.refresh(true), { backgroundColor: GREY });
+    this.infoBtn = await this.button(header, 'Info', () => this.setView(this.view === 'info' ? 'main' : 'info'), { backgroundColor: GREY });
     this.moreBtn = await this.button(header, 'More...', () => this.setView(this.view === 'more' ? 'main' : 'more'), { backgroundColor: '#2e7d32' });
-    await this.button(header, 'Close', () => this.close(), { backgroundColor: GREY });
+    await this.button(header, 'X', () => this.close(), {
+      backgroundColor: '#c62828', fontSize: '30px', fontWeight: 'bold', width: '60px', height: '56px',
+      paddingLeft: '0px', paddingRight: '0px', paddingTop: '0px', paddingBottom: '0px', marginLeft: '14px', textAlign: 'center'
+    });
 
     // Now playing
     const nowCard = this.nowCard = await this.div(rootEl, {
@@ -596,11 +636,37 @@ var FirePlaylistPanel = class {
       // What to search: YouTube, Internet Archive films and TV, Tubi or NASA+ (not for karaoke).
       if (!this.karaoke) this.sourceBtn = await this.button(this.searchRow, 'YouTube', () => this.toggleSearchSource(), { backgroundColor: '#c62828', width: '170px' });
       await this.button(this.searchRow, 'Search', () => this.doSearch(), { backgroundColor: '#1565c0' });
+      // Typing a link on a headset is hard: get a code, and send the link from a phone instead.
+      await this.button(this.searchRow, 'Phone', () => this.askPasteCode(), { backgroundColor: '#6a1b9a' });
+      // Speech to text, where the client has it: press to start talking, press again to stop.
+      const scene = this.core.banterScene();
+      let sttFailed = false;
+      try { sttFailed = localStorage.getItem(STT_FAILED_KEY) === 'true'; } catch (e) {}
+      if (!sttFailed && scene && typeof scene.StartTTS === 'function' && typeof scene.StopTTS === 'function') {
+        this.speakBtn = await this.button(this.searchRow, 'Speak', () => this.toggleSpeech(), { backgroundColor: '#ad1457' });
+      }
       // The last search, when its results were kept on this device.
       if (this.searchQuery) this.setSearchText(this.searchQuery);
     } else {
       await this.label(this.searchRow, 'Search needs text input, which this client does not have.', { color: '#bbbbbb', flexGrow: 1 });
     }
+
+    // Paste from your phone: the address and code, big, while a code is in use (see showPasteCode).
+    this.phoneCard = await this.div(this.mainView, {
+      display: 'none', flexDirection: 'column', alignItems: 'center', flexShrink: 0, marginTop: '10px',
+      backgroundColor: '#311b4f', borderRadius: '16px', borderWidth: '3px', borderColor: '#ab47bc',
+      paddingTop: '14px', paddingBottom: '14px', paddingLeft: '18px', paddingRight: '18px'
+    });
+    await this.label(this.phoneCard, 'On your phone, go to', { fontSize: '28px', color: '#e1bee7' });
+    this.phoneUrlLabel = await this.label(this.phoneCard, '', { fontSize: '46px', fontWeight: 'bold', color: '#80deea', marginTop: '4px' });
+    await this.label(this.phoneCard, 'and enter this code:', { fontSize: '28px', color: '#e1bee7', marginTop: '8px' });
+    this.phoneCodeLabel = await this.label(this.phoneCard, '', {
+      fontSize: '96px', fontWeight: 'bold', color: '#ffffff', marginTop: '4px',
+      backgroundColor: '#000000', borderRadius: '14px', paddingLeft: '28px', paddingRight: '28px'
+    });
+    const phoneFoot = await row(this.phoneCard, { marginTop: '10px' });
+    this.phoneExpiryLabel = await this.label(phoneFoot, '', { fontSize: '22px', color: '#bbbbbb', marginRight: '16px' });
+    await this.button(phoneFoot, 'Done', () => this.hidePasteCode(), { backgroundColor: '#455a64', fontSize: '24px' });
 
     // Search helpers: karaoke's words to add to the search, then recent searches.
     this.searchToolsRow = await row(this.mainView, { overflow: 'hidden' });
@@ -656,6 +722,51 @@ var FirePlaylistPanel = class {
     this.rows = [];
     const firstRows = this.scrolling ? FIRST_ROWS : this.rowsPerPage;
     for (let k = 0; k < firstRows; k++) this.rows.push(await this.makeRow(list));
+
+    // ---- Info view: who made the player, how to use it, and where to get it for a world
+    this.infoView = await this.div(rootEl, { display: 'none', flexDirection: 'column', flexGrow: 1, flexShrink: 1, overflow: 'hidden', marginTop: '6px' });
+    const infoBox = await this.div(this.infoView, {
+      display: 'flex', flexDirection: 'column', flexShrink: 0, backgroundColor: '#23232d',
+      borderRadius: '14px', paddingLeft: '18px', paddingRight: '18px', paddingTop: '12px', paddingBottom: '12px'
+    });
+    // Tips on the left, each a button's name and what it's for; the setup guide's QR code on the right.
+    const infoCols = await row(infoBox, { alignItems: 'flex-start' });
+    const howCol = await this.div(infoCols, { display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, marginRight: '24px' });
+    const colText = (parent, text, styles) => this.label(parent, text, Object.assign({ fontSize: '21px', whiteSpace: 'normal', marginTop: '6px' }, styles || {}));
+    await colText(howCol, 'How to use it', { fontSize: '26px', fontWeight: 'bold', marginTop: '0px' });
+    const tips = this.karaoke ? [
+      ['Search Songs', 'Find a song, or paste a video link. + karaoke and + lyrics help find versions with words on screen.'],
+      ['Sing It', 'Puts you in the singer queue with that song. You can be in the queue once.'],
+      ['Play & Sing', 'When it is your turn and no song is playing, press it on your name to start.'],
+      ['Locked', 'Only the host starts songs, and your song waits until the host approves it.'],
+      ['Phone', 'Shows a code. Send a link from your phone into your search, no typing in VR.'],
+      ['Restart / Stop', 'The singer and the host can restart or stop the song.'],
+      ['Vol / Mute', 'Only change what you hear, not anyone else.'],
+      ['Hand controls', 'Move them in More... The orange button folds them away to one button.']
+    ] : [
+      ['Search & Add', 'Search YouTube, Internet Archive, Tubi or NASA+ (the button beside the box picks), or paste a link.'],
+      ['Phone', 'Shows a code. Send a link from your phone into your search, no typing in VR.'],
+      ['Host', 'The host runs the player for everyone. Take Over in More... makes you the host, when allowed.'],
+      ['Locked', 'Only the host can add videos. Unlocked, anyone can add.'],
+      ['Lists', 'Saved playlists for this room. Add All puts a whole list on the end.'],
+      ['Reload', "Fixes a video that froze or won't load for you. Nobody else's screen changes."],
+      ['Vol / Mute', 'Only change what you hear, not anyone else.'],
+      ['Hand controls', 'Move them in More... The orange button folds them away to one button.']
+    ];
+    for (const [name, text] of tips) {
+      const tip = await row(howCol, { alignItems: 'flex-start', marginTop: '8px' });
+      await this.label(tip, name, { fontSize: '21px', fontWeight: 'bold', color: '#80deea', width: '170px', flexShrink: 0, whiteSpace: 'normal' });
+      await this.label(tip, text, { fontSize: '21px', whiteSpace: 'normal', flexGrow: 1, flexShrink: 1 });
+    }
+    const guideCol = await this.div(infoCols, { display: 'flex', flexDirection: 'column', alignItems: 'center', width: '320px', flexShrink: 0 });
+    await colText(guideCol, 'Want this player in your own world?', { fontSize: '24px', fontWeight: 'bold', textAlign: 'center', marginTop: '0px' });
+    // A white square; its dark boxes are added the first time Info opens (see showQr).
+    const qrSize = (SETUP_GUIDE_QR.length + 2 * QR_MARGIN) * QR_MODULE_PX;
+    this.qrEl = await this.div(guideCol, { width: `${qrSize}px`, height: `${qrSize}px`, flexShrink: 0, backgroundColor: '#ffffff', marginTop: '10px' });
+    await colText(guideCol, 'Scan with your phone for the setup guide, or go to', { fontSize: '19px', textAlign: 'center', color: '#bbbbbb', marginTop: '8px' });
+    await colText(guideCol, SETUP_GUIDE_URL.replace(/^https:\/\//, ''), { fontSize: '30px', fontWeight: 'bold', color: '#80deea', marginTop: '2px', textAlign: 'center' });
+    await colText(guideCol, 'Move this panel by grabbing the bar under it.', { fontSize: '19px', color: '#999999', marginTop: '16px', textAlign: 'center' });
+    await colText(guideCol, 'Made by FireRat', { fontSize: '19px', color: '#999999', marginTop: '8px', textAlign: 'center' });
 
     // ---- More view: host controls, seek, your own player, add by link
     this.moreView = await this.div(rootEl, { display: 'none', flexDirection: 'column', flexGrow: 1, flexShrink: 1, overflow: 'hidden', marginTop: '6px' });
@@ -931,6 +1042,12 @@ var FirePlaylistPanel = class {
     (this.thumbTimers || []).forEach(clearTimeout);
     this.thumbTimers = [];
     if (typeof this.core.removeMessageListener === 'function') this.core.removeMessageListener(this.onMessageFn);
+    clearTimeout(this.speechTimer);
+    clearTimeout(this.pasteCodeTimer);
+    if (this.onTranscription) {
+      const scene = this.core.banterScene();
+      try { if (scene && typeof scene.Off === 'function') scene.Off('transcription', this.onTranscription); } catch (e) {}
+    }
     const removeObjects = () => {
       try {
         if (this.root && typeof this.root.Destroy === 'function') this.root.Destroy();
@@ -1199,6 +1316,29 @@ var FirePlaylistPanel = class {
   setView(view) {
     this.view = view;
     this.render();
+    if (view === 'info') this.showQr();
+  }
+
+  // Draws the setup guide's QR code the first time Info opens: one dark box per run of dark
+  // squares in a row, placed inside the white square.
+  async showQr() {
+    if (!this.qrEl || this.qrBuilt) return;
+    this.qrBuilt = true;
+    const px = QR_MODULE_PX, edge = QR_MARGIN * px;
+    for (let y = 0; y < SETUP_GUIDE_QR.length; y++) {
+      const line = SETUP_GUIDE_QR[y];
+      for (let x = 0; x < line.length; x++) {
+        if (line[x] !== '1') continue;
+        let end = x;
+        while (end + 1 < line.length && line[end + 1] === '1') end++;
+        if (this.destroyed) return;
+        await this.div(this.qrEl, {
+          position: 'absolute', left: `${edge + x * px}px`, top: `${edge + y * px}px`,
+          width: `${(end - x + 1) * px}px`, height: `${px}px`, backgroundColor: '#000000'
+        });
+        x = end;
+      }
+    }
   }
 
   // "95", "1:35" or "1:02:03" -> seconds, or null.
@@ -1551,6 +1691,92 @@ var FirePlaylistPanel = class {
     else this.setStatus('The mode can only be changed in a Creator SDK world.');
   }
 
+  // Speech to text through the SDK: StartTTS starts listening, StopTTS(id) stops, and the client
+  // answers with a "transcription" event carrying that id and its best guess at the words.
+  toggleSpeech() {
+    const scene = this.core.banterScene();
+    if (!scene) return;
+    if (!this.speechListening) {
+      this.speechListening = true;
+      this.setText(this.speakBtn, 'Stop');
+      this.setStyle(this.speakBtn, 'backgroundColor', '#c62828');
+      this.setStatus('Listening... press Stop when you have said it.', 0);
+      Promise.resolve(scene.StartTTS(false)).catch(e => console.warn('[PlaylistPanel] StartTTS failed:', e));
+      return;
+    }
+    this.speechListening = false;
+    this.setText(this.speakBtn, 'Speak');
+    this.setStyle(this.speakBtn, 'backgroundColor', '#ad1457');
+    const id = `fvp-${Date.now()}`;
+    this.speechId = id;
+    if (!this.onTranscription) {
+      this.onTranscription = e => {
+        const d = (e && e.detail) || {};
+        if (!this.speechId || (d.id && d.id !== this.speechId)) return; // someone else's request
+        this.speechId = null;
+        clearTimeout(this.speechTimer);
+        try { localStorage.removeItem(STT_FAILED_KEY); } catch (err) {}
+        const words = String(d.message || '').trim();
+        if (!words) { this.setStatus("Didn't catch that. Try again."); return; }
+        this.openSearch();
+        this.setSearchText(words);
+        this.doSearch();
+      };
+      try { scene.On('transcription', this.onTranscription); } catch (e) {}
+    }
+    this.setStatus('Turning your words into text...', 0);
+    clearTimeout(this.speechTimer);
+    this.speechTimer = setTimeout(() => {
+      if (this.speechId !== id) return;
+      this.speechId = null;
+      // This app doesn't do speech to text (Altspace, for now): hide Speak here from now on.
+      try { localStorage.setItem(STT_FAILED_KEY, 'true'); } catch (e) {}
+      this.display(this.speakBtn, false);
+      this.setStatus("Speech to text doesn't work in this app yet, so Speak is hidden.", 8000);
+    }, 15000);
+    Promise.resolve(scene.StopTTS(id)).catch(e => console.warn('[PlaylistPanel] StopTTS failed:', e));
+  }
+
+  // Paste from your phone (see server/paste.js): the server gives this panel a code for the phone
+  // page, and what the phone sends goes into this search box only.
+  askPasteCode() {
+    this.openSearch();
+    this.send(Commands.PASTE_CODE_REQUEST);
+    this.setStatus('Getting a code for your phone...', 0);
+  }
+
+  // Shows the code big in the search view until it runs out, Done is pressed, or a link arrives.
+  showPasteCode(data) {
+    const code = data && data.code;
+    if (!code) return;
+    const ms = data.expiresIn || 600000;
+    this.pasteCode = code;
+    this.setText(this.phoneUrlLabel, `${this.core.hostUrl}/paste`);
+    this.setText(this.phoneCodeLabel, `${code.slice(0, 3)} ${code.slice(3)}`); // two halves, easier to read
+    this.setText(this.phoneExpiryLabel, `Works for ${Math.round(ms / 60000)} minutes, only for you.`);
+    this.setStatus('');
+    clearTimeout(this.pasteCodeTimer);
+    this.pasteCodeTimer = setTimeout(() => this.hidePasteCode(), ms);
+    this.openSearch();
+    this.render();
+  }
+
+  hidePasteCode() {
+    clearTimeout(this.pasteCodeTimer);
+    this.pasteCode = null;
+    this.render();
+  }
+
+  pasteFromPhone(data) {
+    const text = String((data && data.text) || '').trim();
+    if (!text) return;
+    this.hidePasteCode();
+    this.openSearch();
+    this.setSearchText(text.slice(0, 500));
+    this.doSearch();
+    this.core.showToast('Got the link from your phone');
+  }
+
   singIt(v) {
     if (this.isInQueue()) { this.setStatus('You are already in the singer queue.'); return; }
     this.send(Commands.ADD_TO_PLAYERS, v);
@@ -1714,6 +1940,12 @@ var FirePlaylistPanel = class {
   onMessage(json) {
     const p = this.core.player;
     switch (json.path) {
+      case Commands.PASTE_CODE:
+        this.showPasteCode(json.data);
+        break;
+      case Commands.PASTE_RECEIVED:
+        this.pasteFromPhone(json.data);
+        break;
       case Commands.SEARCH_RESULTS:
         // An earlier search's reply: that search is done, but a newer one replaced it.
         if (json.searchId !== undefined && json.searchId !== this.searchId) break;
@@ -1851,9 +2083,12 @@ var FirePlaylistPanel = class {
 
     // Views
     const more = this.view === 'more';
-    this.display(this.mainView, !more);
+    const info = this.view === 'info';
+    this.display(this.mainView, !more && !info);
     this.display(this.moreView, more);
+    this.display(this.infoView, info);
     this.setText(this.moreBtn, more ? 'Back' : 'More...');
+    this.setText(this.infoBtn, info ? 'Back' : 'Info');
 
     // Replacement suggestion
     const r = this.pendingReplacement;
@@ -1948,6 +2183,7 @@ var FirePlaylistPanel = class {
     }
     if (this.nowBtn) this.display(this.nowBtn, !!(!onSearch && hasPlaylist && (this.tab !== 'playlist' || list.length > this.pageSize())));
     this.display(this.searchRow, onSearch);
+    this.display(this.phoneCard, onSearch && !!this.pasteCode);
     this.display(this.searchToolsRow, onSearch && !!this.searchField);
     const recent = this.recentSearches;
     (this.recentBtns || []).forEach((btn, k) => {
@@ -2144,11 +2380,11 @@ var FirePlaylistPanel = class {
       return;
     }
     // Adding stays on the results, so several can be added from one search.
-    const defs = added || !this.canAdd() ? [] : [{ text: 'Add', fn: () => { this.send(Commands.ADD_TO_PLAYLIST, v); this.setStatus(`Added "${v.title}"`); } }];
-    if (host) {
-      defs.push({ text: 'Play Now', color: '#2e7d32', fn: () => { this.send(Commands.ADD_AND_PLAY, v); this.setTab('playlist'); } });
-      defs.push({ text: 'Play Next', fn: () => { this.send(Commands.ADD_AND_PLAY_NEXT, v); this.setStatus(`"${v.title}" plays next`); } });
-    }
+    // Play comes first, on the left, as in the playlist.
+    const defs = [];
+    if (host) defs.push({ text: 'Play Now', color: '#2e7d32', fn: () => { this.send(Commands.ADD_AND_PLAY, v); this.setTab('playlist'); } });
+    if (!added && this.canAdd()) defs.push({ text: 'Add', fn: () => { this.send(Commands.ADD_TO_PLAYLIST, v); this.setStatus(`Added "${v.title}"`); } });
+    if (host) defs.push({ text: 'Play Next', fn: () => { this.send(Commands.ADD_AND_PLAY_NEXT, v); this.setStatus(`"${v.title}" plays next`); } });
     this.setButtons(slot, defs);
   }
 

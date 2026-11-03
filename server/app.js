@@ -22,6 +22,7 @@ const { Op } = require('sequelize');
 const { initializeDatabase } = require('./db.js');
 const models = require('./models'); // Sequelize models
 const { Blacklist } = require('./blacklist.js');
+const PasteCodes = require('./paste.js');
 
 /** Seek skip increment in seconds for standard playlist mode. */
 const SkipJumpTimePlaylist = 5;
@@ -57,6 +58,7 @@ class App {
     this.dbConnected = false;
     /** People who can't control the player in any world (see server/blacklist.js). */
     this.blacklist = new Blacklist(this, models);
+    this.pasteCodes = new PasteCodes(this); // paste from your phone (see paste.js)
   };
 
   /**
@@ -197,6 +199,7 @@ class App {
     // page's wrong-password limit.
     this.app.set('trust proxy', 1);
     this.blacklist.setupRoutes(this.app);
+    this.pasteCodes.setupRoutes(this.app);
     // The stream to play for a Tubi or NASA+ link, asked for by the player page when it plays one
     // (Tubi's stream links expire, so the playlist keeps the page's link). Only those sites' pages
     // are looked up, from the id in the link.
@@ -276,6 +279,7 @@ class App {
    * @returns {void}
    */
   handleClose(ws, code, reason) {
+    this.pasteCodes.drop(ws);
     // Convert the reason buffer to a string for readable logging, handling empty reasons.
     const reasonString = reason && reason.length > 0 ? reason.toString() : 'No reason given';
     console.log(`${App.who(ws.u)} disconnected from ${ws.type || 'N/A'}. Code: ${code}, Reason: ${reasonString}`);
@@ -445,6 +449,9 @@ class App {
         break;
       case Commands.SEARCH:
         this.search(msg.data, ws);
+        break;
+      case Commands.PASTE_CODE_REQUEST:
+        this.pasteCodes.issue(ws);
         break;
       case Commands.FROM_PLAYLIST:
         await playlistHandler.fromPlaylist(this, ws, msg.data);

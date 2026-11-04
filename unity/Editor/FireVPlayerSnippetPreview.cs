@@ -423,4 +423,143 @@ namespace FireVPlayer.EditorTools
             return n != null && n[0] != 0 ? n[0] : fallback;
         }
     }
+
+    /// <summary>
+    /// What every snippet setting is now, kept in step with index.html so Undo can put back what it was.
+    /// It lives only in memory (a ScriptableSingleton survives script reloads, not restarts).
+    /// </summary>
+    sealed class FireVPlayerSnippetUndoState : ScriptableSingleton<FireVPlayerSnippetUndoState>
+    {
+        // "instance\nattribute", the value, and whether the attribute is there at all (a list of strings
+        // can't hold null).
+        public List<string> keys = new List<string>();
+        public List<string> values = new List<string>();
+        public List<bool> present = new List<bool>();
+    }
+
+    /// <summary>
+    /// Undo and Redo for snippet settings. The Creator SDK keeps them in index.html and leaves them out of
+    /// Undo on purpose, so Ctrl+Z after changing a snippet's position in the inspector, or dragging its gizmo,
+    /// skipped that change and undid whatever came before it. This records each change as it happens (a drag,
+    /// or a quick run of typing in one field, is one step) and puts the values back on Undo and Redo. Works for
+    /// every snippet, not only Fire-V-Player.
+    /// </summary>
+    [InitializeOnLoad]
+    static class FireVPlayerSnippetUndo
+    {
+        // Changes to the same setting this close together (seconds) are one Undo step.
+        const double MergeWithin = 1.0;
+
+        static bool _applying;
+        static string _lastKey;
+        static double _lastTime;
+        static int _lastGroup = -1;
+
+        static FireVPlayerSnippetUndo()
+        {
+            SnippetHtmlSync.Changed += OnChanged;
+            Undo.undoRedoPerformed += OnUndoRedo;
+            // After a script reload, match the file as it is now.
+            EditorApplication.delayCall += Snapshot;
+        }
+
+        static FireVPlayerSnippetUndoState State => FireVPlayerSnippetUndoState.instance;
+
+        static bool Tracked(string attribute) =>
+            attribute != SnippetHtmlSync.InstanceAttribute && attribute != "name";
+
+        /// <summary>Copies every snippet's settings into the state, without an Undo step.</summary>
+        static void Snapshot()
+        {
+            var s = State;
+            s.keys.Clear();
+            s.values.Clear();
+            s.present.Clear();
+            try
+            {
+                foreach (var e in SnippetHtmlSync.All())
+                {
+                    var id = (string)e.Attribute(SnippetHtmlSync.InstanceAttribute);
+                    if (string.IsNullOrEmpty(id)) continue;
+                    foreach (var a in e.Attributes())
+                    {
+                        if (!Tracked(a.Name.LocalName)) continue;
+                        s.keys.Add(id + "\n" + a.Name.LocalName);
+                        s.values.Add(a.Value);
+                        s.present.Add(true);
+                    }
+                }
+            }
+            catch (Exception) { /* index.html didn't load: nothing to track */ }
+        }
+
+        static void OnChanged(SnippetHtmlSync.ChangeKind kind, string instanceId, string attribute)
+        {
+            if (_applying) return;
+            // Snippets added, removed or reloaded from disk: follow the file, without an Undo step.
+            if (kind != SnippetHtmlSync.ChangeKind.AttributeSet || string.IsNullOrEmpty(instanceId) || string.IsNullOrEmpty(attribute))
+            {
+                Snapshot();
+                return;
+            }
+            if (!Tracked(attribute)) return;
+            var element = SnippetHtmlSync.Get(instanceId);
+            if (element == null) return;
+            var value = (string)element.Attribute(attribute);
+
+            var s = State;
+            var key = instanceId + "\n" + attribute;
+            var i = s.keys.IndexOf(key);
+            if (i < 0)
+            {
+                // A setting the snippet didn't have: before this change it was missing.
+                s.keys.Add(key);
+                s.values.Add("");
+                s.present.Add(false);
+                i = s.keys.Count - 1;
+            }
+            if (s.present[i] == (value != null) && s.values[i] == (value ?? "")) return;
+
+            // The state still holds the old value, so recording it now is what Undo puts back.
+            var snippetName = (string)element.Attribute("name") ?? "snippet";
+            Undo.RecordObject(s, $"Change {snippetName} {attribute}");
+            s.values[i] = value ?? "";
+            s.present[i] = value != null;
+
+            var group = Undo.GetCurrentGroup();
+            var now = EditorApplication.timeSinceStartup;
+            if (key == _lastKey && now - _lastTime < MergeWithin && _lastGroup >= 0 && _lastGroup < group)
+            {
+                Undo.CollapseUndoOperations(_lastGroup);
+                group = _lastGroup;
+            }
+            _lastKey = key;
+            _lastTime = now;
+            _lastGroup = group;
+        }
+
+        /// <summary>Puts every setting Undo or Redo changed back into index.html.</summary>
+        static void OnUndoRedo()
+        {
+            _lastKey = null;
+            _lastGroup = -1;
+            var s = State;
+            _applying = true;
+            try
+            {
+                for (var i = 0; i < s.keys.Count; i++)
+                {
+                    var parts = s.keys[i].Split('\n');
+                    if (parts.Length != 2) continue;
+                    var element = SnippetHtmlSync.Get(parts[0]);
+                    if (element == null) continue;
+                    var want = s.present[i] ? s.values[i] : null;
+                    if ((string)element.Attribute(parts[1]) != want) SnippetHtmlSync.SetAttribute(parts[0], parts[1], want);
+                }
+            }
+            catch (Exception ex) { Debug.LogWarning("[Fire-V-Player] Couldn't undo a snippet setting: " + ex.Message); }
+            finally { _applying = false; }
+            SceneView.RepaintAll();
+        }
+    }
 }

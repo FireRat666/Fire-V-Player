@@ -476,21 +476,19 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
         }
         break;
       case Commands.SKIP_BACK:
-        this.disableAutoSync(true); // Disable auto-sync on manual skip
-        const skipAmountBack = this.core.isKaraoke ? SkipJumpTimeKaraoke : SkipJumpTimePlaylist;
-        const time = this.player.getCurrentTime() - skipAmountBack;
-        this.player.seekTo(time);
-        this.player.playVideo(); // Ensure playback continues after skip
-        this.core.showToast(`-${skipAmountBack}s`);
+      case Commands.SKIP_FORWARD: {
+        // A viewer's own skip. While the host has paused it stays paused (playing on would put
+        // them ahead of everyone); the host's resume brings everyone to the same point.
+        this.disableAutoSync(true);
+        const amount = this.core.isKaraoke ? SkipJumpTimeKaraoke : SkipJumpTimePlaylist;
+        const forward = json.path === Commands.SKIP_FORWARD;
+        this.player.seekTo(this.player.getCurrentTime() + (forward ? amount : -amount));
+        const hostPaused = !!(this.playerData && this.playerData.paused);
+        if (hostPaused) this.player.pauseVideo();
+        else this.player.playVideo(); // seeking can stop playback
+        this.core.showToast(`${forward ? '+' : '-'}${amount}s${hostPaused ? ' (the host has paused it)' : ''}`);
         break;
-      case Commands.SKIP_FORWARD:
-        this.disableAutoSync(true); // Disable auto-sync on manual skip
-        const skipAmountForward = this.core.isKaraoke ? SkipJumpTimeKaraoke : SkipJumpTimePlaylist;
-        const timeForward = this.player.getCurrentTime() + skipAmountForward;
-        this.player.seekTo(timeForward);
-        this.player.playVideo(); // Ensure playback continues after skip
-        this.core.showToast(`+${skipAmountForward}s`);
-        break;
+      }
       case Commands.AUTO_SYNC:
         if (json.data) {
           this.enableAutoSync();
@@ -612,10 +610,17 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
             // and UI visibility. The SYNC_TIME handler already ignores syncs while paused.
           } else {
             console.log("[PLAYER] Resuming YouTube at", currentTime);
-            // Seek to the exact time the host resumed at.
+            // Everyone goes to the point the host resumed at (whatever they skipped to while
+            // paused), then one sync a moment later corrects for the time the message took.
             this.player.seekTo(currentTime);
             this.player.playVideo();
             this.core.showToast("Host resumed playback.");
+            clearTimeout(this.resumeSyncTimer);
+            this.resumeSyncTimer = setTimeout(() => {
+              if (!this.player || (this.playerData && this.playerData.paused)) return;
+              this.isResumingFromPassthrough = true; // a one-time hard seek to the server's time
+              this.core.sendMessage({ path: Commands.REQUEST_SYNC, data: { clientTimestamp: Date.now() } });
+            }, 1500);
             // We no longer call this.enableAutoSync() here, which prevents the Auto Sync UI
             // from forcefully appearing on every resume.
           }
@@ -661,9 +666,15 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
           // one-time hard seek to get back in sync, regardless of auto-sync state.
           if (this.isResumingFromPassthrough) {
             this.isResumingFromPassthrough = false; // Reset the flag
+            this.player.setPlaybackRate(1.0); // Ensure rate is normal
+            if (this.playerData && this.playerData.paused) {
+              // The host has it paused: go to the held point and stay paused.
+              this.player.seekTo(json.data.currentTime);
+              this.player.pauseVideo();
+              break;
+            }
             this.core.showToast(`Resyncing after pause...`);
             this.player.seekTo(serverTime);
-            this.player.setPlaybackRate(1.0); // Ensure rate is normal
             // Explicitly call playVideo() after seeking, as seekTo() can sometimes
             // interrupt playback. This ensures the video resumes as expected.
             this.player.playVideo();

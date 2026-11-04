@@ -339,6 +339,10 @@ var FireNativeScreen = (() => {
           if (!this.wantPaused && Number.isFinite(Number(data.currentTime))) this.seek(Number(data.currentTime));
           this.lastToggleAt = -Infinity;
           this.applyPaused();
+          // On resume, everyone goes to the host's point (above, whatever they skipped to while
+          // paused), then one sync a moment later corrects for the time the message took.
+          clearTimeout(this.resumeSyncTimer);
+          if (!this.wantPaused) this.resumeSyncTimer = setTimeout(() => { if (!this.wantPaused) this.requestSync(true); }, 1500);
           break;
         }
         case Commands.SYNC_TIME:
@@ -357,6 +361,7 @@ var FireNativeScreen = (() => {
       this.destroyed = true;
       clearInterval(this.pollTimer);
       clearInterval(this.syncTimer);
+      clearTimeout(this.resumeSyncTimer);
       // Destroying the object destroys the video player with it.
       if (this.go) this.core.destroyObject(this.go);
       this.go = null;

@@ -1330,8 +1330,17 @@ var FirePlaylistPanel = class {
   }
 
   // Draws a QR code (rows of '0'/'1') into a white square: one dark box per run of dark squares
-  // in a row. Boxes from an earlier code are moved and reused, and the spare ones hidden.
-  async drawQr(el, rows, boxes) {
+  // in a row. Boxes from an earlier code are moved and reused, and the spare ones hidden. Draws
+  // into the same boxes take turns, and one a newer draw has replaced stops, so two codes never mix.
+  drawQr(el, rows, boxes) {
+    const run = boxes.run = (boxes.run || 0) + 1;
+    const draw = () => this.drawQrNow(el, rows, boxes, run);
+    boxes.queue = (boxes.queue || Promise.resolve()).then(draw, draw);
+    return boxes.queue;
+  }
+
+  async drawQrNow(el, rows, boxes, run) {
+    if (boxes.run !== run) return;
     const px = QR_MODULE_PX, edge = QR_MARGIN * px;
     const side = `${(rows.length + 2 * QR_MARGIN) * px}px`;
     el.SetStyles({ width: side, height: side });
@@ -1350,6 +1359,7 @@ var FirePlaylistPanel = class {
         if (used < boxes.length) boxes[used].SetStyles(styles);
         else boxes.push(await this.div(el, styles));
         used++;
+        if (boxes.run !== run) return;
         x = end;
       }
     }

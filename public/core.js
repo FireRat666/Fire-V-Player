@@ -1115,8 +1115,8 @@ var Core = class {
         }else if(this.player.playlist && this.player.playlist.length) {
           this.showToast("Wait for the current song to finish!");
         }else{
-          this.sendMessage({path: Commands.ADD_TO_PLAYLIST, data: next.v, isYoutubeWebsite: false, skipUpdate: true });
-          this.sendMessage({path: Commands.SET_TRACK, data: 0});
+          // The server starts the next singer's song and takes them off the queue.
+          this.sendMessage({path: Commands.PLAY_KARAOKE_TRACK});
           hasStarted = true;
         }
       }
@@ -1128,14 +1128,14 @@ var Core = class {
       if (inside.size > 0) return;
       clearTimeout(hasStartedTimeout);
       hasStartedTimeout = setTimeout(() => {
-        const player = this.nextSinger();
-        if(triggerExit && player && hasStarted) {
-          if(player.id === window.user.id) {
-              this.sendMessage({path: Commands.REMOVE_FROM_PLAYERS, data: player.id });
-              this.sendMessage({path: Commands.STOP});
-              hasStarted = false;
-          }
+        if(!triggerExit || !hasStarted) return;
+        // Once started, the singer is off the queue and their song is the one playing: leaving
+        // the stage stops it (the server stops a song when its singer removes themselves).
+        const song = this.player && this.player.playlist && this.player.playlist[0];
+        if(song && song.user && song.user.id === window.user.id) {
+          this.sendMessage({path: Commands.REMOVE_FROM_PLAYERS, data: window.user.id });
         }
+        hasStarted = false;
       }, 5000);
     });
   }

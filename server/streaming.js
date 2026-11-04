@@ -170,16 +170,22 @@ const MENU_PAGES = ['featured', 'most_popular', 'action'];
 /** Tubi's categories: [{slug, title}]. */
 function tubiCategories() {
   return cache.remember('tubi:categories', CATALOG_TTL_MS, async () => {
-    let data, lastError;
-    for (const slug of MENU_PAGES) {
-      try { data = await fetchTubiPage(`category/${slug}`); break; } catch (e) { lastError = e; }
+    let lastError;
+    for (const page of MENU_PAGES) {
+      try {
+        const container = (await fetchTubiPage(`category/${page}`)).container || {};
+        const map = container.containerIdMap || {};
+        const list = (container.containerMenuList || Object.keys(map))
+          .filter(slug => /^[a-z0-9_-]{1,80}$/.test(slug) && !SKIP_CATEGORIES.has(slug))
+          .map(slug => ({ slug, title: clean((map[slug] && map[slug].title) || slug, 80) }));
+        if (!list.length) throw new Error("Tubi's list of categories was empty.");
+        return list;
+      } catch (e) {
+        console.warn(`[TUBI] No category list from category/${page}: ${e.message}`);
+        lastError = e;
+      }
     }
-    if (!data) throw lastError;
-    const container = data.container || {};
-    const map = container.containerIdMap || {};
-    return (container.containerMenuList || Object.keys(map))
-      .filter(slug => /^[a-z0-9_-]{1,80}$/.test(slug) && !SKIP_CATEGORIES.has(slug))
-      .map(slug => ({ slug, title: clean((map[slug] && map[slug].title) || slug, 80) }));
+    throw lastError;
   });
 }
 

@@ -443,6 +443,17 @@ async function addAndPlay(app, ws, v) {
   if (app.videoPlayers[ws.i]) {
     app.onlyIfHost(ws, async () => {
       const player = app.videoPlayers[ws.i];
+      // Karaoke turns: besides the host, only the next singer, and only when no song is playing.
+      if (player.isKaraoke && player.host.id !== ws.u.id) {
+        const next = player.singers.find(require('./karaokeHandler.js').isApproved);
+        let message = null;
+        if (player.playlist.length > 0) message = "Wait for the current song to finish.";
+        else if (next && next.user.id !== ws.u.id) message = "Only the host or the next singer can start a song.";
+        if (message) {
+          app.send(ws, Commands.ERROR, { message });
+          return;
+        }
+      }
       let resolvedV;
       try {
         resolvedV = await resolveVideoData(app, ws, v);

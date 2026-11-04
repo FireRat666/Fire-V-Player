@@ -480,6 +480,12 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
         // A viewer's own skip. While the host has paused it stays paused (playing on would put
         // them ahead of everyone); the host's resume brings everyone to the same point.
         this.disableAutoSync(true);
+        // The skip wins over a resume sync still waiting or on its way (see pause-state-changed).
+        clearTimeout(this.resumeSyncTimer);
+        if (this.resumeSyncPending) {
+          this.resumeSyncPending = false;
+          this.isResumingFromPassthrough = false;
+        }
         const amount = this.core.isKaraoke ? SkipJumpTimeKaraoke : SkipJumpTimePlaylist;
         const forward = json.path === Commands.SKIP_FORWARD;
         this.player.seekTo(this.player.getCurrentTime() + (forward ? amount : -amount));
@@ -618,6 +624,7 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
             clearTimeout(this.resumeSyncTimer);
             this.resumeSyncTimer = setTimeout(() => {
               if (!this.player || (this.playerData && this.playerData.paused)) return;
+              this.resumeSyncPending = true; // a skip before the answer cancels it
               this.isResumingFromPassthrough = true; // a one-time hard seek to the server's time
               this.core.sendMessage({ path: Commands.REQUEST_SYNC, data: { clientTimestamp: Date.now() } });
             }, 1500);
@@ -666,6 +673,7 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
           // one-time hard seek to get back in sync, regardless of auto-sync state.
           if (this.isResumingFromPassthrough) {
             this.isResumingFromPassthrough = false; // Reset the flag
+            this.resumeSyncPending = false;
             this.player.setPlaybackRate(1.0); // Ensure rate is normal
             if (this.playerData && this.playerData.paused) {
               // The host has it paused: go to the held point and stay paused.

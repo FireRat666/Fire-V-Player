@@ -287,6 +287,7 @@ var FireNativeScreen = (() => {
       if (p && typeof data.currentTrack === 'number' && data.currentTrack !== p.currentTrack) return; // stale
       const hard = this.pendingSync && this.pendingSync.hard;
       this.pendingSync = null;
+      this.resumeSyncPending = false;
       const latency = Math.max(0, Date.now() - Number(data.clientTimestamp || Date.now())) / 2000;
       const serverTime = Number(data.currentTime) + (this.wantPaused ? 0 : latency);
       if (!Number.isFinite(serverTime)) return;
@@ -329,6 +330,12 @@ var FireNativeScreen = (() => {
               this.core.notifyListeners({ path: Commands.AUTO_SYNC_STATE_CHANGED, data: { enabled: false } });
             }
           }
+          // The skip wins over a resume sync still waiting or on its way (see PAUSE_STATE_CHANGED).
+          clearTimeout(this.resumeSyncTimer);
+          if (this.resumeSyncPending) {
+            this.resumeSyncPending = false;
+            this.pendingSync = null;
+          }
           const amount = this.core.isKaraoke ? SKIP_KARAOKE_S : SKIP_S;
           this.seek(this.localTime() + (msg.path === Commands.SKIP_FORWARD ? amount : -amount));
           break;
@@ -342,7 +349,13 @@ var FireNativeScreen = (() => {
           // On resume, everyone goes to the host's point (above, whatever they skipped to while
           // paused), then one sync a moment later corrects for the time the message took.
           clearTimeout(this.resumeSyncTimer);
-          if (!this.wantPaused) this.resumeSyncTimer = setTimeout(() => { if (!this.wantPaused) this.requestSync(true); }, 1500);
+          if (!this.wantPaused) {
+            this.resumeSyncTimer = setTimeout(() => {
+              if (this.wantPaused) return;
+              this.resumeSyncPending = true;
+              this.requestSync(true);
+            }, 1500);
+          }
           break;
         }
         case Commands.SYNC_TIME:

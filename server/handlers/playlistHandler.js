@@ -445,12 +445,19 @@ async function addAndPlay(app, ws, v) {
       const player = app.videoPlayers[ws.i];
       // Karaoke turns: besides the host, only the next singer, and only when no song is playing.
       if (player.isKaraoke && player.host.id !== ws.u.id) {
-        const next = player.singers.find(require('./karaokeHandler.js').isApproved);
+        const karaoke = require('./karaokeHandler.js');
+        const next = player.singers.find(karaoke.isApproved);
         let message = null;
         if (player.playlist.length > 0) message = "Wait for the current song to finish.";
         else if (next && next.user.id !== ws.u.id) message = "Only the host or the next singer can start a song.";
         if (message) {
           app.send(ws, Commands.ERROR, { message });
+          return;
+        }
+        // The next singer starts their queued song the karaoke way, which takes it off the queue
+        // (otherwise auto-advance would play it again).
+        if (next) {
+          await karaoke.playKaraokeTrack(app, ws);
           return;
         }
       }

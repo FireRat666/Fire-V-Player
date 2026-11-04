@@ -40,8 +40,9 @@ const decodeEntities = s => String(s || '')
   .replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
 const https = url => (String(url || '').startsWith('//') ? `https:${url}` : String(url || ''));
 
-async function fetchText(url) {
+async function fetchText(url, info) {
   const res = await fetch(url, { headers: { 'user-agent': UA, 'accept-language': 'en' }, signal: AbortSignal.timeout(TIMEOUT_MS) });
+  if (info) { info.status = res.status; info.url = res.url; }
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.text();
 }
@@ -61,10 +62,23 @@ function parseTubiData(html) {
 /** A Tubi page's data (path like "movies/123" or "category/westerns"), not cached. */
 async function fetchTubiPage(path) {
   let html;
+  const info = {};
   try {
-    html = await fetchText(`https://tubitv.com/${path}`);
+    html = await fetchText(`https://tubitv.com/${path}`, info);
   } catch (e) {
+    console.warn(`[TUBI] ${path}: ${e.message}${info.url ? ` from ${info.url}` : ''}`);
     throw new Error(/HTTP 404/.test(e.message) ? "That Tubi page doesn't exist (or isn't available here)." : "Couldn't reach Tubi. Try again in a moment.");
+  }
+  if (html.indexOf('window.__data=') < 0) {
+    // Tubi answered with some other page. Log what it was, so a server Tubi treats differently
+    // (another country, or an address it won't serve) can be told apart from a page change.
+    const pageTitle = (html.match(/<title[^>]*>([^<]*)<\/title>/i) || [])[1] || '';
+    const words = html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    console.warn(`[TUBI] ${path}: no page data. HTTP ${info.status} from ${info.url}, ${html.length} bytes, title "${clean(pageTitle, 80)}", text "${clean(words, 300)}"`);
+    if (/not (yet )?available in your|isn't available in your|unavailable in your|outside (of )?the|your (country|region|location)/i.test(words)) {
+      throw new Error("Tubi isn't available in the country this server is in.");
+    }
+    throw new Error("Tubi sent this server a different page than usual, so its titles can't be read. It may not serve this server.");
   }
   return parseTubiData(html);
 }
@@ -150,10 +164,17 @@ function tubiCategory(slug) {
   });
 }
 
+/** Every Tubi category page lists all the categories; these are tried in turn for that list. */
+const MENU_PAGES = ['featured', 'most_popular', 'action'];
+
 /** Tubi's categories: [{slug, title}]. */
 function tubiCategories() {
   return cache.remember('tubi:categories', CATALOG_TTL_MS, async () => {
-    const data = await fetchTubiPage('category/featured');
+    let data, lastError;
+    for (const slug of MENU_PAGES) {
+      try { data = await fetchTubiPage(`category/${slug}`); break; } catch (e) { lastError = e; }
+    }
+    if (!data) throw lastError;
     const container = data.container || {};
     const map = container.containerIdMap || {};
     return (container.containerMenuList || Object.keys(map))

@@ -25,8 +25,8 @@ var ROW_CHUNK = 4;
 var SEARCH_CACHE_SIZE = 10;
 var SEARCH_CACHE_MS = 6 * 60 * 60 * 1000;
 var SEARCH_COLOR = '#00897b';
-// Set on a device whose app didn't answer a Speak request, so the button stays hidden there.
-var STT_FAILED_KEY = 'fire-v-player-stt-failed';
+// The Speak button (speech to text). Off until Altspace supports it.
+var SPEAK_ENABLED = false;
 // The Info view's QR code: pixels per square, and the white border in squares.
 var QR_MODULE_PX = 9;
 var QR_MARGIN = 3;
@@ -638,11 +638,10 @@ var FirePlaylistPanel = class {
       await this.button(this.searchRow, 'Search', () => this.doSearch(), { backgroundColor: '#1565c0' });
       // Typing a link on a headset is hard: get a code, and send the link from a phone instead.
       await this.button(this.searchRow, 'Phone', () => this.askPasteCode(), { backgroundColor: '#6a1b9a' });
-      // Speech to text, where the client has it: press to start talking, press again to stop.
+      // Speak (speech to text, toggleSpeech) stays hidden until Altspace answers StartTTS/StopTTS:
+      // there it never does, which only confuses people. Set SPEAK_ENABLED to bring it back.
       const scene = this.core.banterScene();
-      let sttFailed = false;
-      try { sttFailed = localStorage.getItem(STT_FAILED_KEY) === 'true'; } catch (e) {}
-      if (!sttFailed && scene && typeof scene.StartTTS === 'function' && typeof scene.StopTTS === 'function') {
+      if (SPEAK_ENABLED && scene && typeof scene.StartTTS === 'function' && typeof scene.StopTTS === 'function') {
         this.speakBtn = await this.button(this.searchRow, 'Speak', () => this.toggleSpeech(), { backgroundColor: '#ad1457' });
       }
       // The last search, when its results were kept on this device.
@@ -651,20 +650,24 @@ var FirePlaylistPanel = class {
       await this.label(this.searchRow, 'Search needs text input, which this client does not have.', { color: '#bbbbbb', flexGrow: 1 });
     }
 
-    // Paste from your phone: the address and code, big, while a code is in use (see showPasteCode).
+    // Paste from your phone: a QR code that opens the page with the code filled in, and the
+    // address and code, big, while a code is in use (see showPasteCode).
     this.phoneCard = await this.div(this.mainView, {
-      display: 'none', flexDirection: 'column', alignItems: 'center', flexShrink: 0, marginTop: '10px',
+      display: 'none', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: '10px',
       backgroundColor: '#311b4f', borderRadius: '16px', borderWidth: '3px', borderColor: '#ab47bc',
       paddingTop: '14px', paddingBottom: '14px', paddingLeft: '18px', paddingRight: '18px'
     });
-    await this.label(this.phoneCard, 'On your phone, go to', { fontSize: '28px', color: '#e1bee7' });
-    this.phoneUrlLabel = await this.label(this.phoneCard, '', { fontSize: '46px', fontWeight: 'bold', color: '#80deea', marginTop: '4px' });
-    await this.label(this.phoneCard, 'and enter this code:', { fontSize: '28px', color: '#e1bee7', marginTop: '8px' });
-    this.phoneCodeLabel = await this.label(this.phoneCard, '', {
+    this.phoneQrEl = await this.div(this.phoneCard, { flexShrink: 0, backgroundColor: '#ffffff', marginRight: '28px' });
+    this.phoneQrBoxes = [];
+    const phoneText = await this.div(this.phoneCard, { display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 1 });
+    this.phoneScanLabel = await this.label(phoneText, 'Scan this with your phone, or go to', { fontSize: '28px', color: '#e1bee7' });
+    this.phoneUrlLabel = await this.label(phoneText, '', { fontSize: '46px', fontWeight: 'bold', color: '#80deea', marginTop: '4px' });
+    await this.label(phoneText, 'and enter this code:', { fontSize: '28px', color: '#e1bee7', marginTop: '8px' });
+    this.phoneCodeLabel = await this.label(phoneText, '', {
       fontSize: '96px', fontWeight: 'bold', color: '#ffffff', marginTop: '4px',
       backgroundColor: '#000000', borderRadius: '14px', paddingLeft: '28px', paddingRight: '28px'
     });
-    const phoneFoot = await row(this.phoneCard, { marginTop: '10px' });
+    const phoneFoot = await row(phoneText, { marginTop: '10px' });
     this.phoneExpiryLabel = await this.label(phoneFoot, '', { fontSize: '22px', color: '#bbbbbb', marginRight: '16px' });
     await this.button(phoneFoot, 'Done', () => this.hidePasteCode(), { backgroundColor: '#455a64', fontSize: '24px' });
 
@@ -1319,26 +1322,38 @@ var FirePlaylistPanel = class {
     if (view === 'info') this.showQr();
   }
 
-  // Draws the setup guide's QR code the first time Info opens: one dark box per run of dark
-  // squares in a row, placed inside the white square.
+  // Draws the setup guide's QR code the first time Info opens.
   async showQr() {
     if (!this.qrEl || this.qrBuilt) return;
     this.qrBuilt = true;
+    await this.drawQr(this.qrEl, SETUP_GUIDE_QR, []);
+  }
+
+  // Draws a QR code (rows of '0'/'1') into a white square: one dark box per run of dark squares
+  // in a row. Boxes from an earlier code are moved and reused, and the spare ones hidden.
+  async drawQr(el, rows, boxes) {
     const px = QR_MODULE_PX, edge = QR_MARGIN * px;
-    for (let y = 0; y < SETUP_GUIDE_QR.length; y++) {
-      const line = SETUP_GUIDE_QR[y];
+    const side = `${(rows.length + 2 * QR_MARGIN) * px}px`;
+    el.SetStyles({ width: side, height: side });
+    let used = 0;
+    for (let y = 0; y < rows.length; y++) {
+      const line = rows[y];
       for (let x = 0; x < line.length; x++) {
         if (line[x] !== '1') continue;
         let end = x;
         while (end + 1 < line.length && line[end + 1] === '1') end++;
         if (this.destroyed) return;
-        await this.div(this.qrEl, {
-          position: 'absolute', left: `${edge + x * px}px`, top: `${edge + y * px}px`,
+        const styles = {
+          display: 'flex', position: 'absolute', left: `${edge + x * px}px`, top: `${edge + y * px}px`,
           width: `${(end - x + 1) * px}px`, height: `${px}px`, backgroundColor: '#000000'
-        });
+        };
+        if (used < boxes.length) boxes[used].SetStyles(styles);
+        else boxes.push(await this.div(el, styles));
+        used++;
         x = end;
       }
     }
+    for (let k = used; k < boxes.length; k++) boxes[k].SetStyles({ display: 'none' });
   }
 
   // "95", "1:35" or "1:02:03" -> seconds, or null.
@@ -1715,7 +1730,6 @@ var FirePlaylistPanel = class {
         if (!this.speechId || (d.id && d.id !== this.speechId)) return; // someone else's request
         this.speechId = null;
         clearTimeout(this.speechTimer);
-        try { localStorage.removeItem(STT_FAILED_KEY); } catch (err) {}
         const words = String(d.message || '').trim();
         if (!words) { this.setStatus("Didn't catch that. Try again."); return; }
         this.openSearch();
@@ -1729,10 +1743,7 @@ var FirePlaylistPanel = class {
     this.speechTimer = setTimeout(() => {
       if (this.speechId !== id) return;
       this.speechId = null;
-      // This app doesn't do speech to text (Altspace, for now): hide Speak here from now on.
-      try { localStorage.setItem(STT_FAILED_KEY, 'true'); } catch (e) {}
-      this.display(this.speakBtn, false);
-      this.setStatus("Speech to text doesn't work in this app yet, so Speak is hidden.", 8000);
+      this.setStatus("Speech to text didn't answer.", 8000);
     }, 15000);
     Promise.resolve(scene.StopTTS(id)).catch(e => console.warn('[PlaylistPanel] StopTTS failed:', e));
   }
@@ -1752,6 +1763,7 @@ var FirePlaylistPanel = class {
     const ms = data.expiresIn || 600000;
     this.pasteCode = code;
     this.setText(this.phoneUrlLabel, `${this.core.hostUrl}/paste`);
+    this.showPasteQr(code);
     this.setText(this.phoneCodeLabel, `${code.slice(0, 3)} ${code.slice(3)}`); // two halves, easier to read
     this.setText(this.phoneExpiryLabel, `Works for ${Math.round(ms / 60000)} minutes, only for you.`);
     this.setStatus('');
@@ -1759,6 +1771,16 @@ var FirePlaylistPanel = class {
     this.pasteCodeTimer = setTimeout(() => this.hidePasteCode(), ms);
     this.openSearch();
     this.render();
+  }
+
+  // The QR opens /p/CODE, which fills the code in. All capitals, so the QR can use its
+  // alphanumeric mode and stay small with big squares (the server's routes don't mind the case).
+  async showPasteQr(code) {
+    if (typeof FireQR === 'undefined') await this.core.setupScript(null, 'qr');
+    const rows = typeof FireQR !== 'undefined' ? FireQR.make(`${this.core.getProtocol()}://${this.core.hostUrl}/p/${code}`.toUpperCase()) : null;
+    this.display(this.phoneQrEl, !!rows);
+    this.setText(this.phoneScanLabel, rows ? 'Scan this with your phone, or go to' : 'On your phone, go to');
+    if (rows && this.pasteCode === code) await this.drawQr(this.phoneQrEl, rows, this.phoneQrBoxes);
   }
 
   hidePasteCode() {

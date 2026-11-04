@@ -34,8 +34,10 @@ var HAND_PLACES = {
   right: { label: 'Right Wrist', attach: 3, position: [0, 0.046, 0.07], rotation: [0, 270, 180], scale: 0.1 },
   // The bottom right of what the player sees, for desktop players, whose hands don't turn.
   view: { label: 'In View', attach: 0, position: [0.2, -0.16, 0.5], rotation: [0, 0, 0], scale: 0.1 },
-  // Further into the bottom right corner and a little smaller, out of the way.
-  corner: { label: 'View Corner', attach: 0, position: [0.3, -0.2, 0.5], rotation: [0, 0, 0], scale: 0.075 },
+  // The bottom right corner of a desktop window (16:10 or wider): big (the desktop default), or
+  // small and out of the way. Both keep the same right and bottom edges.
+  'big-corner': { label: 'Big View Corner', attach: 0, position: [0.565, -0.34, 0.5], rotation: [0, 0, 0], scale: 0.12 },
+  corner: { label: 'View Corner', attach: 0, position: [0.6, -0.35, 0.5], rotation: [0, 0, 0], scale: 0.075 },
   front: { label: 'In Front', scale: 0.15 },
   off: { label: 'Off' }
 };
@@ -1722,7 +1724,7 @@ var Core = class {
 
   // ---------------------------------------------------------------- hand controls
   // Six buttons (mute, volume, skip, the panel) that go where each viewer chooses (HAND_PLACES).
-  // The snippet's hand-controls-place is the default; "auto" is the left wrist in VR and in view
+  // The snippet's hand-controls-place is the default; "auto" is the left wrist in VR and the big view corner
   // on desktop, where the hands can't be turned to see the buttons.
   async isVR() {
     if (this.vrCheck === undefined) {
@@ -1753,7 +1755,7 @@ var Core = class {
   async handPlace() {
     const choice = this.handPlaceChoice();
     if (choice !== 'auto') return choice;
-    return (await this.isVR()) ? 'left' : 'view';
+    return (await this.isVR()) ? 'left' : 'big-corner';
   }
   // Steps to the next place, remembered on this device, and moves the buttons there.
   async nextHandPlace() {
@@ -1767,11 +1769,13 @@ var Core = class {
     this.chosenHandPlace = this.currentHandPlace = place;
     // A build still running sees the choice changed and stops, then builds again for the latest
     // choice (see setupHandControls), Off included, which builds nothing.
+    // While a build is running, that build removes what it made at its next step, as removing it
+    // now would leave the client adding parts to objects that are gone.
     this.handPlaceVersion = (this.handPlaceVersion || 0) + 1;
-    this.removeHandControls();
     this.showToast(`Hand controls: ${HAND_PLACES[place].label}`);
-    if (this.handControlsBuilding) this.handControlsRebuild = true;
-    else if (place !== 'off') this.setupHandControls().catch(e => console.error('[Core] Could not set up the hand controls:', e));
+    if (this.handControlsBuilding) { this.handControlsRebuild = true; return; }
+    this.removeHandControls();
+    if (place !== 'off') this.setupHandControls().catch(e => console.error('[Core] Could not set up the hand controls:', e));
   }
   handPlaceLabel() {
     const place = HAND_PLACES[this.currentHandPlace];
@@ -1809,7 +1813,9 @@ var Core = class {
     } finally {
       this.handControlsBuilding = false;
       if (this.handControlsRebuild) {
+        // Another place was chosen meanwhile: whatever that build left goes, then the new one.
         this.handControlsRebuild = false;
+        this.removeHandControls();
         if (!this.destroyed) this.setupHandControls().catch(e => console.error('[Core] Could not set up the hand controls:', e));
       }
     }
@@ -1818,6 +1824,14 @@ var Core = class {
     // False once the player chooses another place (or the player is removed) during a wait.
     const version = this.handPlaceVersion;
     const current = () => !this.destroyed && this.handPlaceVersion === version;
+    // The build is out of date once the controls were removed or another place was chosen; then
+    // it removes what it made (if still there) and stops.
+    let root = null;
+    const stale = () => {
+      if (root === this.handControls && current()) return false;
+      if (root && root === this.handControls) this.removeHandControls();
+      return true;
+    };
     const name = await this.handPlace();
     if (!current()) return;
     this.currentHandPlace = name;
@@ -1834,7 +1848,7 @@ var Core = class {
       this.showToast("Couldn't tell where you are, so the hand controls aren't in front of you. Move a little and choose In Front again.", 6000);
       return;
     }
-    const root = await this.makeObject('FireVPlayer_HandControls', front || {});
+    root = await this.makeObject('FireVPlayer_HandControls', front || {});
     if (!current()) { this.destroyObject(root); return; }
     this.handControls = root;
     // The buttons lie flat, facing out of the wrist (or toward the player). On the wrists the
@@ -1871,7 +1885,7 @@ var Core = class {
       ['Playlist', 0.57, -0.05, "data-playlist-icon-url", () => this.openPlaylist('front')]
     ];
     for (const [button, x, y, icon, callback] of buttons) {
-      if (root !== this.handControls) return; // removed meanwhile
+      if (stale()) return;
       // Just off the wrist, toward -Z: the side a button is seen from.
       const at = new BS.Vector3(x, y, -0.3);
       const click = () => { Promise.resolve(callback()).catch(() => {}); };
@@ -1884,13 +1898,13 @@ var Core = class {
         await this.makeIconButton(`FireVPlayer_Hand${button}`, group, at, 0.36, this.params[icon], click);
       }
     }
-    if (root !== this.handControls) return;
+    if (stale()) return;
     if (place.attach === undefined) {
       console.log('[Core] Hand controls put in front of the player.');
       return;
     }
     await new Promise(resolve => setTimeout(resolve, 1000));
-    if (root !== this.handControls) return;
+    if (stale()) return;
     await scene.LegacyAttachObject(root, uid, place.attach);
     console.log(`[Core] Hand controls attached: ${place.label}.`);
     // Where the hand is, for opening the panel the way the player is looking.
@@ -2007,8 +2021,8 @@ var Core = class {
     this.setOrDefault("reload-button", 'true');
     this.setOrDefault("play-pause-button", 'true');
     this.setOrDefault("hand-controls", 'false');
-    // Where the hand buttons start: auto (left wrist in VR, in view on desktop), left, right,
-    // view, corner, front or off. Each viewer can choose another in the panel (HAND_PLACES).
+    // Where the hand buttons start: auto (left wrist in VR, big view corner on desktop), left, right,
+    // view, big-corner, corner, front or off. Each viewer can choose another in the panel (HAND_PLACES).
     this.setOrDefault("hand-controls-place", 'auto');
     // Fine-tunes where the hand buttons sit on the wrist, in the left hand's own Unity axes
     // (mirrored for the right): "x y z" metres and "x y z" degrees. Empty uses the built-in layout.

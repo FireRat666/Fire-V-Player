@@ -114,8 +114,11 @@ class PasteCodes {
       res.json({ ok: true, expiresIn: Math.max(0, entry.expiresAt - Date.now()) });
     });
     expressApp.use('/api', router);
-    // The phone page, at a short address to type.
-    expressApp.get('/paste', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'paste.html')));
+    // The phone page, at a short address to type, and at /p/CODE for the panel's QR code (which
+    // is all capitals, so /P/CODE works too: routes here don't mind the case).
+    const page = (req, res) => { res.set('Cache-Control', 'no-store'); res.sendFile(path.join(__dirname, '..', 'public', 'paste.html')); };
+    expressApp.get('/paste', page);
+    expressApp.get('/p/:code', page);
   }
 }
 

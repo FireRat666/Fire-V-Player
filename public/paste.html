@@ -50,8 +50,9 @@
       const status = document.getElementById('status');
       const sendBtn = document.getElementById('sendBtn');
       const show = (msg, kind) => { status.textContent = msg; status.className = kind || ''; };
-      // The code from the link (?code=), else the last one used in this tab.
-      const fromLink = new URLSearchParams(location.search).get('code');
+      // The code from the link (/p/CODE from the QR, or ?code=), else the last one used in this tab.
+      const inPath = location.pathname.match(/^\/p\/([A-Za-z0-9]+)\/?$/i);
+      const fromLink = (inPath && inPath[1]) || new URLSearchParams(location.search).get('code');
       try { code.value = (fromLink || sessionStorage.getItem('pasteCode') || '').toUpperCase(); } catch (e) { if (fromLink) code.value = fromLink.toUpperCase(); }
       code.addEventListener('input', () => { code.value = code.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); });
 

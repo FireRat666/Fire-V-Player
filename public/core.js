@@ -1827,7 +1827,13 @@ var Core = class {
     }
     if (!this.watchingHandUser) {
       this.watchingHandUser = true;
-      this.onHandUserLeft = e => { if (e && e.detail && e.detail.isLocal) this.removeHandControls(); };
+      this.onHandUserLeft = e => {
+        if (!(e && e.detail && e.detail.isLocal)) return;
+        clearTimeout(this.handRejoinTimer);
+        // A build still running sees this and removes what it made (see buildHandControls).
+        this.handLeftCount = (this.handLeftCount || 0) + 1;
+        this.removeHandControls();
+      };
       // user-joined also fires for the local player on arrival, when the controls already exist.
       this.onHandUserJoined = e => {
         if (!(e && e.detail && e.detail.isLocal) || this.handControls || this.handControlsBuilding) return;
@@ -1840,10 +1846,13 @@ var Core = class {
     }
     if (this.handControls || this.handControlsBuilding) return;
     this.handControlsBuilding = true;
+    const left = this.handLeftCount;
     try {
       await this.buildHandControls(scene);
     } finally {
       this.handControlsBuilding = false;
+      // After leaving, a place chosen meanwhile waits for the next join's build.
+      if (left !== this.handLeftCount) this.handControlsRebuild = false;
       if (this.handControlsRebuild) {
         // Another place was chosen meanwhile: whatever that build left goes, then the new one.
         this.handControlsRebuild = false;
@@ -1854,8 +1863,8 @@ var Core = class {
   }
   async buildHandControls(scene) {
     // False once the player chooses another place (or the player is removed) during a wait.
-    const version = this.handPlaceVersion;
-    const current = () => !this.destroyed && this.handPlaceVersion === version;
+    const version = this.handPlaceVersion, left = this.handLeftCount;
+    const current = () => !this.destroyed && this.handPlaceVersion === version && this.handLeftCount === left;
     // The build is out of date once the controls were removed or another place was chosen; then
     // it removes what it made (if still there) and stops.
     let root = null;

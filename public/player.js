@@ -175,6 +175,7 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
             // We set a flag to tell the
             // SYNC_TIME handler to perform a hard seek, bypassing the normal auto-sync logic.
             this.isResumingFromPassthrough = true;
+            this.resumeSyncPending = true; // a skip before the answer cancels it
             this.core.sendMessage({ path: Commands.REQUEST_SYNC, data: { clientTimestamp: Date.now() } });
           }
         }

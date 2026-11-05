@@ -19,8 +19,8 @@ const CODE_LENGTH = 6;
 /** Wrong codes allowed from one address, per window, before it has to wait. */
 const MAX_FAILS = 10;
 const FAIL_WINDOW_MS = 10 * 60 * 1000;
-/** The longest text a phone can send. */
-const MAX_TEXT = 2000;
+/** The longest text a phone can send: the search takes up to 500 characters (App.search). */
+const MAX_TEXT = 500;
 
 class PasteCodes {
   /**

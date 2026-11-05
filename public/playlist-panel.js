@@ -634,9 +634,11 @@ var FirePlaylistPanel = class {
     this.searchRow = await row(this.mainView, { marginTop: '4px' });
     const searchHint = this.karaoke ? 'Search for a song to sing, or paste a video link' : 'Search YouTube, or paste a YouTube / Twitch / Vimeo / video link';
     this.searchField = await this.textField(this.searchRow, searchHint, v => { this.searchQuery = v; }, () => this.doSearch());
+    if (!this.searchField) await this.label(this.searchRow, 'Search needs text input, which this client does not have.', { color: '#bbbbbb', flexGrow: 1 });
+    // What to search: YouTube, Internet Archive films and TV, Tubi or NASA+ (not for karaoke).
+    // Without a text field it still picks where words sent from a phone are searched.
+    if (!this.karaoke) this.sourceBtn = await this.button(this.searchRow, 'YouTube', () => this.toggleSearchSource(), { backgroundColor: '#c62828', width: '170px' });
     if (this.searchField) {
-      // What to search: YouTube, Internet Archive films and TV, Tubi or NASA+ (not for karaoke).
-      if (!this.karaoke) this.sourceBtn = await this.button(this.searchRow, 'YouTube', () => this.toggleSearchSource(), { backgroundColor: '#c62828', width: '170px' });
       await this.button(this.searchRow, 'Search', () => this.doSearch(), { backgroundColor: '#1565c0' });
       // Typing a link on a headset is hard: get a code, and send the link from a phone instead.
       await this.button(this.searchRow, 'Phone', () => this.askPasteCode(), { backgroundColor: '#6a1b9a' });
@@ -649,7 +651,6 @@ var FirePlaylistPanel = class {
       // The last search, when its results were kept on this device.
       if (this.searchQuery) this.setSearchText(this.searchQuery);
     } else {
-      await this.label(this.searchRow, 'Search needs text input, which this client does not have.', { color: '#bbbbbb', flexGrow: 1 });
       // A link sent from a phone still goes in (pasteFromPhone sets searchQuery without a field).
       await this.button(this.searchRow, 'Phone', () => this.askPasteCode(), { backgroundColor: '#6a1b9a' });
     }

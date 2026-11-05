@@ -433,7 +433,7 @@ async function clearPlaylist(app, ws, skipUpdate) {
 
 /**
  * Whether a requested video is the song a singer queued: the same YouTube video, or the same link.
- * No request (nothing named) counts as the queued song.
+ * No request (nothing named) counts as the queued song; a link that isn't text never matches.
  *
  * @param {Object} app - Express application and state controller.
  * @param {string|Object} requested - The video link or object the client sent.
@@ -444,7 +444,7 @@ function isSameSong(app, requested, queued) {
   const link = typeof requested === 'string' ? requested : requested && (requested.link || requested.url);
   if (!link) return true;
   const queuedLink = queued && queued.link;
-  if (!queuedLink) return false;
+  if (typeof link !== 'string' || typeof queuedLink !== 'string' || !queuedLink) return false;
   const a = app.getYoutubeId(link);
   const b = app.getYoutubeId(queuedLink);
   return a || b ? a === b : link.trim() === queuedLink.trim();

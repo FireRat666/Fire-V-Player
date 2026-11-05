@@ -1830,16 +1830,17 @@ var Core = class {
       this.onHandUserLeft = e => {
         if (!(e && e.detail && e.detail.isLocal)) return;
         clearTimeout(this.handRejoinTimer);
+        this.handJoinedDuringBuild = false;
         // A build still running sees this and removes what it made (see buildHandControls).
         this.handLeftCount = (this.handLeftCount || 0) + 1;
         this.removeHandControls();
       };
       // user-joined also fires for the local player on arrival, when the controls already exist.
       this.onHandUserJoined = e => {
-        if (!(e && e.detail && e.detail.isLocal) || this.handControls || this.handControlsBuilding) return;
-        // Wait a moment after joining before attaching, which avoids a race on Quest.
-        clearTimeout(this.handRejoinTimer);
-        this.handRejoinTimer = setTimeout(() => this.setupHandControls().catch(err => console.error('[Core] Could not set up the hand controls:', err)), 5000);
+        if (!(e && e.detail && e.detail.isLocal) || this.handControls) return;
+        // A build running now may be one the player left: it rebuilds once that one ends.
+        if (this.handControlsBuilding) { this.handJoinedDuringBuild = true; return; }
+        this.scheduleHandRejoin();
       };
       scene.On('user-left', this.onHandUserLeft);
       scene.On('user-joined', this.onHandUserJoined);
@@ -1851,8 +1852,14 @@ var Core = class {
       await this.buildHandControls(scene);
     } finally {
       this.handControlsBuilding = false;
-      // After leaving, a place chosen meanwhile waits for the next join's build.
-      if (left !== this.handLeftCount) this.handControlsRebuild = false;
+      // After leaving, a place chosen meanwhile waits for the next join's build, which is now
+      // when the player joined again before this build ended.
+      const joined = this.handJoinedDuringBuild;
+      this.handJoinedDuringBuild = false;
+      if (left !== this.handLeftCount) {
+        this.handControlsRebuild = false;
+        if (joined && !this.destroyed) this.scheduleHandRejoin();
+      }
       if (this.handControlsRebuild) {
         // Another place was chosen meanwhile: whatever that build left goes, then the new one.
         this.handControlsRebuild = false;
@@ -1860,6 +1867,11 @@ var Core = class {
         if (!this.destroyed) this.setupHandControls().catch(e => console.error('[Core] Could not set up the hand controls:', e));
       }
     }
+  }
+  // Builds the hand controls a moment after the local player joins, which avoids a race on Quest.
+  scheduleHandRejoin() {
+    clearTimeout(this.handRejoinTimer);
+    this.handRejoinTimer = setTimeout(() => this.setupHandControls().catch(err => console.error('[Core] Could not set up the hand controls:', err)), 5000);
   }
   async buildHandControls(scene) {
     // False once the player chooses another place (or the player is removed) during a wait.

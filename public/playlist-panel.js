@@ -650,6 +650,8 @@ var FirePlaylistPanel = class {
       if (this.searchQuery) this.setSearchText(this.searchQuery);
     } else {
       await this.label(this.searchRow, 'Search needs text input, which this client does not have.', { color: '#bbbbbb', flexGrow: 1 });
+      // A link sent from a phone still goes in (pasteFromPhone sets searchQuery without a field).
+      await this.button(this.searchRow, 'Phone', () => this.askPasteCode(), { backgroundColor: '#6a1b9a' });
     }
 
     // Paste from your phone: a QR code that opens the page with the code filled in, and the
@@ -1349,7 +1351,7 @@ var FirePlaylistPanel = class {
   }
 
   async drawQrNow(el, rows, boxes, run) {
-    if (boxes.run !== run) return;
+    if (this.destroyed || boxes.run !== run) return;
     const px = QR_MODULE_PX, edge = QR_MARGIN * px;
     const side = `${(rows.length + 2 * QR_MARGIN) * px}px`;
     el.SetStyles({ width: side, height: side });
@@ -1795,11 +1797,17 @@ var FirePlaylistPanel = class {
   // The QR opens /p/CODE, which fills the code in. All capitals, so the QR can use its
   // alphanumeric mode and stay small with big squares (the server's routes don't mind the case).
   async showPasteQr(code) {
+    if (this.destroyed) return;
+    // The old code's QR is hidden while the new one is drawn, so the two never show mixed.
+    this.display(this.phoneQrEl, false);
     if (typeof FireQR === 'undefined') await this.core.setupScript(null, 'qr');
+    if (this.destroyed || this.pasteCode !== code) return;
     const rows = typeof FireQR !== 'undefined' ? FireQR.make(`${this.core.getProtocol()}://${this.core.hostUrl}/p/${code}`.toUpperCase()) : null;
-    this.display(this.phoneQrEl, !!rows);
     this.setText(this.phoneScanLabel, rows ? 'Scan this with your phone, or go to' : 'On your phone, go to');
-    if (rows && this.pasteCode === code) await this.drawQr(this.phoneQrEl, rows, this.phoneQrBoxes);
+    if (!rows) return;
+    await this.drawQr(this.phoneQrEl, rows, this.phoneQrBoxes);
+    if (this.destroyed || this.pasteCode !== code) return;
+    this.display(this.phoneQrEl, true);
   }
 
   hidePasteCode() {

@@ -26,6 +26,8 @@ async function toggleLock(app, ws, locked) {
   app.onlyIfHost(ws, async () => {
     const player = app.videoPlayers[ws.i];
     player.locked = locked;
+    // Unlocked, anyone can add, so songs waiting for approval go ahead.
+    if (!player.locked) require('./karaokeHandler.js').approveAll(app, ws.i);
     // Instead of sending the whole state, broadcast a small, specific message.
     player.sockets.forEach(socket => {
       app.send(socket, Commands.LOCK_STATE_CHANGED, { locked: player.locked });

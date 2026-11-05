@@ -175,6 +175,7 @@ namespace FireVPlayer.EditorTools
         // The SDK only puts handles on positions its <bs-gizmo> lines name. The Singers button has
         // none there, as its default ("0 0 0": hang off the buttons) would put the handle at the
         // origin. This one sits on the button wherever it really is.
+        /// <summary>Where the Singers button was last drawn, for its drag handle.</summary>
         class SingerSpot
         {
             public string instanceId;
@@ -185,6 +186,11 @@ namespace FireVPlayer.EditorTools
 
         static SingerSpot _singer;
 
+        /// <summary>
+        /// Draws the Singers button's drag handle on the selected snippet, and saves where it's dragged to
+        /// (and, on the first drag, the turn it has now) as its settings.
+        /// </summary>
+        /// <param name="view">The Scene view being drawn.</param>
         static void OnSceneGui(SceneView view)
         {
             var s = _singer;
@@ -211,9 +217,11 @@ namespace FireVPlayer.EditorTools
             s.pos = world;
         }
 
-        // Rounded to 3 decimals. "0 0 0" means the default, so a value that rounds to it is nudged.
-        // The x of each button under the screen, as core.js's screenButtonLayout: the original row, or
-        // with Reload (after Playlist) and Play/Pause (before the skips) when they're on.
+        /// <summary>
+        /// The x of each button under the screen, as core.js's screenButtonLayout: the original row, or
+        /// with Reload (after Playlist) and Play/Pause (before the skips) when they're on.
+        /// </summary>
+        /// <param name="e">Snippet XML element.</param>
         static float[] ButtonLayout(XElement e)
         {
             bool playPause = Flag(e, "play-pause-button", true);
@@ -233,6 +241,11 @@ namespace FireVPlayer.EditorTools
             return xs.ToArray();
         }
 
+        /// <summary>
+        /// A vector as a setting's text, rounded to 3 decimals. "0 0 0" means the default, so a value that
+        /// rounds to it is nudged.
+        /// </summary>
+        /// <param name="v">The vector.</param>
         static string Format(Vector3 v)
         {
             var n = new[] { v.x, v.y, v.z }.Select(x => Mathf.Round(x * 1000f) / 1000f).ToArray();
@@ -421,6 +434,192 @@ namespace FireVPlayer.EditorTools
         {
             var n = Numbers(e, name);
             return n != null && n[0] != 0 ? n[0] : fallback;
+        }
+    }
+
+    /// <summary>
+    /// What every snippet setting is now, kept in step with index.html so Undo can put back what it was.
+    /// It lives only in memory (a ScriptableSingleton survives script reloads, not restarts).
+    /// </summary>
+    sealed class FireVPlayerSnippetUndoState : ScriptableSingleton<FireVPlayerSnippetUndoState>
+    {
+        // "instance\nattribute", the value, and whether the attribute is there at all (a list of strings
+        // can't hold null).
+        public List<string> keys = new List<string>();
+        public List<string> values = new List<string>();
+        public List<bool> present = new List<bool>();
+        // A stamp that changes with every recorded change, so every Undo record holds the one it was made
+        // with (Unity records only the fields a change touches). Below the last Snapshot's stamp, the values
+        // are from before it (see FireVPlayerSnippetUndo.Snapshot).
+        public int epoch;
+    }
+
+    /// <summary>
+    /// Undo and Redo for snippet settings. The Creator SDK keeps them in index.html and leaves them out of
+    /// Undo on purpose, so Ctrl+Z after changing a snippet's position in the inspector, or dragging its gizmo,
+    /// skipped that change and undid whatever came before it. This records each change as it happens (a drag,
+    /// or a quick run of typing in one field, is one step) and puts the values back on Undo and Redo. Works for
+    /// every snippet, not only Fire-V-Player.
+    /// </summary>
+    [InitializeOnLoad]
+    static class FireVPlayerSnippetUndo
+    {
+        // Changes to the same setting this close together (seconds) are one Undo step.
+        const double MergeWithin = 1.0;
+
+        static bool _applying;
+        static string _lastKey;
+        static double _lastTime;
+        static int _lastGroup = -1;
+
+        /// <summary>Follows every snippet setting change and every Undo or Redo.</summary>
+        static FireVPlayerSnippetUndo()
+        {
+            SnippetHtmlSync.Changed += OnChanged;
+            Undo.undoRedoPerformed += OnUndoRedo;
+            // After a script reload, match the file as it is now.
+            EditorApplication.delayCall += Snapshot;
+        }
+
+        /// <summary>The settings as they are now, which Undo records.</summary>
+        static FireVPlayerSnippetUndoState State => FireVPlayerSnippetUndoState.instance;
+
+        /// <summary>Whether a setting is one Undo looks after (not the snippet's id or name).</summary>
+        /// <param name="attribute">Attribute name.</param>
+        static bool Tracked(string attribute) =>
+            attribute != SnippetHtmlSync.InstanceAttribute && attribute != "name";
+
+        // Kept outside the state, so Undo can't put them back: the last stamp handed out, and the stamp
+        // of the last Snapshot. Undoing or redoing to values recorded before that Snapshot brings back a
+        // stamp below it, which shows they're stale.
+        const string EpochKey = "FireVPlayer.SnippetUndo.Epoch";
+        const string SnapshotEpochKey = "FireVPlayer.SnippetUndo.SnapshotEpoch";
+
+        /// <summary>A new stamp, higher than every one before it in this editor session.</summary>
+        static int NextEpoch()
+        {
+            var epoch = SessionState.GetInt(EpochKey, 0) + 1;
+            SessionState.SetInt(EpochKey, epoch);
+            return epoch;
+        }
+
+        /// <summary>
+        /// Copies every snippet's settings into the state, without an Undo step. Undo steps recorded
+        /// before it hold values from before, so they're removed, and any Unity keeps are ignored
+        /// (OnUndoRedo checks the stamp).
+        /// </summary>
+        static void Snapshot()
+        {
+            var s = State;
+            Undo.ClearUndo(s);
+            var epoch = NextEpoch();
+            SessionState.SetInt(SnapshotEpochKey, epoch);
+            s.epoch = epoch;
+            _lastKey = null;
+            _lastGroup = -1;
+            s.keys.Clear();
+            s.values.Clear();
+            s.present.Clear();
+            try
+            {
+                foreach (var e in SnippetHtmlSync.All())
+                {
+                    var id = (string)e.Attribute(SnippetHtmlSync.InstanceAttribute);
+                    if (string.IsNullOrEmpty(id)) continue;
+                    foreach (var a in e.Attributes())
+                    {
+                        if (!Tracked(a.Name.LocalName)) continue;
+                        s.keys.Add(id + "\n" + a.Name.LocalName);
+                        s.values.Add(a.Value);
+                        s.present.Add(true);
+                    }
+                }
+            }
+            catch (Exception) { /* index.html didn't load: nothing to track */ }
+        }
+
+        /// <summary>
+        /// Records a snippet setting's change as an Undo step (merged with the one before when it's the same
+        /// setting moments later). Anything else that changes index.html, such as a snippet added, removed or
+        /// reloaded, starts tracking afresh.
+        /// </summary>
+        /// <param name="kind">What changed.</param>
+        /// <param name="instanceId">The snippet's id.</param>
+        /// <param name="attribute">The setting that changed.</param>
+        static void OnChanged(SnippetHtmlSync.ChangeKind kind, string instanceId, string attribute)
+        {
+            if (_applying) return;
+            // Snippets added, removed or reloaded from disk: follow the file, without an Undo step.
+            if (kind != SnippetHtmlSync.ChangeKind.AttributeSet || string.IsNullOrEmpty(instanceId) || string.IsNullOrEmpty(attribute))
+            {
+                Snapshot();
+                return;
+            }
+            if (!Tracked(attribute)) return;
+            var element = SnippetHtmlSync.Get(instanceId);
+            if (element == null) return;
+            var value = (string)element.Attribute(attribute);
+
+            var s = State;
+            var key = instanceId + "\n" + attribute;
+            var i = s.keys.IndexOf(key);
+            if (i < 0)
+            {
+                // A setting the snippet didn't have: before this change it was missing.
+                s.keys.Add(key);
+                s.values.Add("");
+                s.present.Add(false);
+                i = s.keys.Count - 1;
+            }
+            if (s.present[i] == (value != null) && s.values[i] == (value ?? "")) return;
+
+            // The state still holds the old value, so recording it now is what Undo puts back.
+            var snippetName = (string)element.Attribute("name") ?? "snippet";
+            Undo.RecordObject(s, $"Change {snippetName} {attribute}");
+            s.values[i] = value ?? "";
+            s.present[i] = value != null;
+            s.epoch = NextEpoch(); // changed too, so the record holds the stamp from before this change
+
+            var group = Undo.GetCurrentGroup();
+            var now = EditorApplication.timeSinceStartup;
+            if (key == _lastKey && now - _lastTime < MergeWithin && _lastGroup >= 0 && _lastGroup < group)
+            {
+                Undo.CollapseUndoOperations(_lastGroup);
+                group = _lastGroup;
+            }
+            _lastKey = key;
+            _lastTime = now;
+            _lastGroup = group;
+        }
+
+        /// <summary>Puts every setting Undo or Redo changed back into index.html.</summary>
+        static void OnUndoRedo()
+        {
+            _lastKey = null;
+            _lastGroup = -1;
+            var s = State;
+            // Values from before the last Snapshot: leave index.html as it is and track it again.
+            if (s.epoch < SessionState.GetInt(SnapshotEpochKey, int.MaxValue))
+            {
+                Snapshot();
+                return;
+            }
+            _applying = true;
+            try
+            {
+                for (var i = 0; i < s.keys.Count; i++)
+                {
+                    var parts = s.keys[i].Split('\n');
+                    if (parts.Length != 2) continue;
+                    var element = SnippetHtmlSync.Get(parts[0]);
+                    if (element == null) continue;
+                    var want = s.present[i] ? s.values[i] : null;
+                    if ((string)element.Attribute(parts[1]) != want) SnippetHtmlSync.SetAttribute(parts[0], parts[1], want);
+                }
+            }
+            catch (Exception ex) { Debug.LogWarning("[Fire-V-Player] Couldn't undo a snippet setting: " + ex.Message); }
+            finally { _applying = false; }
+            SceneView.RepaintAll();
         }
     }
 }

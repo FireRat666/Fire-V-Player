@@ -22,6 +22,8 @@ const { Op } = require('sequelize');
 const { initializeDatabase } = require('./db.js');
 const models = require('./models'); // Sequelize models
 const { Blacklist } = require('./blacklist.js');
+const PasteCodes = require('./paste.js');
+const VERSION = require('./version.js'); // this build, shown in the panel (see version.js)
 
 /** Seek skip increment in seconds for standard playlist mode. */
 const SkipJumpTimePlaylist = 5;
@@ -57,6 +59,7 @@ class App {
     this.dbConnected = false;
     /** People who can't control the player in any world (see server/blacklist.js). */
     this.blacklist = new Blacklist(this, models);
+    this.pasteCodes = new PasteCodes(this); // paste from your phone (see paste.js)
   };
 
   /**
@@ -197,6 +200,7 @@ class App {
     // page's wrong-password limit.
     this.app.set('trust proxy', 1);
     this.blacklist.setupRoutes(this.app);
+    this.pasteCodes.setupRoutes(this.app);
     // The stream to play for a Tubi or NASA+ link, asked for by the player page when it plays one
     // (Tubi's stream links expire, so the playlist keeps the page's link). Only those sites' pages
     // are looked up, from the id in the link.
@@ -276,6 +280,7 @@ class App {
    * @returns {void}
    */
   handleClose(ws, code, reason) {
+    this.pasteCodes.drop(ws);
     // Convert the reason buffer to a string for readable logging, handling empty reasons.
     const reasonString = reason && reason.length > 0 ? reason.toString() : 'No reason given';
     console.log(`${App.who(ws.u)} disconnected from ${ws.type || 'N/A'}. Code: ${code}, Reason: ${reasonString}`);
@@ -446,6 +451,9 @@ class App {
       case Commands.SEARCH:
         this.search(msg.data, ws);
         break;
+      case Commands.PASTE_CODE_REQUEST:
+        this.pasteCodes.issue(ws);
+        break;
       case Commands.FROM_PLAYLIST:
         await playlistHandler.fromPlaylist(this, ws, msg.data);
         break;
@@ -500,6 +508,9 @@ class App {
         break;
       case Commands.MOVE_SINGER:
         await karaokeHandler.moveSinger(this, ws, msg.data);
+        break;
+      case Commands.APPROVE_SINGER:
+        await karaokeHandler.approveSinger(this, ws, msg.data);
         break;
       case Commands.PLAY_KARAOKE_TRACK:
         await karaokeHandler.playKaraokeTrack(this, ws, msg.data);
@@ -921,7 +932,7 @@ class App {
             // A track has finished.
             if (player.isKaraoke) {
               // In a karaoke context, a song ending means we either stop or auto-advance.
-              if (player.autoAdvance && player.singers.length > 0) {
+              if (player.autoAdvance && player.singers.some(karaokeHandler.isApproved)) {
                 await karaokeHandler.playNextKaraokeSong(this, instanceId);
               } else {
                 // If auto-advance is off, or the singer list is empty, stop the player.
@@ -1245,7 +1256,8 @@ class App {
     // This prevents race conditions on the client and ensures all data is available on connect.
     this.send(ws, Commands.PLAYBACK_UPDATE, {
       video: this.getVideoObject(instanceId, { includePlaylist: true, includeSingers: true }),
-      type: 'initial-sync'
+      type: 'initial-sync',
+      version: VERSION
     });
   }
   /**
@@ -1259,7 +1271,8 @@ class App {
     this.syncWsTime(ws, ws.i);
     this.send(ws, Commands.PLAYBACK_UPDATE, {
       video: this.getVideoObject(ws.i, { includePlaylist: true, includeSingers: true }),
-      type: 'initial-sync'
+      type: 'initial-sync',
+      version: VERSION
     });
   }
 
@@ -1302,7 +1315,8 @@ class App {
           name: s.user.name,
           p: s.timestamp,
           id: s.user.id,
-          v: s.video
+          v: s.video,
+          a: karaokeHandler.isApproved(s)
         }));
       }
 
@@ -1427,7 +1441,8 @@ class App {
       name: s.user.name,
       p: s.timestamp,
       id: s.user.id,
-      v: s.video
+      v: s.video,
+      a: karaokeHandler.isApproved(s)
     }));
 
     // Send the specific update to all connected UIs.
@@ -1461,7 +1476,7 @@ async function start() {
     app.server.listen(port, () => {
       // Attach the connection handlers only AFTER the server is successfully listening.
       app.attachWebsocketListeners();
-      console.log(`Video Player started and listening on port ${port}.`);
+      console.log(`Video Player started and listening on port ${port}.${VERSION ? ` Version ${VERSION}.` : ''}`);
     });
   } catch (err) {
     console.error("Failed to start application:", err);

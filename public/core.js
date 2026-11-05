@@ -22,6 +22,8 @@ var SCREEN_RESOLUTIONS = [1280, 1600, 1920];
 var RESOLUTION_PREF_KEY = 'fire-v-player-resolution';
 // Where each viewer keeps their hand controls (see HAND_PLACES), remembered on their device.
 var HAND_PLACE_PREF_KEY = 'fire-v-player-hand-place';
+// Whether each viewer has folded their hand controls away to just the show/hide button.
+var HAND_COLLAPSED_PREF_KEY = 'fire-v-player-hand-collapsed';
 // The places the hand controls can go, in the order the panel's button steps through them.
 // attach is the SDK's LegacyAttachmentPosition (HEAD 0, LEFT_HAND 2, RIGHT_HAND 3); position and
 // rotation are in that attachment's own Unity axes. On a hand, -X is the back of the left hand
@@ -32,6 +34,10 @@ var HAND_PLACES = {
   right: { label: 'Right Wrist', attach: 3, position: [0, 0.046, 0.07], rotation: [0, 270, 180], scale: 0.1 },
   // The bottom right of what the player sees, for desktop players, whose hands don't turn.
   view: { label: 'In View', attach: 0, position: [0.2, -0.16, 0.5], rotation: [0, 0, 0], scale: 0.1 },
+  // The bottom right corner of a desktop window (16:10 or wider): big (the desktop default), or
+  // small and out of the way. Both keep the same right and bottom edges.
+  'big-corner': { label: 'Big View Corner', attach: 0, position: [0.565, -0.34, 0.5], rotation: [0, 0, 0], scale: 0.12 },
+  corner: { label: 'View Corner', attach: 0, position: [0.6, -0.35, 0.5], rotation: [0, 0, 0], scale: 0.075 },
   front: { label: 'In Front', scale: 0.15 },
   off: { label: 'Off' }
 };
@@ -85,6 +91,8 @@ var Core = class {
     this.setOrDefault("data-vol-up-icon-url", `${proto}://${this.hostUrl}/assets/VolUp.png`);
     this.setOrDefault("data-vol-down-icon-url", `${proto}://${this.hostUrl}/assets/VolDown.png`);
     this.setOrDefault("data-mute-icon-url", `${proto}://${this.hostUrl}/assets/Mute.png`);
+    this.setOrDefault("data-controls-show-icon-url", `${proto}://${this.hostUrl}/assets/ControlsShow.png`);
+    this.setOrDefault("data-controls-hide-icon-url", `${proto}://${this.hostUrl}/assets/ControlsHide.png`);
     this.setOrDefault("data-skip-forward-icon-url", `${proto}://${this.hostUrl}/assets/Forward.png`);
     this.setOrDefault("data-skip-backward-icon-url", `${proto}://${this.hostUrl}/assets/Backwards.png`);
     this.setOrDefault("data-reload-icon-url", `${proto}://${this.hostUrl}/assets/Reload.png`);
@@ -251,8 +259,11 @@ var Core = class {
 
   white() { return new BS.Vector4(1, 1, 1, 1); }
   // A picture you click: a plane with the icon on it, and a thin collider on the UI layer.
-  async makeIconButton(name, parent, position, size, iconUrl, callback, rotation) {
-    const go = await this.makeImage(name, parent, position, size, size, iconUrl, { rotation, layer: LAYER_UI });
+  // `alive`, when given, says whether the button is still wanted: once it isn't (its parent was
+  // removed meanwhile), no more parts are added, as the client fails on objects that are gone.
+  async makeIconButton(name, parent, position, size, iconUrl, callback, rotation, alive) {
+    const go = await this.makeImage(name, parent, position, size, size, iconUrl, { rotation, layer: LAYER_UI, alive });
+    if (alive && !alive()) return go;
     await this.addColliderBox(go, new BS.Vector3(size, size, 0.01), true);
     go.On('click', () => { if (!this.blocked) callback(); });
     return go;
@@ -263,7 +274,9 @@ var Core = class {
     const go = await this.makeObject(name, { parent, position, rotation: opts.rotation, layer: opts.layer });
     if (opts.made) opts.made.push(go);
     const shader = 'Unlit/DiffuseTransparent';
+    if (opts.alive && !opts.alive()) return go; // see makeIconButton
     await this.addComponent(go, this.bsComponent('Plane', { width, height }, 'BanterPlane', [width, height]));
+    if (opts.alive && !opts.alive()) return go;
     await this.addComponent(go, this.bsComponent('Material', { shaderName: shader, texture: url, color: this.white() },
       'BanterMaterial', [shader, url, this.white(), 0, true]));
     return go;
@@ -935,11 +948,14 @@ var Core = class {
   }
   // A button with a picture for each state (see showSwapButton). Each picture is its own icon
   // button, and only the one for the current state is active, so it's the one seen and clicked.
-  async setupSwapButton(parent, name, position, icons, callback, size = 0.2) {
+  // Null when `alive` (see makeIconButton) says it's no longer wanted.
+  async setupSwapButton(parent, name, position, icons, callback, size = 0.2, alive) {
     const holder = await this.makeObject(`FireVPlayer_${name}`, { parent, position });
+    if (alive && !alive()) return null;
     const button = { holder, icons: {}, state: null, shown: true };
     for (const state of Object.keys(icons)) {
-      const go = await this.makeIconButton(`FireVPlayer_${name}_${state}`, holder, new BS.Vector3(0, 0, 0), size, icons[state], callback);
+      const go = await this.makeIconButton(`FireVPlayer_${name}_${state}`, holder, new BS.Vector3(0, 0, 0), size, icons[state], callback, undefined, alive);
+      if (alive && !alive()) return null;
       button.icons[state] = go;
       this.setActive(go, false);
     }
@@ -991,6 +1007,18 @@ var Core = class {
       }
     }
   }
+  // The volume this viewer hears: the setting, faded by their distance while `spatial` is on.
+  heardVolume() {
+    const fade = this.params.spatial === 'true' && Number.isFinite(this.spatialFade) ? this.spatialFade : 1;
+    return Math.round(this.params.volume * fade);
+  }
+  // Sends the screen the volume this viewer hears. The buttons go through here, so with `spatial`
+  // on a press changes the faded volume; sending the setting itself was louder until the next
+  // head movement faded it again, which sounded like the volume dropping by itself.
+  sendVolume() {
+    this.tempVolume = this.heardVolume();
+    return this.sendBrowserMessage({path: Commands.SET_VOLUME, data: this.tempVolume});
+  }
   setAbsoluteVolume(amount) {
     if (this.blocked) return;
     this.params.volume = amount;
@@ -999,7 +1027,7 @@ var Core = class {
     } else if (this.params.volume < 0) {
       this.params.volume = 0;
     }
-    this.sendBrowserMessage({path: Commands.SET_VOLUME, data: this.params.volume});
+    this.sendVolume();
   }
   setVolumeIncrement(amount) {
     if (this.blocked) return;
@@ -1009,7 +1037,7 @@ var Core = class {
     } else if (this.params.volume < 0) {
       this.params.volume = 0;
     }
-    this.sendBrowserMessage({path: Commands.SET_VOLUME, data: this.params.volume});
+    this.sendVolume();
   }
   /**
    * Sets up karaoke's 3D in-world Singers button and optional trigger volume box.
@@ -1099,12 +1127,16 @@ var Core = class {
       inside.add(part(d));
       if (!wasOutside) return;
       clearTimeout(hasStartedTimeout);
-      if(triggerEnter && this.player && this.player.players && this.player.players.length && this.player.players[0].id === window.user.id && !hasStarted) {
+      // The next approved singer starts their song by stepping in, unless one is already playing.
+      const next = this.nextSinger();
+      if(triggerEnter && next && next.id === window.user.id && !hasStarted) {
         if(this.player.locked) {
           this.showToast("Player is locked! The host needs to unlock it first!");
+        }else if(this.player.playlist && this.player.playlist.length) {
+          this.showToast("Wait for the current song to finish!");
         }else{
-          this.sendMessage({path: Commands.ADD_TO_PLAYLIST, data: this.player.players[0].v, isYoutubeWebsite: false, skipUpdate: true });
-          this.sendMessage({path: Commands.SET_TRACK, data: 0});
+          // The server starts the next singer's song and takes them off the queue.
+          this.sendMessage({path: Commands.PLAY_KARAOKE_TRACK});
           hasStarted = true;
         }
       }
@@ -1116,13 +1148,14 @@ var Core = class {
       if (inside.size > 0) return;
       clearTimeout(hasStartedTimeout);
       hasStartedTimeout = setTimeout(() => {
-        if(triggerExit && this.player && this.player.players && this.player.players.length && hasStarted) {
-          const player = this.player.players[0];
-          if(player.id === window.user.id) {
-              this.sendMessage({path: Commands.REMOVE_FROM_PLAYERS, data: player.id });
-              this.sendMessage({path: Commands.STOP});
-              hasStarted = false;
-          }
+        if(!hasStarted) return;
+        hasStarted = false;
+        if(!triggerExit) return;
+        // Once started, the singer is off the queue and their song is the one playing: leaving
+        // the stage stops it (the server stops a song when its singer removes themselves).
+        const song = this.player && this.player.playlist && this.player.playlist[0];
+        if(song && song.user && song.user.id === window.user.id) {
+          this.sendMessage({path: Commands.REMOVE_FROM_PLAYERS, data: window.user.id });
         }
       }, 5000);
     });
@@ -1470,6 +1503,12 @@ var Core = class {
     if (this.playlistPanel) this.playlistPanel.setStatus(msg);
   }
 
+  // Karaoke: the next singer in the queue whose song is approved (see karaokeHandler).
+  nextSinger() {
+    const list = this.player && Array.isArray(this.player.players) ? this.player.players : [];
+    return list.find(p => p.a !== false) || null;
+  }
+
   // ---------------------------------------------------------------- blacklist
   //
   // The server tells a blacklisted person's player (Commands.SET_BLOCKED). They can still watch,
@@ -1575,7 +1614,7 @@ var Core = class {
       this.sendBrowserMessage({path: Commands.MUTE, data: this.params.mute});
       this.updateScreenButtons();
     }
-    this.sendBrowserMessage({path: Commands.SET_VOLUME, data: this.params.volume});
+    this.sendVolume();
   }
   
   mute() {
@@ -1642,7 +1681,9 @@ var Core = class {
     if (typeof go.WatchTransform !== 'function' || !PN) return;
     try {
       await go.WatchTransform([PN.position, PN.rotation], t => {
-        if (this.headMarker === go && t && t.position) this.headMarkerPose = { position: t.position, rotation: t.rotation };
+        if (this.headMarker !== go || !t || !t.position) return;
+        this.headMarkerPose = { position: t.position, rotation: t.rotation };
+        this.updateSpatialVolume(t.position);
       });
     } catch (e) {
       console.warn('[Core] Could not watch the head marker:', e);
@@ -1678,35 +1719,44 @@ var Core = class {
     const scene = this.banterScene();
     if (!scene || this.params.spatial !== 'true' || this.onPoseUpdate) return;
     const p = this.vec3(this.params.position, [0, 0, 0]);
-    const screen = { x: p[0], y: p[1], z: -p[2] }; // in Unity's axes, like the head
-    let lastSendTime = Date.now();
+    this.spatialScreen = { x: p[0], y: p[1], z: -p[2] }; // in Unity's axes, like the head
+    this.spatialSentAt = Date.now();
     this.onPoseUpdate = e => {
-      const head = e && e.detail && e.detail.head;
-      if (!head || !head.position || this.blocked) return;
-      const now = Date.now();
-      if (now - lastSendTime <= 500) return;
-      lastSendTime = now;
-      const minDistance = Number(this.params["spatial-min-distance"]);
-      const maxDistance = Number(this.params["spatial-max-distance"]);
-      const a = head.position.x - screen.x;
-      const b = head.position.y - screen.y;
-      const c = head.position.z - screen.z;
-      const distance = Math.sqrt(a * a + b * b + c * c);
-      const volume = Math.max(0, Math.min(1, (maxDistance - (distance - minDistance)) / maxDistance));
-      const roundedVolume = Math.round(this.params.volume * volume);
-      if(this.tempVolume != roundedVolume) {
-        // Rejected while there's no screen yet, which is fine: the next pose tries again.
-        Promise.resolve(this.sendBrowserMessage({path: Commands.SET_VOLUME, data: roundedVolume, type: 'spatial'}))
-          .catch(() => {});
-      }
-      this.tempVolume = roundedVolume;
+      // The head marker when it reports (pose-update's values don't match the world on Quest, see
+      // setupHeadMarker); its own reports also update the fade.
+      const marker = this.headMarkerPose;
+      const head = marker && marker.position ? marker : e && e.detail && e.detail.head;
+      this.updateSpatialVolume(head && head.position);
     };
     scene.On('pose-update', this.onPoseUpdate);
+  }
+  // Fades the volume for the head at `position` (world space), at most every 500 ms, and sends it
+  // only when the volume heard changes.
+  updateSpatialVolume(position) {
+    if (!position || !this.spatialScreen || this.blocked) return;
+    const now = Date.now();
+    if (now - this.spatialSentAt <= 500) return;
+    this.spatialSentAt = now;
+    const screen = this.spatialScreen;
+    const minDistance = Number(this.params["spatial-min-distance"]);
+    const maxDistance = Number(this.params["spatial-max-distance"]);
+    const a = position.x - screen.x;
+    const b = position.y - screen.y;
+    const c = position.z - screen.z;
+    const distance = Math.sqrt(a * a + b * b + c * c);
+    this.spatialFade = Math.max(0, Math.min(1, (maxDistance - (distance - minDistance)) / maxDistance));
+    const roundedVolume = this.heardVolume();
+    if(this.tempVolume != roundedVolume) {
+      // Rejected while there's no screen yet, which is fine: the next pose tries again.
+      Promise.resolve(this.sendBrowserMessage({path: Commands.SET_VOLUME, data: roundedVolume, type: 'spatial'}))
+        .catch(() => {});
+    }
+    this.tempVolume = roundedVolume;
   }
 
   // ---------------------------------------------------------------- hand controls
   // Six buttons (mute, volume, skip, the panel) that go where each viewer chooses (HAND_PLACES).
-  // The snippet's hand-controls-place is the default; "auto" is the left wrist in VR and in view
+  // The snippet's hand-controls-place is the default; "auto" is the left wrist in VR and the big view corner
   // on desktop, where the hands can't be turned to see the buttons.
   async isVR() {
     if (this.vrCheck === undefined) {
@@ -1737,7 +1787,7 @@ var Core = class {
   async handPlace() {
     const choice = this.handPlaceChoice();
     if (choice !== 'auto') return choice;
-    return (await this.isVR()) ? 'left' : 'view';
+    return (await this.isVR()) ? 'left' : 'big-corner';
   }
   // Steps to the next place, remembered on this device, and moves the buttons there.
   async nextHandPlace() {
@@ -1751,11 +1801,13 @@ var Core = class {
     this.chosenHandPlace = this.currentHandPlace = place;
     // A build still running sees the choice changed and stops, then builds again for the latest
     // choice (see setupHandControls), Off included, which builds nothing.
+    // While a build is running, that build removes what it made at its next step, as removing it
+    // now would leave the client adding parts to objects that are gone.
     this.handPlaceVersion = (this.handPlaceVersion || 0) + 1;
-    this.removeHandControls();
     this.showToast(`Hand controls: ${HAND_PLACES[place].label}`);
-    if (this.handControlsBuilding) this.handControlsRebuild = true;
-    else if (place !== 'off') this.setupHandControls().catch(e => console.error('[Core] Could not set up the hand controls:', e));
+    if (this.handControlsBuilding) { this.handControlsRebuild = true; return; }
+    this.removeHandControls();
+    if (place !== 'off') this.setupHandControls().catch(e => console.error('[Core] Could not set up the hand controls:', e));
   }
   handPlaceLabel() {
     const place = HAND_PLACES[this.currentHandPlace];
@@ -1775,33 +1827,64 @@ var Core = class {
     }
     if (!this.watchingHandUser) {
       this.watchingHandUser = true;
-      this.onHandUserLeft = e => { if (e && e.detail && e.detail.isLocal) this.removeHandControls(); };
+      this.onHandUserLeft = e => {
+        if (!(e && e.detail && e.detail.isLocal)) return;
+        clearTimeout(this.handRejoinTimer);
+        this.handJoinedDuringBuild = false;
+        // A build still running sees this and removes what it made (see buildHandControls).
+        this.handLeftCount = (this.handLeftCount || 0) + 1;
+        this.removeHandControls();
+      };
       // user-joined also fires for the local player on arrival, when the controls already exist.
       this.onHandUserJoined = e => {
-        if (!(e && e.detail && e.detail.isLocal) || this.handControls || this.handControlsBuilding) return;
-        // Wait a moment after joining before attaching, which avoids a race on Quest.
-        clearTimeout(this.handRejoinTimer);
-        this.handRejoinTimer = setTimeout(() => this.setupHandControls().catch(err => console.error('[Core] Could not set up the hand controls:', err)), 5000);
+        if (!(e && e.detail && e.detail.isLocal) || this.handControls) return;
+        // A build running now may be one the player left: it rebuilds once that one ends.
+        if (this.handControlsBuilding) { this.handJoinedDuringBuild = true; return; }
+        this.scheduleHandRejoin();
       };
       scene.On('user-left', this.onHandUserLeft);
       scene.On('user-joined', this.onHandUserJoined);
     }
     if (this.handControls || this.handControlsBuilding) return;
     this.handControlsBuilding = true;
+    const left = this.handLeftCount;
     try {
       await this.buildHandControls(scene);
     } finally {
       this.handControlsBuilding = false;
-      if (this.handControlsRebuild) {
+      // After leaving, a place chosen meanwhile waits for the next join's build, which is now
+      // when the player joined again before this build ended.
+      const joined = this.handJoinedDuringBuild;
+      this.handJoinedDuringBuild = false;
+      if (left !== this.handLeftCount) {
         this.handControlsRebuild = false;
+        if (joined && !this.destroyed) this.scheduleHandRejoin();
+      }
+      if (this.handControlsRebuild) {
+        // Another place was chosen meanwhile: whatever that build left goes, then the new one.
+        this.handControlsRebuild = false;
+        this.removeHandControls();
         if (!this.destroyed) this.setupHandControls().catch(e => console.error('[Core] Could not set up the hand controls:', e));
       }
     }
   }
+  // Builds the hand controls a moment after the local player joins, which avoids a race on Quest.
+  scheduleHandRejoin() {
+    clearTimeout(this.handRejoinTimer);
+    this.handRejoinTimer = setTimeout(() => this.setupHandControls().catch(err => console.error('[Core] Could not set up the hand controls:', err)), 5000);
+  }
   async buildHandControls(scene) {
     // False once the player chooses another place (or the player is removed) during a wait.
-    const version = this.handPlaceVersion;
-    const current = () => !this.destroyed && this.handPlaceVersion === version;
+    const version = this.handPlaceVersion, left = this.handLeftCount;
+    const current = () => !this.destroyed && this.handPlaceVersion === version && this.handLeftCount === left;
+    // The build is out of date once the controls were removed or another place was chosen; then
+    // it removes what it made (if still there) and stops.
+    let root = null;
+    const stale = () => {
+      if (root === this.handControls && current()) return false;
+      if (root && root === this.handControls) this.removeHandControls();
+      return true;
+    };
     const name = await this.handPlace();
     if (!current()) return;
     this.currentHandPlace = name;
@@ -1818,7 +1901,7 @@ var Core = class {
       this.showToast("Couldn't tell where you are, so the hand controls aren't in front of you. Move a little and choose In Front again.", 6000);
       return;
     }
-    const root = await this.makeObject('FireVPlayer_HandControls', front || {});
+    root = await this.makeObject('FireVPlayer_HandControls', front || {});
     if (!current()) { this.destroyObject(root); return; }
     this.handControls = root;
     // The buttons lie flat, facing out of the wrist (or toward the player). On the wrists the
@@ -1831,43 +1914,59 @@ var Core = class {
       if (p) position = mirror ? [-p[0], p[1], p[2]] : p;
       if (r) rotation = mirror ? [r[0], -r[1], -r[2]] : r;
     }
+    // Each step checks the build is still wanted, so nothing is added to, shown or hidden on
+    // controls that were removed meanwhile (the client fails on objects that are gone).
+    const alive = () => !stale();
     const wrapper = await this.makeObject('FireVPlayer_HandWrapper', {
       parent: root,
       position: this.toVector3(position),
       rotation: this.toVector3(rotation),
       scale: new BS.Vector3(place.scale, place.scale, place.scale)
     });
-    // Four on top, three staggered under them.
+    // The show/hide button on the left, then the volume row on top and the playback row under it.
+    // Reload is at the far end from Volume Up, so reaching for the volume doesn't reload the screen.
+    if (stale()) return;
+    const group = await this.makeObject('FireVPlayer_HandButtons', { parent: wrapper });
+    if (stale()) return;
+    const toggle = await this.setupSwapButton(wrapper, 'HandToggle', new BS.Vector3(-1.0, 0.175, -0.3),
+      { show: this.params["data-controls-show-icon-url"], hide: this.params["data-controls-hide-icon-url"] },
+      () => this.toggleHandControls(), 0.36, alive);
+    if (!toggle || stale()) return;
+    this.handToggleButton = toggle;
+    this.handButtonGroup = group;
+    this.showHandButtons();
     const buttons = [
-      ['Mute', -0.57, 0.4, "data-mute-icon-url", () => this.mute()],
-      ['VolumeDown', -0.19, 0.4, "data-vol-down-icon-url", () => this.volume(false)],
-      ['VolumeUp', 0.19, 0.4, "data-vol-up-icon-url", () => this.volume(true)],
-      ['Reload', 0.57, 0.4, "data-reload-icon-url", () => this.reloadScreen()],
-      ['SkipBack', -0.38, -0.05, "data-skip-backward-icon-url", () => this.sendBrowserMessage({path: Commands.SKIP_BACK})],
-      ['SkipForward', 0, -0.05, "data-skip-forward-icon-url", () => this.sendBrowserMessage({path: Commands.SKIP_FORWARD})],
-      ['Playlist', 0.38, -0.05, "data-playlist-icon-url", () => this.openPlaylist('front')]
+      ['Mute', -0.38, 0.4, "data-mute-icon-url", () => this.mute()],
+      ['VolumeDown', 0, 0.4, "data-vol-down-icon-url", () => this.volume(false)],
+      ['VolumeUp', 0.38, 0.4, "data-vol-up-icon-url", () => this.volume(true)],
+      ['Reload', -0.57, -0.05, "data-reload-icon-url", () => this.reloadScreen()],
+      ['SkipBack', -0.19, -0.05, "data-skip-backward-icon-url", () => this.sendBrowserMessage({path: Commands.SKIP_BACK})],
+      ['SkipForward', 0.19, -0.05, "data-skip-forward-icon-url", () => this.sendBrowserMessage({path: Commands.SKIP_FORWARD})],
+      ['Playlist', 0.57, -0.05, "data-playlist-icon-url", () => this.openPlaylist('front')]
     ];
     for (const [button, x, y, icon, callback] of buttons) {
-      if (root !== this.handControls) return; // removed meanwhile
+      if (stale()) return;
       // Just off the wrist, toward -Z: the side a button is seen from.
       const at = new BS.Vector3(x, y, -0.3);
       const click = () => { Promise.resolve(callback()).catch(() => {}); };
       if (button === 'Mute') {
         // Shows Unmute while muted, like the one under the screen.
-        this.handMuteButton = await this.setupSwapButton(wrapper, 'HandMute', at,
-          { mute: this.params[icon], unmute: this.params["data-unmute-icon-url"] }, click, 0.36);
+        const mute = await this.setupSwapButton(group, 'HandMute', at,
+          { mute: this.params[icon], unmute: this.params["data-unmute-icon-url"] }, click, 0.36, alive);
+        if (!mute || stale()) return;
+        this.handMuteButton = mute;
         this.updateScreenButtons();
       } else {
-        await this.makeIconButton(`FireVPlayer_Hand${button}`, wrapper, at, 0.36, this.params[icon], click);
+        await this.makeIconButton(`FireVPlayer_Hand${button}`, group, at, 0.36, this.params[icon], click, undefined, alive);
       }
     }
-    if (root !== this.handControls) return;
+    if (stale()) return;
     if (place.attach === undefined) {
       console.log('[Core] Hand controls put in front of the player.');
       return;
     }
     await new Promise(resolve => setTimeout(resolve, 1000));
-    if (root !== this.handControls) return;
+    if (stale()) return;
     await scene.LegacyAttachObject(root, uid, place.attach);
     console.log(`[Core] Hand controls attached: ${place.label}.`);
     // Where the hand is, for opening the panel the way the player is looking.
@@ -1896,9 +1995,25 @@ var Core = class {
       rotation: new BS.Vector3(30, yaw * 180 / Math.PI, 0)
     };
   }
+  // Folded away, the hand controls are just the show/hide button. Remembered on this device.
+  handControlsCollapsed() {
+    try { return localStorage.getItem(HAND_COLLAPSED_PREF_KEY) === 'true'; } catch (e) { return false; }
+  }
+  toggleHandControls() {
+    const collapsed = !this.handControlsCollapsed();
+    try { localStorage.setItem(HAND_COLLAPSED_PREF_KEY, String(collapsed)); } catch (e) {}
+    this.showHandButtons();
+  }
+  showHandButtons() {
+    const collapsed = this.handControlsCollapsed();
+    this.setActive(this.handButtonGroup, !collapsed);
+    this.showSwapButton(this.handToggleButton, collapsed ? 'show' : 'hide');
+  }
   removeHandControls() {
     this.handPose = null;
     this.handMuteButton = null;
+    this.handToggleButton = null;
+    this.handButtonGroup = null;
     if (!this.handControls) return;
     console.log('[Core] Removing the hand controls.');
     this.destroyObject(this.handControls);
@@ -1968,8 +2083,8 @@ var Core = class {
     this.setOrDefault("reload-button", 'true');
     this.setOrDefault("play-pause-button", 'true');
     this.setOrDefault("hand-controls", 'false');
-    // Where the hand buttons start: auto (left wrist in VR, in view on desktop), left, right,
-    // view, front or off. Each viewer can choose another in the panel (HAND_PLACES).
+    // Where the hand buttons start: auto (left wrist in VR, big view corner on desktop), left, right,
+    // view, big-corner, corner, front or off. Each viewer can choose another in the panel (HAND_PLACES).
     this.setOrDefault("hand-controls-place", 'auto');
     // Fine-tunes where the hand buttons sit on the wrist, in the left hand's own Unity axes
     // (mirrored for the right): "x y z" metres and "x y z" degrees. Empty uses the built-in layout.
@@ -2186,6 +2301,8 @@ var Core = class {
         // Merge new data into the existing player state.
         // This is crucial because the in-world script shares this state object with the UI.
         this.player = Object.assign(this.player || {}, json.data.video);
+        // The server's build (see server/version.js), shown in the panel. Older servers don't send it.
+        if (typeof json.data.version === 'string') this.serverVersion = json.data.version;
         break;
       case Commands.SINGER_LIST_UPDATED:
         if (this.player) {

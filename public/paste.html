@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="noindex">
+  <title>Fire-V-Player: send a link</title>
+  <style>
+    :root { --bg: #121218; --card: #23232d; --text: #ffffff; --muted: #bbbbbb; --accent: #80deea; --btn: #6a1b9a; --ok: #2e7d32; --err: #c62828; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 17px/1.45 system-ui, sans-serif; }
+    main { max-width: 520px; margin: 0 auto; padding: 24px 16px 40px; }
+    h1 { font-size: 24px; margin: 0 0 6px; }
+    p { color: var(--muted); margin: 0 0 18px; }
+    label { display: block; font-weight: 600; margin: 16px 0 6px; }
+    input, textarea { width: 100%; padding: 12px; border-radius: 10px; border: 2px solid #444; background: var(--card); color: var(--text); font: inherit; }
+    input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+    #code { font-size: 28px; letter-spacing: 6px; text-transform: uppercase; text-align: center; font-family: ui-monospace, monospace; }
+    textarea { min-height: 110px; resize: vertical; }
+    .row { display: flex; gap: 10px; margin-top: 16px; }
+    button { flex: 1; padding: 14px; border: 0; border-radius: 10px; font: inherit; font-weight: 600; color: #fff; background: var(--btn); }
+    button.secondary { background: #455a64; flex: 0 0 auto; }
+    button:disabled { opacity: 0.6; }
+    #status { min-height: 1.5em; margin-top: 16px; font-weight: 600; }
+    #status.ok { color: #81c784; }
+    #status.err { color: #ef9a9a; }
+    footer { margin-top: 36px; text-align: center; font-size: 14px; color: #888; }
+    footer a { color: var(--accent); white-space: nowrap; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Send a link to the world</h1>
+    <p>In the world, press <strong>Phone</strong> next to the search box to get a code. What you send goes into your own search box there, and you choose what to add.</p>
+    <form id="form">
+      <label for="code">Code</label>
+      <input id="code" name="code" maxlength="6" autocomplete="off" autocapitalize="characters" spellcheck="false" inputmode="text" placeholder="ABC234" required>
+      <label for="text">Link or search</label>
+      <textarea id="text" name="text" maxlength="500" placeholder="https://www.youtube.com/watch?v=..." required></textarea>
+      <div class="row">
+        <button type="button" class="secondary" id="pasteBtn">Paste</button>
+        <button type="submit" id="sendBtn">Send</button>
+      </div>
+      <div id="status" role="status"></div>
+    </form>
+    <footer>Want this player in your own world? See the <a href="https://firer.at/fvp">Fire-V-Player setup guide</a>.</footer>
+  </main>
+  <script>
+    (() => {
+      const code = document.getElementById('code');
+      const text = document.getElementById('text');
+      const status = document.getElementById('status');
+      const sendBtn = document.getElementById('sendBtn');
+      const show = (msg, kind) => { status.textContent = msg; status.className = kind || ''; };
+      // The code from the link (/p/CODE from the QR, or ?code=), else the last one used in this tab.
+      const inPath = location.pathname.match(/^\/p\/([A-Za-z0-9]+)\/?$/i);
+      const fromLink = (inPath && inPath[1]) || new URLSearchParams(location.search).get('code');
+      try { code.value = (fromLink || sessionStorage.getItem('pasteCode') || '').toUpperCase(); } catch (e) { if (fromLink) code.value = fromLink.toUpperCase(); }
+      code.addEventListener('input', () => { code.value = code.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); });
+
+      const pasteBtn = document.getElementById('pasteBtn');
+      if (!(navigator.clipboard && navigator.clipboard.readText)) pasteBtn.hidden = true;
+      pasteBtn.addEventListener('click', async () => {
+        try { text.value = (await navigator.clipboard.readText()).trim(); text.focus(); }
+        catch (e) { show("Couldn't read the clipboard. Long-press the box and paste instead.", 'err'); }
+      });
+
+      document.getElementById('form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        sendBtn.disabled = true;
+        show('Sending...');
+        try {
+          const res = await fetch('/api/paste', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: code.value, text: text.value })
+          });
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) { show(body.error || "That didn't work. Try again.", 'err'); return; }
+          try { sessionStorage.setItem('pasteCode', code.value); } catch (err) {}
+          text.value = '';
+          show('Sent! Look at the search in the world. You can send another with the same code.', 'ok');
+        } catch (err) {
+          show("Couldn't reach the server. Check your connection.", 'err');
+        } finally {
+          sendBtn.disabled = false;
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

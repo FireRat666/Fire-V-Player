@@ -432,6 +432,25 @@ async function clearPlaylist(app, ws, skipUpdate) {
 }
 
 /**
+ * Whether a requested video is the song a singer queued: the same YouTube video, or the same link.
+ * No request (nothing named) counts as the queued song.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {string|Object} requested - The video link or object the client sent.
+ * @param {Object} queued - The singer's queued video.
+ * @returns {boolean}
+ */
+function isSameSong(app, requested, queued) {
+  const link = typeof requested === 'string' ? requested : requested && (requested.link || requested.url);
+  if (!link) return true;
+  const queuedLink = queued && queued.link;
+  if (!queuedLink) return false;
+  const a = app.getYoutubeId(link);
+  const b = app.getYoutubeId(queuedLink);
+  return a || b ? a === b : link.trim() === queuedLink.trim();
+}
+
+/**
  * Appends a video to the playlist and immediately switches playback to it.
  *
  * @param {Object} app - Express application and state controller.
@@ -450,6 +469,7 @@ async function addAndPlay(app, ws, v) {
         let message = null;
         if (player.playlist.length > 0) message = "Wait for the current song to finish.";
         else if (!next || next.user.id !== ws.u.id) message = "Only the host or the next singer can start a song.";
+        else if (!isSameSong(app, v, next.video)) message = "Add and Play starts the song you queued. To sing a different one, change your song in the singer list first.";
         if (message) {
           app.send(ws, Commands.ERROR, { message });
           return;

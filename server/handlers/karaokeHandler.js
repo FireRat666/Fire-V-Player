@@ -10,11 +10,22 @@ const hostHandler = require('./hostHandler.js');
 const media = require('../media.js');
 const { videoById } = require('../youtube/search.js');
 
-// A song added by someone other than the host while the player is locked waits for the host
-// to approve it. Singers saved before approvals existed have no flag and count as approved.
+/**
+ * Whether a queued singer's song may play. A song added by someone other than the host while the
+ * player is locked waits for the host to approve it. Singers saved before approvals existed have
+ * no flag and count as approved.
+ *
+ * @param {Object} singer - A singer queue entry.
+ * @returns {boolean}
+ */
 const isApproved = singer => singer.approved !== false;
 
-// The singer whose song plays next: the first approved one in the queue.
+/**
+ * The singer whose song plays next: the first approved one in the queue.
+ *
+ * @param {Object} player - The room's player state.
+ * @returns {number} Their index in the queue, or -1.
+ */
 const nextSingerIndex = player => player.singers.findIndex(isApproved);
 
 /**
@@ -52,7 +63,10 @@ async function addToPlayers(app, ws, video) {
   const youtubeId = app.getYoutubeId(link);
   if (youtubeId && (!video.title || video.title === 'Unknown Title' || !video.duration)) {
     try {
-      video = { ...video, ...(await videoById(youtubeId)) };
+      const found = await videoById(youtubeId);
+      // A lookup without a length (a live or missing video) keeps the one the song came with.
+      const duration = Number(found && found.duration) > 0 ? found.duration : video.duration;
+      video = { ...video, ...found, duration };
       link = video.link;
     } catch (err) {
       console.warn(`Couldn't look up karaoke song ${youtubeId}: ${err.message}`);

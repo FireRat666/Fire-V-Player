@@ -449,17 +449,17 @@ async function addAndPlay(app, ws, v) {
         const next = player.singers.find(karaoke.isApproved);
         let message = null;
         if (player.playlist.length > 0) message = "Wait for the current song to finish.";
-        else if (next && next.user.id !== ws.u.id) message = "Only the host or the next singer can start a song.";
+        else if (!next || next.user.id !== ws.u.id) message = "Only the host or the next singer can start a song.";
         if (message) {
           app.send(ws, Commands.ERROR, { message });
           return;
         }
         // The next singer starts their queued song the karaoke way, which takes it off the queue
         // (otherwise auto-advance would play it again).
-        if (next) {
-          await karaoke.playKaraokeTrack(app, ws);
-          return;
-        }
+        const before = player.playlist[0];
+        await karaoke.playKaraokeTrack(app, ws);
+        if (player.playlist.length > 0 && player.playlist[0] !== before) app.resetBrowserIfNeedBe(player, 0);
+        return;
       }
       let resolvedV;
       try {

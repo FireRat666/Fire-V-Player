@@ -47,6 +47,7 @@ var FireNativeScreen = (() => {
       this.baseAt = performance.now();
       this.lastToggleAt = -Infinity;
       this.pendingSync = null;
+      this.hostSyncPending = false; // a host seek or track change waiting for its sync (resync)
       this.ready = this.create().catch(e => {
         console.error('[NativeScreen] Could not set up the video player.', e);
         this.core.showToast("Couldn't start the world's video player.", 6000);
@@ -274,6 +275,7 @@ var FireNativeScreen = (() => {
     resync() {
       this.autoSync = true;
       if (this.core.player) this.wantPaused = !!this.core.player.paused;
+      this.hostSyncPending = true;
       this.requestSync(true);
     }
 
@@ -288,6 +290,7 @@ var FireNativeScreen = (() => {
       const hard = this.pendingSync && this.pendingSync.hard;
       this.pendingSync = null;
       this.resumeSyncPending = false;
+      this.hostSyncPending = false;
       const latency = Math.max(0, Date.now() - Number(data.clientTimestamp || Date.now())) / 2000;
       const serverTime = Number(data.currentTime) + (this.wantPaused ? 0 : latency);
       if (!Number.isFinite(serverTime)) return;
@@ -330,11 +333,12 @@ var FireNativeScreen = (() => {
               this.core.notifyListeners({ path: Commands.AUTO_SYNC_STATE_CHANGED, data: { enabled: false } });
             }
           }
-          // The skip wins over a resume sync still waiting or on its way (see PAUSE_STATE_CHANGED).
+          // The skip wins over a resume sync still waiting or on its way (see PAUSE_STATE_CHANGED),
+          // but not over a host seek or track change: its sync still moves everyone, the skipper too.
           clearTimeout(this.resumeSyncTimer);
           if (this.resumeSyncPending) {
             this.resumeSyncPending = false;
-            this.pendingSync = null;
+            this.pendingSync = this.hostSyncPending ? { hard: true } : null;
           }
           const amount = this.core.isKaraoke ? SKIP_KARAOKE_S : SKIP_S;
           this.seek(this.localTime() + (msg.path === Commands.SKIP_FORWARD ? amount : -amount));

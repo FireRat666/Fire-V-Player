@@ -435,6 +435,8 @@ namespace FireVPlayer.EditorTools
         public List<string> keys = new List<string>();
         public List<string> values = new List<string>();
         public List<bool> present = new List<bool>();
+        // Which Snapshot these values belong to (see FireVPlayerSnippetUndo.Snapshot).
+        public int epoch;
     }
 
     /// <summary>
@@ -468,10 +470,24 @@ namespace FireVPlayer.EditorTools
         static bool Tracked(string attribute) =>
             attribute != SnippetHtmlSync.InstanceAttribute && attribute != "name";
 
-        /// <summary>Copies every snippet's settings into the state, without an Undo step.</summary>
+        // Kept outside the state, so Undo can't put it back: undoing to values recorded before the
+        // last Snapshot brings back their old epoch, which shows they're stale.
+        const string EpochKey = "FireVPlayer.SnippetUndo.Epoch";
+
+        /// <summary>
+        /// Copies every snippet's settings into the state, without an Undo step. Undo steps recorded
+        /// before it hold values from before, so they're removed, and any Unity keeps are ignored
+        /// (OnUndoRedo checks the epoch).
+        /// </summary>
         static void Snapshot()
         {
             var s = State;
+            Undo.ClearUndo(s);
+            var epoch = SessionState.GetInt(EpochKey, 0) + 1;
+            SessionState.SetInt(EpochKey, epoch);
+            s.epoch = epoch;
+            _lastKey = null;
+            _lastGroup = -1;
             s.keys.Clear();
             s.values.Clear();
             s.present.Clear();
@@ -544,6 +560,12 @@ namespace FireVPlayer.EditorTools
             _lastKey = null;
             _lastGroup = -1;
             var s = State;
+            // Values from before the last Snapshot: leave index.html as it is and track it again.
+            if (s.epoch != SessionState.GetInt(EpochKey, 0))
+            {
+                Snapshot();
+                return;
+            }
             _applying = true;
             try
             {

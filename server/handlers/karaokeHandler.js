@@ -8,6 +8,7 @@
 const Commands = require('../../public/commands.js');
 const hostHandler = require('./hostHandler.js');
 const media = require('../media.js');
+const { videoById } = require('../youtube/search.js');
 
 // A song added by someone other than the host while the player is locked waits for the host
 // to approve it. Singers saved before approvals existed have no flag and count as approved.
@@ -44,6 +45,17 @@ async function addToPlayers(app, ws, video) {
     } catch (err) {
       app.send(ws, Commands.ERROR, { message: err.message });
       return;
+    }
+  }
+  // A YouTube song without its title or length (a pasted link) gets them now, as the playlist's
+  // videos do, so the server knows when it ends. If the lookup fails the song is queued as it is.
+  const youtubeId = app.getYoutubeId(link);
+  if (youtubeId && (!video.title || video.title === 'Unknown Title' || !video.duration)) {
+    try {
+      video = { ...video, ...(await videoById(youtubeId)) };
+      link = video.link;
+    } catch (err) {
+      console.warn(`Couldn't look up karaoke song ${youtubeId}: ${err.message}`);
     }
   }
 

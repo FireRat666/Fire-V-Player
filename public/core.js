@@ -999,6 +999,18 @@ var Core = class {
       }
     }
   }
+  // The volume this viewer hears: the setting, faded by their distance while `spatial` is on.
+  heardVolume() {
+    const fade = this.params.spatial === 'true' && Number.isFinite(this.spatialFade) ? this.spatialFade : 1;
+    return Math.round(this.params.volume * fade);
+  }
+  // Sends the screen the volume this viewer hears. The buttons go through here, so with `spatial`
+  // on a press changes the faded volume; sending the setting itself was louder until the next
+  // head movement faded it again, which sounded like the volume dropping by itself.
+  sendVolume() {
+    this.tempVolume = this.heardVolume();
+    return this.sendBrowserMessage({path: Commands.SET_VOLUME, data: this.tempVolume});
+  }
   setAbsoluteVolume(amount) {
     if (this.blocked) return;
     this.params.volume = amount;
@@ -1007,7 +1019,7 @@ var Core = class {
     } else if (this.params.volume < 0) {
       this.params.volume = 0;
     }
-    this.sendBrowserMessage({path: Commands.SET_VOLUME, data: this.params.volume});
+    this.sendVolume();
   }
   setVolumeIncrement(amount) {
     if (this.blocked) return;
@@ -1017,7 +1029,7 @@ var Core = class {
     } else if (this.params.volume < 0) {
       this.params.volume = 0;
     }
-    this.sendBrowserMessage({path: Commands.SET_VOLUME, data: this.params.volume});
+    this.sendVolume();
   }
   /**
    * Sets up karaoke's 3D in-world Singers button and optional trigger volume box.
@@ -1593,7 +1605,7 @@ var Core = class {
       this.sendBrowserMessage({path: Commands.MUTE, data: this.params.mute});
       this.updateScreenButtons();
     }
-    this.sendBrowserMessage({path: Commands.SET_VOLUME, data: this.params.volume});
+    this.sendVolume();
   }
   
   mute() {
@@ -1699,7 +1711,10 @@ var Core = class {
     const screen = { x: p[0], y: p[1], z: -p[2] }; // in Unity's axes, like the head
     let lastSendTime = Date.now();
     this.onPoseUpdate = e => {
-      const head = e && e.detail && e.detail.head;
+      // Where the head is: the head marker when it reports (pose-update's values don't match the
+      // world on Quest, see setupHeadMarker), else pose-update.
+      const marker = this.headMarkerPose;
+      const head = marker && marker.position ? marker : e && e.detail && e.detail.head;
       if (!head || !head.position || this.blocked) return;
       const now = Date.now();
       if (now - lastSendTime <= 500) return;
@@ -1710,8 +1725,8 @@ var Core = class {
       const b = head.position.y - screen.y;
       const c = head.position.z - screen.z;
       const distance = Math.sqrt(a * a + b * b + c * c);
-      const volume = Math.max(0, Math.min(1, (maxDistance - (distance - minDistance)) / maxDistance));
-      const roundedVolume = Math.round(this.params.volume * volume);
+      this.spatialFade = Math.max(0, Math.min(1, (maxDistance - (distance - minDistance)) / maxDistance));
+      const roundedVolume = this.heardVolume();
       if(this.tempVolume != roundedVolume) {
         // Rejected while there's no screen yet, which is fine: the next pose tries again.
         Promise.resolve(this.sendBrowserMessage({path: Commands.SET_VOLUME, data: roundedVolume, type: 'spatial'}))

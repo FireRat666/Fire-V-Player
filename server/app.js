@@ -23,6 +23,7 @@ const { initializeDatabase } = require('./db.js');
 const models = require('./models'); // Sequelize models
 const { Blacklist } = require('./blacklist.js');
 const PasteCodes = require('./paste.js');
+const VERSION = require('./version.js'); // this build, shown in the panel (see version.js)
 
 /** Seek skip increment in seconds for standard playlist mode. */
 const SkipJumpTimePlaylist = 5;
@@ -1255,7 +1256,8 @@ class App {
     // This prevents race conditions on the client and ensures all data is available on connect.
     this.send(ws, Commands.PLAYBACK_UPDATE, {
       video: this.getVideoObject(instanceId, { includePlaylist: true, includeSingers: true }),
-      type: 'initial-sync'
+      type: 'initial-sync',
+      version: VERSION
     });
   }
   /**
@@ -1269,7 +1271,8 @@ class App {
     this.syncWsTime(ws, ws.i);
     this.send(ws, Commands.PLAYBACK_UPDATE, {
       video: this.getVideoObject(ws.i, { includePlaylist: true, includeSingers: true }),
-      type: 'initial-sync'
+      type: 'initial-sync',
+      version: VERSION
     });
   }
 
@@ -1473,7 +1476,7 @@ async function start() {
     app.server.listen(port, () => {
       // Attach the connection handlers only AFTER the server is successfully listening.
       app.attachWebsocketListeners();
-      console.log(`Video Player started and listening on port ${port}.`);
+      console.log(`Video Player started and listening on port ${port}.${VERSION ? ` Version ${VERSION}.` : ''}`);
     });
   } catch (err) {
     console.error("Failed to start application:", err);

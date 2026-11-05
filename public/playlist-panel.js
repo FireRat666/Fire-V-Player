@@ -531,7 +531,9 @@ var FirePlaylistPanel = class {
 
     // Header
     const header = await row(rootEl);
-    await this.label(header, this.karaoke ? 'Fire-V-Player Karaoke' : 'Fire-V-Player', { fontSize: '30px', fontWeight: 'bold', flexGrow: 1 });
+    await this.label(header, this.karaoke ? 'Fire-V-Player Karaoke' : 'Fire-V-Player', { fontSize: '30px', fontWeight: 'bold' });
+    // The server's build (see server/version.js), so people can tell an old version from a new one.
+    this.versionLabel = await this.label(header, '', { fontSize: '18px', color: '#888888', marginLeft: '12px', flexGrow: 1 });
     this.hostLabel = await this.label(header, '', { fontSize: '20px', color: '#bbbbbb', marginRight: '12px' });
     await this.button(header, 'Refresh', () => this.refresh(true), { backgroundColor: GREY });
     this.infoBtn = await this.button(header, 'Info', () => this.setView(this.view === 'info' ? 'main' : 'info'), { backgroundColor: GREY });
@@ -722,6 +724,12 @@ var FirePlaylistPanel = class {
     this.listCol = list;
     // First, so rows added later go after it (it only shows when there are no rows).
     this.emptyLabel = await this.label(list, '', { color: '#bbbbbb', fontSize: '22px', textAlign: 'center', marginTop: '20px', whiteSpace: 'normal' });
+    // Under it while Search has no results.
+    this.madeWithRow = await this.div(list, { display: 'none', flexDirection: 'row', justifyContent: 'center', alignItems: 'center', flexShrink: 0, marginTop: '28px' });
+    const madeWith = { color: '#888888', fontSize: '20px' };
+    await this.label(this.madeWithRow, 'Made with', madeWith);
+    await this.label(this.madeWithRow, '\u2665', { color: '#e53935', fontSize: '24px', marginLeft: '6px', marginRight: '6px' });
+    await this.label(this.madeWithRow, 'by FireRat', madeWith);
     this.rows = [];
     const firstRows = this.scrolling ? FIRST_ROWS : this.rowsPerPage;
     for (let k = 0; k < firstRows; k++) this.rows.push(await this.makeRow(list));
@@ -770,6 +778,7 @@ var FirePlaylistPanel = class {
     await colText(guideCol, SETUP_GUIDE_URL.replace(/^https:\/\//, ''), { fontSize: '30px', fontWeight: 'bold', color: '#80deea', marginTop: '2px', textAlign: 'center' });
     await colText(guideCol, 'Move this panel by grabbing the bar under it.', { fontSize: '19px', color: '#999999', marginTop: '16px', textAlign: 'center' });
     await colText(guideCol, 'Made by FireRat', { fontSize: '19px', color: '#999999', marginTop: '8px', textAlign: 'center' });
+    this.infoVersionLabel = await colText(guideCol, '', { fontSize: '17px', color: '#888888', marginTop: '4px', textAlign: 'center' });
 
     // ---- More view: host controls, seek, your own player, add by link
     this.moreView = await this.div(rootEl, { display: 'none', flexDirection: 'column', flexGrow: 1, flexShrink: 1, overflow: 'hidden', marginTop: '6px' });
@@ -2085,6 +2094,9 @@ var FirePlaylistPanel = class {
     const lockText = player.locked ? ' (locked)' : '';
     if (!player.host) this.setText(this.hostLabel, 'Connecting...');
     else this.setText(this.hostLabel, host ? `You are the host${lockText}` : `Host: ${player.host.name}${lockText}`);
+    const version = this.core.serverVersion || '';
+    this.setText(this.versionLabel, version ? `v${version.split(' ')[0]}` : '');
+    this.setText(this.infoVersionLabel, version ? `Version ${version}` : '');
 
     // Now playing
     const current = playlist[player.currentTrack];
@@ -2272,6 +2284,7 @@ var FirePlaylistPanel = class {
     }
     this.setText(this.emptyLabel, empty);
     this.display(this.emptyLabel, !!empty);
+    this.display(this.madeWithRow, onSearch && !items.length);
   }
 
   // YouTube's search thumbnails (e.g. .../hq720.jpg?sqp=...&rs=...) are often WebP despite the

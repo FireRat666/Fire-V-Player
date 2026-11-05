@@ -2254,6 +2254,8 @@ var Core = class {
         // Merge new data into the existing player state.
         // This is crucial because the in-world script shares this state object with the UI.
         this.player = Object.assign(this.player || {}, json.data.video);
+        // The server's build (see server/version.js), shown in the panel. Older servers don't send it.
+        if (typeof json.data.version === 'string') this.serverVersion = json.data.version;
         break;
       case Commands.SINGER_LIST_UPDATED:
         if (this.player) {

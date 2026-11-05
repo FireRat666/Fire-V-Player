@@ -1672,7 +1672,9 @@ var Core = class {
     if (typeof go.WatchTransform !== 'function' || !PN) return;
     try {
       await go.WatchTransform([PN.position, PN.rotation], t => {
-        if (this.headMarker === go && t && t.position) this.headMarkerPose = { position: t.position, rotation: t.rotation };
+        if (this.headMarker !== go || !t || !t.position) return;
+        this.headMarkerPose = { position: t.position, rotation: t.rotation };
+        this.updateSpatialVolume(t.position);
       });
     } catch (e) {
       console.warn('[Core] Could not watch the head marker:', e);
@@ -1708,33 +1710,39 @@ var Core = class {
     const scene = this.banterScene();
     if (!scene || this.params.spatial !== 'true' || this.onPoseUpdate) return;
     const p = this.vec3(this.params.position, [0, 0, 0]);
-    const screen = { x: p[0], y: p[1], z: -p[2] }; // in Unity's axes, like the head
-    let lastSendTime = Date.now();
+    this.spatialScreen = { x: p[0], y: p[1], z: -p[2] }; // in Unity's axes, like the head
+    this.spatialSentAt = Date.now();
     this.onPoseUpdate = e => {
-      // Where the head is: the head marker when it reports (pose-update's values don't match the
-      // world on Quest, see setupHeadMarker), else pose-update.
+      // The head marker when it reports (pose-update's values don't match the world on Quest, see
+      // setupHeadMarker); its own reports also update the fade.
       const marker = this.headMarkerPose;
       const head = marker && marker.position ? marker : e && e.detail && e.detail.head;
-      if (!head || !head.position || this.blocked) return;
-      const now = Date.now();
-      if (now - lastSendTime <= 500) return;
-      lastSendTime = now;
-      const minDistance = Number(this.params["spatial-min-distance"]);
-      const maxDistance = Number(this.params["spatial-max-distance"]);
-      const a = head.position.x - screen.x;
-      const b = head.position.y - screen.y;
-      const c = head.position.z - screen.z;
-      const distance = Math.sqrt(a * a + b * b + c * c);
-      this.spatialFade = Math.max(0, Math.min(1, (maxDistance - (distance - minDistance)) / maxDistance));
-      const roundedVolume = this.heardVolume();
-      if(this.tempVolume != roundedVolume) {
-        // Rejected while there's no screen yet, which is fine: the next pose tries again.
-        Promise.resolve(this.sendBrowserMessage({path: Commands.SET_VOLUME, data: roundedVolume, type: 'spatial'}))
-          .catch(() => {});
-      }
-      this.tempVolume = roundedVolume;
+      this.updateSpatialVolume(head && head.position);
     };
     scene.On('pose-update', this.onPoseUpdate);
+  }
+  // Fades the volume for the head at `position` (world space), at most every 500 ms, and sends it
+  // only when the volume heard changes.
+  updateSpatialVolume(position) {
+    if (!position || !this.spatialScreen || this.blocked) return;
+    const now = Date.now();
+    if (now - this.spatialSentAt <= 500) return;
+    this.spatialSentAt = now;
+    const screen = this.spatialScreen;
+    const minDistance = Number(this.params["spatial-min-distance"]);
+    const maxDistance = Number(this.params["spatial-max-distance"]);
+    const a = position.x - screen.x;
+    const b = position.y - screen.y;
+    const c = position.z - screen.z;
+    const distance = Math.sqrt(a * a + b * b + c * c);
+    this.spatialFade = Math.max(0, Math.min(1, (maxDistance - (distance - minDistance)) / maxDistance));
+    const roundedVolume = this.heardVolume();
+    if(this.tempVolume != roundedVolume) {
+      // Rejected while there's no screen yet, which is fine: the next pose tries again.
+      Promise.resolve(this.sendBrowserMessage({path: Commands.SET_VOLUME, data: roundedVolume, type: 'spatial'}))
+        .catch(() => {});
+    }
+    this.tempVolume = roundedVolume;
   }
 
   // ---------------------------------------------------------------- hand controls

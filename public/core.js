@@ -259,8 +259,11 @@ var Core = class {
 
   white() { return new BS.Vector4(1, 1, 1, 1); }
   // A picture you click: a plane with the icon on it, and a thin collider on the UI layer.
-  async makeIconButton(name, parent, position, size, iconUrl, callback, rotation) {
-    const go = await this.makeImage(name, parent, position, size, size, iconUrl, { rotation, layer: LAYER_UI });
+  // `alive`, when given, says whether the button is still wanted: once it isn't (its parent was
+  // removed meanwhile), no more parts are added, as the client fails on objects that are gone.
+  async makeIconButton(name, parent, position, size, iconUrl, callback, rotation, alive) {
+    const go = await this.makeImage(name, parent, position, size, size, iconUrl, { rotation, layer: LAYER_UI, alive });
+    if (alive && !alive()) return go;
     await this.addColliderBox(go, new BS.Vector3(size, size, 0.01), true);
     go.On('click', () => { if (!this.blocked) callback(); });
     return go;
@@ -271,7 +274,9 @@ var Core = class {
     const go = await this.makeObject(name, { parent, position, rotation: opts.rotation, layer: opts.layer });
     if (opts.made) opts.made.push(go);
     const shader = 'Unlit/DiffuseTransparent';
+    if (opts.alive && !opts.alive()) return go; // see makeIconButton
     await this.addComponent(go, this.bsComponent('Plane', { width, height }, 'BanterPlane', [width, height]));
+    if (opts.alive && !opts.alive()) return go;
     await this.addComponent(go, this.bsComponent('Material', { shaderName: shader, texture: url, color: this.white() },
       'BanterMaterial', [shader, url, this.white(), 0, true]));
     return go;
@@ -943,11 +948,14 @@ var Core = class {
   }
   // A button with a picture for each state (see showSwapButton). Each picture is its own icon
   // button, and only the one for the current state is active, so it's the one seen and clicked.
-  async setupSwapButton(parent, name, position, icons, callback, size = 0.2) {
+  // Null when `alive` (see makeIconButton) says it's no longer wanted.
+  async setupSwapButton(parent, name, position, icons, callback, size = 0.2, alive) {
     const holder = await this.makeObject(`FireVPlayer_${name}`, { parent, position });
+    if (alive && !alive()) return null;
     const button = { holder, icons: {}, state: null, shown: true };
     for (const state of Object.keys(icons)) {
-      const go = await this.makeIconButton(`FireVPlayer_${name}_${state}`, holder, new BS.Vector3(0, 0, 0), size, icons[state], callback);
+      const go = await this.makeIconButton(`FireVPlayer_${name}_${state}`, holder, new BS.Vector3(0, 0, 0), size, icons[state], callback, undefined, alive);
+      if (alive && !alive()) return null;
       button.icons[state] = go;
       this.setActive(go, false);
     }
@@ -1884,6 +1892,9 @@ var Core = class {
       if (p) position = mirror ? [-p[0], p[1], p[2]] : p;
       if (r) rotation = mirror ? [r[0], -r[1], -r[2]] : r;
     }
+    // Each step checks the build is still wanted, so nothing is added to, shown or hidden on
+    // controls that were removed meanwhile (the client fails on objects that are gone).
+    const alive = () => !stale();
     const wrapper = await this.makeObject('FireVPlayer_HandWrapper', {
       parent: root,
       position: this.toVector3(position),
@@ -1892,10 +1903,14 @@ var Core = class {
     });
     // The show/hide button on the left, then the volume row on top and the playback row under it.
     // Reload is at the far end from Volume Up, so reaching for the volume doesn't reload the screen.
+    if (stale()) return;
     const group = await this.makeObject('FireVPlayer_HandButtons', { parent: wrapper });
-    this.handToggleButton = await this.setupSwapButton(wrapper, 'HandToggle', new BS.Vector3(-1.0, 0.175, -0.3),
+    if (stale()) return;
+    const toggle = await this.setupSwapButton(wrapper, 'HandToggle', new BS.Vector3(-1.0, 0.175, -0.3),
       { show: this.params["data-controls-show-icon-url"], hide: this.params["data-controls-hide-icon-url"] },
-      () => this.toggleHandControls(), 0.36);
+      () => this.toggleHandControls(), 0.36, alive);
+    if (!toggle || stale()) return;
+    this.handToggleButton = toggle;
     this.handButtonGroup = group;
     this.showHandButtons();
     const buttons = [
@@ -1914,11 +1929,13 @@ var Core = class {
       const click = () => { Promise.resolve(callback()).catch(() => {}); };
       if (button === 'Mute') {
         // Shows Unmute while muted, like the one under the screen.
-        this.handMuteButton = await this.setupSwapButton(group, 'HandMute', at,
-          { mute: this.params[icon], unmute: this.params["data-unmute-icon-url"] }, click, 0.36);
+        const mute = await this.setupSwapButton(group, 'HandMute', at,
+          { mute: this.params[icon], unmute: this.params["data-unmute-icon-url"] }, click, 0.36, alive);
+        if (!mute || stale()) return;
+        this.handMuteButton = mute;
         this.updateScreenButtons();
       } else {
-        await this.makeIconButton(`FireVPlayer_Hand${button}`, group, at, 0.36, this.params[icon], click);
+        await this.makeIconButton(`FireVPlayer_Hand${button}`, group, at, 0.36, this.params[icon], click, undefined, alive);
       }
     }
     if (stale()) return;

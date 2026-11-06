@@ -411,8 +411,8 @@ function twitchVisibility() {
     parts.push(`embed ${Math.round(r.width)}x${Math.round(r.height)} at ${Math.round(r.left)},${Math.round(r.top)}`);
     for (let el = frame; el && el !== document.documentElement; el = el.parentElement) {
       const s = getComputedStyle(el);
-      if (s.display === 'none' || s.visibility !== 'visible' || Number(s.opacity) < 1) {
-        parts.push(`hidden by ${el.id || el.tagName} (display ${s.display}, visibility ${s.visibility}, opacity ${s.opacity})`);
+      if (s.display === 'none' || s.visibility !== 'visible' || Number(s.opacity) < 1 || s.transform !== 'none') {
+        parts.push(`hidden by ${el.id || el.tagName} (display ${s.display}, visibility ${s.visibility}, opacity ${s.opacity}, transform ${s.transform})`);
       }
     }
     // Anything drawn over the embed, however small or see-through, makes Twitch count it as not
@@ -442,6 +442,16 @@ function logTwitchSeen() {
   } catch (e) {
     console.log('[Twitch] could not ask the browser about visibility:', e.message);
   }
+}
+
+/**
+ * Where a Twitch player goes: the unscaled layer over the stage (see fit-screen.js), as Twitch
+ * won't autoplay inside the stage when it's scaled down (Quest), or `fallback` without one.
+ * @param {HTMLElement} fallback
+ * @returns {HTMLElement}
+ */
+function twitchHost(fallback) {
+  return document.getElementById('stage-flat') || fallback;
 }
 
 /** Twitch's `time` parameter for a VOD start offset, e.g. 1h2m3s. */
@@ -505,10 +515,12 @@ class TwitchSource extends BaseMediaSource {
     if (!e.div) {
       e.div = document.createElement('div');
       e.div.id = 'twitch-embed';
-      Object.assign(e.div.style, { width: '100%', height: '100%' });
+      // The layer it's on lets clicks through, so the embed takes them back.
+      Object.assign(e.div.style, { width: '100%', height: '100%', background: '#000', pointerEvents: 'auto' });
     }
     // Moving an iframe reloads it, so it's only moved if the container has changed.
-    if (e.div.parentNode !== this.opts.container) this.opts.container.appendChild(e.div);
+    const host = twitchHost(this.opts.container);
+    if (e.div.parentNode !== host) host.appendChild(e.div);
     e.div.style.display = '';
     if (!e.player) {
       const o = {
@@ -785,8 +797,8 @@ class TwitchClipSource extends BaseMediaSource {
     const f = this.frame = document.createElement('iframe');
     f.src = `https://clips.twitch.tv/embed?clip=${encodeURIComponent(this.clip)}&${twitchParents().map(h => `parent=${encodeURIComponent(h)}`).join('&')}&autoplay=true&muted=${this.muted}`;
     f.allow = 'autoplay; fullscreen';
-    Object.assign(f.style, { width: '100%', height: '100%', border: '0' });
-    this.opts.container.appendChild(f);
+    Object.assign(f.style, { width: '100%', height: '100%', border: '0', display: 'block', background: '#000', pointerEvents: 'auto' });
+    twitchHost(this.opts.container).appendChild(f);
     this.ready = true;
   }
   play() { this.wantPaused = false; }

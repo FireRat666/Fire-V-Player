@@ -8,6 +8,12 @@
 (() => {
   const stage = document.getElementById('stage');
   if (!stage) return;
+  // The same part of the page as the stage, without its scale. Twitch won't autoplay inside a
+  // scaled-down element (it counts the embed as not visible), so its players go here.
+  const flat = document.createElement('div');
+  flat.id = 'stage-flat';
+  Object.assign(flat.style, { position: 'fixed', left: '0', top: '0', width: '100%', height: '100%', pointerEvents: 'none' });
+  stage.after(flat);
   const debug = new URLSearchParams(location.search).get('screen-debug') === 'true';
   let info = null;
   if (debug) {
@@ -44,6 +50,7 @@
         width: `${width * k}px`, height: `${height * k}px`,
         transform: k === 1 ? 'none' : `scale(${1 / k})`
       });
+      Object.assign(flat.style, { left: `${left}px`, top: `${top}px`, width: `${width}px`, height: `${height}px` });
     }
     // The page itself never needs to scroll.
     if (window.scrollX || window.scrollY) window.scrollTo(0, 0);

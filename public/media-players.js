@@ -415,6 +415,15 @@ function twitchVisibility() {
         parts.push(`hidden by ${el.id || el.tagName} (display ${s.display}, visibility ${s.visibility}, opacity ${s.opacity})`);
       }
     }
+    // Anything drawn over the embed, however small or see-through, makes Twitch count it as not
+    // visible, so the corners and the middle are checked.
+    const covers = new Set();
+    [[r.left + 1, r.top + 1], [r.right - 2, r.top + 1], [r.left + 1, r.bottom - 2], [r.right - 2, r.bottom - 2],
+      [r.left + r.width / 2, r.top + r.height / 2]].forEach(([x, y]) => {
+      const top = document.elementFromPoint(x, y);
+      if (top && top !== frame) covers.add(top.id || top.tagName.toLowerCase());
+    });
+    if (covers.size) parts.push(`covered by ${Array.from(covers).join(', ')}`);
   }
   return parts.join(', ');
 }
@@ -503,7 +512,10 @@ class TwitchSource extends BaseMediaSource {
     e.div.style.display = '';
     if (!e.player) {
       const o = {
-        width: '100%', height: '100%', autoplay: true, muted: this.muted, parent: twitchParents()
+        // Muted: Twitch refuses to autoplay with sound until it has seen the embed on screen,
+        // which in a world's browser is never in time for the first load. The sound is turned on
+        // once it plays (applyAudio).
+        width: '100%', height: '100%', autoplay: true, muted: true, parent: twitchParents()
       };
       if (this.live) o.channel = this.channel; else o.video = this.video;
       if (this.pendingSeek > 0) o.time = twitchTime(this.pendingSeek);
@@ -573,6 +585,7 @@ class TwitchSource extends BaseMediaSource {
 
   onPlaying() {
     this.setPlaying(true);
+    this.applyAudio();
     this.ended = false;
     this.offline = false;
     if (!this.live) {
@@ -600,11 +613,12 @@ class TwitchSource extends BaseMediaSource {
   }
   localTime() { return this.posBase + (this.playing ? (performance.now() - this.posAt) / 1000 : 0); }
 
+  /** The volume, and sound on or off; it stays off until the stream plays (see attach). */
   applyAudio() {
     if (!this.p) return;
     try {
       this.p.setVolume(Math.max(0, Math.min(1, Number(this.volume) / 100)));
-      this.p.setMuted(this.muted);
+      this.p.setMuted(this.muted || !this.playing);
     } catch (e) {}
   }
 
@@ -628,7 +642,7 @@ class TwitchSource extends BaseMediaSource {
       this.pendingSeek = startAt;
     }
     url.searchParams.set('autoplay', 'true');
-    url.searchParams.set('muted', String(this.muted));
+    url.searchParams.set('muted', 'true'); // the sound comes on once it plays, as in attach()
     url.searchParams.delete('parent');
     twitchParents().forEach(h => url.searchParams.append('parent', h));
     this.setPlaying(false);
@@ -734,7 +748,7 @@ class TwitchSource extends BaseMediaSource {
   }
   setMuted(m) {
     this.muted = !!m;
-    if (this.mine() && this.p) { try { this.p.setMuted(!!m); } catch (e) {} }
+    if (this.mine() && this.p) { try { this.p.setMuted(this.muted || !this.playing); } catch (e) {} }
   }
   destroy() {
     const owned = this.mine();

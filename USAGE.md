@@ -255,7 +255,7 @@ These always work, as the sites moderate what's on them:
 
 | Link | Example | Notes |
 |---|---|---|
-| Twitch channel | `https://www.twitch.tv/<channel>` | Live, so it plays until someone skips. Seek and skip do nothing. If Twitch waits for a click to start, or starts muted, the player clicks the screen for you until it plays with sound (a few tries at most). |
+| Twitch channel | `https://www.twitch.tv/<channel>` | Live, so it plays until someone skips. Seek and skip do nothing. It starts muted, as Twitch won't start with sound on its own, and the sound comes on a moment later once it's playing. If it still hasn't started after a few seconds, the player reloads it once, then clicks the screen for you (a few tries at most). |
 | Twitch video (VOD) | `https://www.twitch.tv/videos/<id>` | Stays in sync like YouTube. |
 | Twitch clip | `https://www.twitch.tv/<channel>/clip/<id>` or `https://clips.twitch.tv/<id>` | Twitch's clip player can't be controlled, so clips aren't kept in sync, volume, mute and the `spatial` fade don't change them, and each gets 60 seconds (the longest a clip can be) before the playlist moves on. |
 | Vimeo | `https://vimeo.com/<id>` | Only videos whose owner allows embedding on other sites. |

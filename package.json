@@ -12,6 +12,7 @@
     "node": "22"
   },
   "dependencies": {
+    "compression": "^1.8.2",
     "debug": "^4.3.4",
     "express": "^5.2.1",
     "pg": "^8.19.0",

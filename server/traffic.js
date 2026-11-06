@@ -12,6 +12,8 @@
 
 const DEFAULT_MINUTES = 60;
 const TOP = 8;
+/** Most different paths counted between summaries; more are counted together as "(other)". */
+const MAX_FILE_KEYS = 1000;
 
 const mb = n => `${(n / (1024 * 1024)).toFixed(2)} MB`;
 
@@ -26,6 +28,7 @@ class Traffic {
     this.startedAt = Date.now();
     this.messages = new Map(); // command -> { count, bytes } (JSON, before compression)
     this.files = new Map(); // path -> { count, bytes, notModified }
+    this.pathKeys = 0; // entries in `files` that are paths, not "(not found)" and the like
     this.wireOut = 0; // bytes the WebSocket connections wrote, after compression
     this.wireIn = 0;
     this.connections = 0;
@@ -35,7 +38,7 @@ class Traffic {
   message(path, payload) {
     const entry = this.messages.get(path) || { count: 0, bytes: 0 };
     entry.count++;
-    entry.bytes += payload.length;
+    entry.bytes += Buffer.byteLength(payload);
     this.messages.set(path, entry);
   }
 
@@ -79,8 +82,16 @@ class Traffic {
         return end.call(this, chunk, encoding, cb);
       };
       res.on('finish', () => {
-        // Query strings and unknown paths are folded so the summary stays short.
-        const key = res.statusCode === 404 ? '(not found)' : req.path.startsWith('/api/') ? req.path : req.path.slice(0, 80);
+        // Missing pages and errors are folded, paths are cut short, and past MAX_FILE_KEYS paths
+        // the rest share one entry, so requests for made-up addresses can't grow the list.
+        let key;
+        if (res.statusCode === 404) key = '(not found)';
+        else if (res.statusCode >= 400) key = '(error)';
+        else {
+          key = req.path.slice(0, 80);
+          if (!this.files.has(key) && this.pathKeys >= MAX_FILE_KEYS) key = '(other)';
+          else if (!this.files.has(key)) this.pathKeys++;
+        }
         const entry = this.files.get(key) || { count: 0, bytes: 0, notModified: 0 };
         entry.count++;
         entry.bytes += bytes;

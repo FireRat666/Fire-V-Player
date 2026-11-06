@@ -7,6 +7,7 @@
 
 const { WebSocketServer } = require('ws');
 const express = require('express');
+const compression = require('compression');
 const http = require('http');
 const path = require('path');
 const { searchVideos, videoById } = require('./youtube/search.js');
@@ -24,6 +25,7 @@ const models = require('./models'); // Sequelize models
 const { Blacklist } = require('./blacklist.js');
 const PasteCodes = require('./paste.js');
 const VERSION = require('./version.js'); // this build, shown in the panel (see version.js)
+const traffic = require('./traffic.js');
 
 /** Seek skip increment in seconds for standard playlist mode. */
 const SkipJumpTimePlaylist = 5;
@@ -189,7 +191,17 @@ class App {
   setupWebserver() {
     this.app = express();
     this.server = http.createServer(this.app);
-    this.wss = new WebSocketServer({ noServer: true });
+    // Messages are compressed when both ends support it (Banter's browsers do; a client that
+    // doesn't just gets them as they are). Small ones, like the regular time syncs, aren't worth
+    // it. No context is kept between messages, so each connection uses little memory.
+    this.wss = new WebSocketServer({
+      noServer: true,
+      perMessageDeflate: {
+        threshold: 1024,
+        serverNoContextTakeover: true,
+        clientNoContextTakeover: true
+      }
+    });
     this.server.on('upgrade', (request, socket, head) => {
       this.wss.handleUpgrade(request, socket, head, (ws) => {
         this.wss.emit('connection', ws, request);
@@ -199,6 +211,10 @@ class App {
     // Behind the host's proxy (Render), so req.ip is the visitor's address, for the admin
     // page's wrong-password limit.
     this.app.set('trust proxy', 1);
+    // Counted before compression, so the counts are the bytes that leave the server.
+    this.app.use(traffic.middleware());
+    // Scripts, pages and the API's answers are gzipped for browsers that ask for it (all do).
+    this.app.use(compression());
     this.blacklist.setupRoutes(this.app);
     this.pasteCodes.setupRoutes(this.app);
     // The stream to play for a Tubi or NASA+ link, asked for by the player page when it plays one
@@ -212,7 +228,12 @@ class App {
         res.status(422).json({ error: e.message || "Couldn't find that video's stream." });
       }
     });
-    this.app.use(express.static(path.join(__dirname, '..', 'public')));
+    // A browser may keep the files, but checks with the server each time a page loads: an
+    // unchanged file is answered "not changed" with no body, and an updated one is sent in full,
+    // so nobody is left on an older version after an update.
+    this.app.use(express.static(path.join(__dirname, '..', 'public'), {
+      setHeaders: res => res.set('Cache-Control', 'no-cache')
+    }));
   }
   /**
    * Attaches WebSocket connection listeners, ping/pong health-checks,
@@ -223,6 +244,7 @@ class App {
     // This logic is now separate and will be called only when the server is listening.
     this.wss.on('connection', async (ws, req) => {
       ws.t = new Date().getTime();
+      traffic.track(req.socket);
       ws.isAlive = true;
       ws.on('pong', () => {
         ws.isAlive = true;
@@ -266,7 +288,9 @@ class App {
       clearInterval(this.mainLoop);
       clearInterval(interval);
       clearInterval(this.cleanupLoop);
+      traffic.stop();
     });
+    traffic.start();
   }
 
   /**
@@ -360,6 +384,7 @@ class App {
     if (process.env.NODE_ENV !== 'production') {
       console.log(`[SEND] user: ${socket.u ? socket.u.name : 'N/A'}, instance: ${socket.i || 'N/A'}, type: ${socket.type || 'N/A'}, path: ${path}, payload_size: ${payload.length}`);
     }
+    traffic.message(path, payload);
     socket.send(payload);
   }
 

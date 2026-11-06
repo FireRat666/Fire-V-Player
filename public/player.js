@@ -363,17 +363,20 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
     }
 
     onYouTubeError(event) {
-      const currentVideo = this.currentVideo || (this.playerData && this.playerData.playlist && this.playerData.playlist[this.playerData.currentTrack]);
-      // Error 150: The video owner has not made this video available in your country.
-      // Error 101 is a variation of this.
-      if ((event.data === 150 || event.data === 101) && (!this.player.isYouTube || this.player.isYouTube())) {
-        if (currentVideo) {
-          this.core.showToast(`Video unavailable in your region: ${currentVideo.title}`);
-          this.core.sendMessage({ path: Commands.VIDEO_UNAVAILABLE, data: { link: currentVideo.link } });
+      // Until the world's track starts, an error is the default video's, not the track's.
+      if (this.readyToPlay) {
+        const currentVideo = this.currentVideo || (this.playerData && this.playerData.playlist && this.playerData.playlist[this.playerData.currentTrack]);
+        // Error 150: The video owner has not made this video available in your country.
+        // Error 101 is a variation of this.
+        if ((event.data === 150 || event.data === 101) && (!this.player.isYouTube || this.player.isYouTube())) {
+          if (currentVideo) {
+            this.core.showToast(`Video unavailable in your region: ${currentVideo.title}`);
+            this.core.sendMessage({ path: Commands.VIDEO_UNAVAILABLE, data: { link: currentVideo.link } });
+          }
         }
+        // A video that can't play here isn't reloaded by the stall watch.
+        if (YT_PERMANENT_ERRORS.includes(event.data) && currentVideo) this.unplayableLink = currentVideo.link;
       }
-      // A video that can't play here isn't reloaded by the stall watch.
-      if (YT_PERMANENT_ERRORS.includes(event.data) && currentVideo) this.unplayableLink = currentVideo.link;
       console.log("YT Player Error:", event.data);
       // The default video failed (YouTube may want this viewer to sign in): go on to the
       // world's track anyway, or the screen would stay on the error.
@@ -407,6 +410,9 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         s.lastTime = t; s.lastProgress = now; s.stage = 0;
         return;
       }
+      // A seek back while playing starts the count from the new point, without being progress
+      // itself, or the track would look stuck until it passed where it was.
+      if (state === YT.PlayerState.PLAYING && s.lastTime !== null && t < s.lastTime) s.lastTime = t;
       if (s.lastTime === null) s.lastTime = t;
       const stalled = now - s.lastProgress;
       const id = this.core.getId(video.link);
@@ -464,6 +470,9 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
             frame.id = 'player';
             this.yt = yt;
             if (this.player === old) this.player = yt; else this.player.yt = yt;
+            // The new player has none of the old one's captions, even for the same video.
+            clearTimeout(this.captionsTimer);
+            this.captionsApplied = null;
             yt.setVolume(Number(this.core.params.volume));
             if (this.core.params.mute === 'true' || this.core.params.mute === true || Number(this.core.params.volume) === 0) yt.mute(); else yt.unMute();
             // Another site's player may have taken over the screen meanwhile.

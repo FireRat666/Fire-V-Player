@@ -69,13 +69,13 @@ class App {
    * Compresses the playlist and user data into a lean format for efficient storage.
    *
    * @param {string} instanceId - Room/instance identifier.
-   * @returns {Promise<void>}
+   * @returns {Promise<boolean>} Whether the state was saved.
    * @private
    */
   async _performSave(instanceId) {
-    if (!this.dbConnected) return;
+    if (!this.dbConnected) return false;
     const player = this.videoPlayers[instanceId];
-    if (!player) return;
+    if (!player) return false;
 
     // Clear the timeout handle since we are now executing the save
     player.saveStateTimeout = null;
@@ -130,8 +130,10 @@ class App {
         playerData: stateToSave
       });
       console.log(`[DEBOUNCED SAVE] Persisted state for instance ${instanceId}.`);
+      return true;
     } catch (err) {
       console.error(`Error saving state for instance ${instanceId}:`, err);
+      return false;
     }
   }
 
@@ -1242,8 +1244,13 @@ class App {
 
       const player = this.videoPlayers[instanceId];
       if (copiedFrom) {
-        console.log(`Instance ${instanceId} started from the saved state of ${copiedFrom}.`);
-        this.savePlayerState(instanceId);
+        // Saved now, not after the usual delay, so the new room has its own record from the start.
+        // If that fails the old room is still there, and the next join copies it again.
+        if (await this._performSave(instanceId)) {
+          console.log(`Instance ${instanceId} started from the saved state of ${copiedFrom}, and saved it.`);
+        } else {
+          console.warn(`Instance ${instanceId} started from the saved state of ${copiedFrom}, but couldn't save it; the copy will be tried again next time.`);
+        }
       }
 
       // --- FIX for stuck takeover state on load ---

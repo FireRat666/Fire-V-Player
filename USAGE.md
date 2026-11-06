@@ -326,7 +326,9 @@ Everyone in the same room sees the same player and playlist. The room comes from
 - **`shared:` and a code** (`room="shared:gothparty"`): the same room in every world that uses that code, for linking worlds on purpose.
 - **Unity play mode:** every creator's play mode has the same address (`http://localhost:...`), so the snippet's own id is added too and each project gets its own play-mode room. (Script tags have no such id, so in play mode they still share by URL and code.)
 
-Before this, a code alone was the room, shared by every world that used it. The first time a space opens its new room, the server copies the playlist, lists and settings saved under its old code into it. The old room is left as it was, so a world that still uses it (or `shared:` with the same code) keeps it. The lists each viewer saved on their own device for that world come along too.
+Before this, a code alone was the room, shared by every world that used it. When a space opens its new room and the server has nothing saved for that room yet, it copies the playlist, lists and settings saved under the old code into it, once. After that the two rooms are separate: changes to the old room don't reach the new one. The old room is left as it was, so a world that still uses it (or `shared:` with the same code) keeps it. The lists each viewer saved on their own device come along the same way: the ones saved under the old code are used only while none are saved for the new room.
+
+Unity play mode doesn't copy anything: its old rooms were the ones every creator shared, so a play-mode room starts empty.
 
 ### Blacklist
 

@@ -160,6 +160,8 @@
         // Not the element's own "instance" (BSSnippet's per-placement id): without a room the
         // player falls back to the space URL.
         if (name === 'instance') return el.getAttribute('room') || null;
+        // That per-placement id, for a room of its own in Unity play mode (core.js setRoom).
+        if (name === 'placement-id') return el.getAttribute('instance') || null;
         if (name === 'singer-button-space' || name === 'singer-button-position' || name === 'singer-button-rotation') {
           const v = singer(name);
           if (v !== undefined) return v;

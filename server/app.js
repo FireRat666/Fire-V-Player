@@ -414,7 +414,8 @@ class App {
           ws.i = msg.data;
           // The world's snippet may allow links from any site (untrusted-links="true").
           ws.allowUntrusted = msg.untrusted === true;
-          await this.createVideoPlayer(msg.data, msg.u, ws);
+          // The space page also names the room its code used before (core.js setRoom).
+          await this.createVideoPlayer(msg.data, msg.u, ws, typeof msg.legacy === 'string' ? msg.legacy : null);
           this.blacklist.seen(msg.u, msg.data);
           // Always, so a player that missed an unblock while disconnected is unfrozen.
           this.blacklist.tell(ws);
@@ -1139,12 +1140,19 @@ class App {
    * @param {Object} ws - Client WebSocket.
    * @returns {Promise<void>}
    */
-  async createVideoPlayer(instanceId, user, ws) {
+  async createVideoPlayer(instanceId, user, ws, legacyId) {
     if (!this.videoPlayers[instanceId]) {
       let existingState = null;
+      let copiedFrom = null;
       if (this.dbConnected) {
         try {
-          const result = await models.PlayerState.findByPk(instanceId);
+          let result = await models.PlayerState.findByPk(instanceId);
+          // A room with nothing saved yet starts with what was saved under the room its code
+          // used before. The old room is kept, as other worlds may still use it.
+          if (!result && legacyId && legacyId !== instanceId) {
+            result = await models.PlayerState.findByPk(legacyId);
+            if (result) copiedFrom = legacyId;
+          }
           if (result) {
             existingState = result.playerData;
 
@@ -1233,6 +1241,10 @@ class App {
       }
 
       const player = this.videoPlayers[instanceId];
+      if (copiedFrom) {
+        console.log(`Instance ${instanceId} started from the saved state of ${copiedFrom}.`);
+        this.savePlayerState(instanceId);
+      }
 
       // --- FIX for stuck takeover state on load ---
       // If an instance is loaded from the database with an absent host and takeover disabled,

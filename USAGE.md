@@ -138,7 +138,7 @@ Settings are the same as the script attributes below, except:
 - `scale` can be a single number. The screen is 1 m wide and 0.5625 m tall at scale 1, at any `resolution`, so the gizmo's `size` should be `scale × 1` by `scale × 0.5625`.
 - `karaoke` is a checkbox: ticked (`true`) is karaoke mode, unticked or empty is playlist mode. A hand-written `mode="karaoke"` works too. Both modes use the same settings; `playlist` (the default YouTube playlist) only matters in playlist mode.
 - `singer-button-position` and `singer-button-rotation` (karaoke) place the Singers button, a Unity world position and rotation like `button-position`. (The SDK gives it no drag handle; the [live preview](#in-unity) adds one, on the button wherever it really is, while karaoke is on.) `0 0 0` (or empty) means the default: for the position, below and in front of the in-world buttons, placed from them; for the rotation, tilted back 30° and turned with the screen. With `controls-follow-screen="true"` they're offsets from the screen instead. They default to `0 0 0` rather than empty because Unity picks each setting's field from its value: an empty one shows as a single text box instead of X, Y and Z. The `box-trigger-*` settings from the parameter reference work too.
-- The room ID is `room`, not `instance`: Unity's BSSnippet component writes its own `instance` attribute. Without `room`, the space URL is used, so each space has its own room.
+- The room ID is `room`, not `instance`: Unity's BSSnippet component writes its own `instance` attribute. See [Rooms](#rooms) for how the room is picked.
 - `playlist-panel-position` and `playlist-panel-rotation` place the in-world panel in the world (Unity values), and it has its own drag handle in the Scene view. Clear `playlist-panel-position` to put the panel beside the screen instead; `playlist-panel-rotation` is then relative to the screen.
 - `button-position` is where the in-world buttons go (Unity world position), with its own drag handle. Empty (or `0 0 0`) puts them just under the screen; an empty or `0 0 0` `button-rotation` uses the screen's.
 - `controls-follow-screen="true"` makes `button-position`, `playlist-panel-position`, `singer-button-position` and their rotations offsets from the screen (in the screen's own axes) instead of world values, so the buttons and panel move and turn with the screen. Their drag handles then don't show where they'll be, as a gizmo can only show a setting's own value. For example `button-position="0 -0.67 0"` puts the buttons 0.67 m below the screen's centre.
@@ -315,7 +315,18 @@ The **Space admins only** section also has **Admin Take Over** (shown when you a
 - When they leave the space, the usual rule applies: 42 seconds later anyone can take over again. So people can still use the player when no admin is around.
 - It works the same way as the mode switch: pressing it saves the admin's ID as protected space state (the key `fire-v-player-admin`), which only space admins can write. When that change arrives, the admin's own player asks the server for control. For anyone else the write is refused, and after a few seconds the panel says "Only space admins can take control this way."
 - The player server can't check who is a space admin itself. It trusts the admin's player, as it trusts every player's own user ID. That stops anyone using the normal client, but not a modified one.
-- The room is shared by everyone with the same `room`, so an admin of one world can take control of a room another world uses too. Without a `room`, each space has its own.
+- A room shared on purpose with `shared:` (see [Rooms](#rooms)) is shared by every world that uses it, so an admin of one of them can take control of it for all of them. Otherwise each space has its own room.
+
+### Rooms
+
+Everyone in the same room sees the same player and playlist. The room comes from the space and its room code (`room` on the snippet, `instance` on the script tag):
+
+- **No code:** the space's URL, so each space has its own room.
+- **A code** (`room="movies"`): the space's URL and the code, so two spaces that happen to pick the same code don't share a playlist. One space can still have several rooms with different codes.
+- **`shared:` and a code** (`room="shared:gothparty"`): the same room in every world that uses that code, for linking worlds on purpose.
+- **Unity play mode:** every creator's play mode has the same address (`http://localhost:...`), so the snippet's own id is added too and each project gets its own play-mode room. (Script tags have no such id, so in play mode they still share by URL and code.)
+
+Before this, a code alone was the room, shared by every world that used it. The first time a space opens its new room, the server copies the playlist, lists and settings saved under its old code into it. The old room is left as it was, so a world that still uses it (or `shared:` with the same code) keeps it. The lists each viewer saved on their own device for that world come along too.
 
 ### Blacklist
 
@@ -332,7 +343,7 @@ All parameters are optional unless marked as **(Required)**.
 | Attribute | Description | Default Value |
 | :--- | :--- | :--- |
 | `src` | **(Required)** The URL to your running Fire-V-Player instance's `playlist.js` or `karaoke.js` file. | N/A |
-| `instance` | **(Required)** A unique ID for the player instance. All users with the same ID will see the same player. | The current page URL |
+| `instance` | The room code (`room` on the snippet). Each space has its own room for a code; `shared:<code>` is the same room in every world that uses it. See [Rooms](#rooms). | Empty: the space's URL |
 | `playlist` | The playlist to load by default if the instance is empty: a YouTube playlist ID (e.g., `PL...`) or link, or a link to a list of links (a `.txt` or `.m3u` file, a Google Doc, a Drive folder or an archive.org item; see [Playlists of links](#playlists-of-links)), a Tubi category or series, or a NASA+ series (see [Links from other sites](#links-from-other-sites)). | `""` |
 | `playlists` | Saved playlists for the Lists tab: comma separated YouTube playlists (IDs or links), links to lists of links, Tubi categories and series, NASA+ series, and single video or stream links, up to 10 with `playlist`. See [Saved lists](#saved-lists). | `""` |
 | `youtube` | The URL of a single YouTube video to use as the default "silent" video when nothing is playing. | A silent visual video |

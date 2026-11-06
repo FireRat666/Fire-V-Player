@@ -132,7 +132,8 @@
         }
 
         await core.setupWebsocket("space", d => core.parseMessage(d), () => {
-          core.sendMessage({path: "instance", data: core.params.instance, u: window.user, untrusted: core.allowUntrusted === true});
+          core.sendMessage({path: "instance", data: core.params.instance, u: window.user, untrusted: core.allowUntrusted === true,
+            legacy: core.params['legacy-instance'] || undefined});
           // The current mode, which may have changed since the player started.
           core.sendMessage({path: Commands.SET_INSTANCE_MODE, data: core.getMode()});
         });

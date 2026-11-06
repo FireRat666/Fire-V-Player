@@ -162,7 +162,7 @@ var Core = class {
       document.body.appendChild(iframe);
 
       const proto = this.getProtocol();
-      const playlistUrl = `${proto}://${this.hostUrl}/playlist/?instance=${this.params.instance}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}`;
+      const playlistUrl = `${proto}://${this.hostUrl}/playlist/?instance=${encodeURIComponent(this.params.instance)}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}`;
       this.showToast(`Player is in 2D mode. See console for playlist URL.`, 5000);
       console.log(`Player is in 2D mode. Open the playlist controls here: ${playlistUrl}`);
       return;
@@ -2067,7 +2067,10 @@ var Core = class {
     // The world video player's size for files (native-video.js); empty matches the browser.
     this.setOrDefault("native-screen-size", '');
     this.setOrDefault("one-for-each-instance", "false");
-    this.setOrDefault("instance", location.href);
+    // The room. Pages the player opens get the finished room in their address (?instance=).
+    const roomFromAddress = !this.currentScript.getAttribute('instance') && this.urlParams.has('instance');
+    this.setOrDefault("instance", "");
+    if (!roomFromAddress) this.setRoom(this.params.instance);
     this.setOrDefault("playlist", "");
     this.setOrDefault("volume", '40');
     this.setOrDefault("mute", 'false');
@@ -2134,6 +2137,30 @@ var Core = class {
     if(this.params["one-for-each-instance"] === "true" && window.user && window.user.instance) {
         this.params.instance += window.user.instance;
     }
+  }
+  /**
+   * The room (instance) for this space, from the world's room code:
+   * - no code: the space's address, as before;
+   * - a code: the space's address and the code, so spaces that happen to pick the same code
+   *   don't share a playlist;
+   * - "shared:<code>": the code alone, the same room in every world that uses it (how every code
+   *   worked before), for linking worlds on purpose.
+   * Unity play mode has the same localhost address for every creator, so there the snippet's own
+   * id (BSSnippet's per-placement id) is added too, giving each project its own room.
+   * `legacy-instance` is the room this code used before, which the server copies a saved
+   * playlist from the first time the new room is used.
+   * @param {string} code - The world's room code (`room` on the snippet, `instance` on the script tag).
+   */
+  setRoom(code) {
+    code = String(code || '').trim();
+    let room = location.href, legacy = '';
+    if (/^shared:/i.test(code)) room = code.slice(7).trim() || location.href;
+    else if (code) { room = `${location.href} room:${code}`; legacy = code; }
+    const local = /^(localhost|127\.0\.0\.1|\[::1\])$/i.test(location.hostname);
+    const placement = local && this.currentScript.getAttribute('placement-id');
+    if (placement) { room += ` snippet:${placement}`; legacy = ''; }
+    this.params.instance = room;
+    this.params['legacy-instance'] = legacy;
   }
   setOrDefault(attr, defaultValue) {
     const value = this.currentScript.getAttribute(attr);

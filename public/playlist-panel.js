@@ -116,6 +116,8 @@ var FirePlaylistPanel = class {
     this.restoreLastSearch();
     // Lists this viewer saved from a link, kept on this device for this world.
     this.userListsKey = `fvpSavedLists:${(core.params && core.params.instance) || ''}`;
+    // Where they were kept before the room took in the space's address (core.js setRoom).
+    this.legacyListsKey = core.params && core.params['legacy-instance'] ? `fvpSavedLists:${core.params['legacy-instance']}` : null;
     this.userLists = this.loadUserLists();
     // A pasted playlist waiting for its Replace / Add All / Save choice.
     this.pendingList = null;
@@ -335,7 +337,9 @@ var FirePlaylistPanel = class {
 
   loadUserLists() {
     try {
-      const list = JSON.parse(localStorage.getItem(this.userListsKey) || '[]');
+      let saved = localStorage.getItem(this.userListsKey);
+      if (saved == null && this.legacyListsKey) saved = localStorage.getItem(this.legacyListsKey);
+      const list = JSON.parse(saved || '[]');
       return Array.isArray(list) ? list.filter(l => l && typeof l.id === 'string').map(l => ({ id: l.id, label: String(l.label || 'Playlist'), user: true })) : [];
     } catch (e) {
       return [];

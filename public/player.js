@@ -31,6 +31,17 @@ const PROPORTIONAL_GAIN = 0.15;     // How aggressively to correct small drifts.
 const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05x), making it less noticeable.
 // --- End of Sync Constants ---
 
+// YouTube can fail partway through a video ("Something went wrong. Refresh or try again later.")
+// without telling the page, and the screen stays on the error. A track that should be playing
+// but hasn't moved for this long is loaded again where the world is; if it still doesn't move,
+// the YouTube player is replaced with a new one, as reloading the page would.
+const STALL_CHECK_MS = 2000;
+const STALL_RELOAD_MS = 15000;
+const STALL_REBUILD_MS = 15000;
+const STALL_RETRY_MS = 60000; // after a new player, the wait before trying again from the start
+// YouTube errors that mean the video can't play here at all, so waiting or reloading won't help.
+const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
+
 (() => {
   const playerScript = document.currentScript;
 
@@ -287,43 +298,10 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
         height: window.innerHeight,
         width: window.innerWidth,
         videoId: this.core.getId(decodeURIComponent(this.core.params.youtube)),
-        playerVars: {
-          'playsinline': 1,
-          'autoplay': 1,
-          'disablekb': 1,
-          'controls': 0,
-          'modestbranding': true,
-          'cc_load_policy': this.core.captions === false ? 0 : 1,
-          'cc_lang_pref': 'en',
-          'iv_load_policy': 3,
-          'origin': window.location.origin,
-          'start': Number(start),
-           'vq': 'hd1080'
-        },
+        playerVars: this.youTubePlayerVars(start),
         events: {
-          onStateChange: event => {
-            if (event.data === YT.PlayerState.PLAYING) {
-              this.applyCaptions(); // each new video loads with the player's caption default
-              this.startPlaying();
-            } // The aggressive `playVideo()` call on non-playing states has been removed.
-              // The auto-sync logic is the robust way to handle unexpected pauses or buffering
-              // by correcting the resulting time drift.
-          },
-          onError: event => {
-            // Error 150: The video owner has not made this video available in your country.
-            // Error 101 is a variation of this.
-            if ((event.data === 150 || event.data === 101) && (!this.player.isYouTube || this.player.isYouTube())) {
-              const currentVideo = this.currentVideo || (this.playerData && this.playerData.playlist && this.playerData.playlist[this.playerData.currentTrack]);
-              if (currentVideo) {
-                this.core.showToast(`Video unavailable in your region: ${currentVideo.title}`);
-                this.core.sendMessage({ path: Commands.VIDEO_UNAVAILABLE, data: { link: currentVideo.link } });
-              }
-            }
-            console.log("YT Player Error:", event.data);
-            // The default video failed (YouTube may want this viewer to sign in): go on to the
-            // world's track anyway, or the screen would stay on the error.
-            this.startPlaying();
-          },
+          onStateChange: event => this.onYouTubeState(event),
+          onError: event => this.onYouTubeError(event),
           onApiChange: async event => {
           },
           onReady: event => {
@@ -332,6 +310,7 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
             this.setMute();
             this.player.playVideo(); // Explicitly start playback.
             this.drainBrowserMessages();
+            this.startStallWatch();
             // The track waits for the default video to play, but YouTube can block it for some
             // viewers ("Sign in to confirm you're not a bot") without an error, so not for long.
             setTimeout(() => {
@@ -355,6 +334,157 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
         requestClick: () => this.clickMiddle()
       }) : this.yt;
       if (this.player.setCaptions) this.player.setCaptions(this.core.captions !== false);
+    }
+
+    /** The YouTube player's settings, for the first player and any that replaces it. */
+    youTubePlayerVars(start) {
+      return {
+        'playsinline': 1,
+        'autoplay': 1,
+        'disablekb': 1,
+        'controls': 0,
+        'modestbranding': true,
+        'cc_load_policy': this.core.captions === false ? 0 : 1,
+        'cc_lang_pref': 'en',
+        'iv_load_policy': 3,
+        'origin': window.location.origin,
+        'start': Number(start) || 0,
+        'vq': 'hd1080'
+      };
+    }
+
+    onYouTubeState(event) {
+      if (event.data === YT.PlayerState.PLAYING) {
+        this.applyCaptions(); // each new video loads with the player's caption default
+        this.startPlaying();
+      } // The aggressive `playVideo()` call on non-playing states has been removed.
+        // The auto-sync logic is the robust way to handle unexpected pauses or buffering
+        // by correcting the resulting time drift.
+    }
+
+    onYouTubeError(event) {
+      const currentVideo = this.currentVideo || (this.playerData && this.playerData.playlist && this.playerData.playlist[this.playerData.currentTrack]);
+      // Error 150: The video owner has not made this video available in your country.
+      // Error 101 is a variation of this.
+      if ((event.data === 150 || event.data === 101) && (!this.player.isYouTube || this.player.isYouTube())) {
+        if (currentVideo) {
+          this.core.showToast(`Video unavailable in your region: ${currentVideo.title}`);
+          this.core.sendMessage({ path: Commands.VIDEO_UNAVAILABLE, data: { link: currentVideo.link } });
+        }
+      }
+      // A video that can't play here isn't reloaded by the stall watch.
+      if (YT_PERMANENT_ERRORS.includes(event.data) && currentVideo) this.unplayableLink = currentVideo.link;
+      console.log("YT Player Error:", event.data);
+      // The default video failed (YouTube may want this viewer to sign in): go on to the
+      // world's track anyway, or the screen would stay on the error.
+      this.startPlaying();
+    }
+
+    /** Checks every few seconds that a playing YouTube track is moving (see STALL_RELOAD_MS). */
+    startStallWatch() {
+      if (this.stall) return;
+      this.stall = { lastTime: null, lastProgress: Date.now(), stage: 0 };
+      setInterval(() => this.checkStall(), STALL_CHECK_MS);
+    }
+
+    checkStall() {
+      const s = this.stall;
+      const now = Date.now();
+      const p = this.player;
+      const d = this.playerData;
+      const video = this.currentVideo;
+      const watching = p && this.ytReady && this.readyToPlay && !this.pendingYt && video && d && !d.paused
+        && !document.hidden && (!p.isYouTube || p.isYouTube()) && video.link !== this.unplayableLink;
+      let t, state;
+      try { t = p.getCurrentTime(); state = p.getPlayerState(); } catch (e) { t = null; }
+      if (!watching || t === null || state === YT.PlayerState.ENDED) {
+        s.lastTime = null; s.lastProgress = now; s.stage = 0;
+        return;
+      }
+      // Only playing counts as moving: a sync seeking a stuck player changes its time too.
+      if (state === YT.PlayerState.PLAYING && s.lastTime !== null && t > s.lastTime) {
+        if (s.stage) console.log('[PLAYER] YouTube is playing again.');
+        s.lastTime = t; s.lastProgress = now; s.stage = 0;
+        return;
+      }
+      if (s.lastTime === null) s.lastTime = t;
+      const stalled = now - s.lastProgress;
+      const id = this.core.getId(video.link);
+      if (s.stage === 0 && stalled > STALL_RELOAD_MS) {
+        s.stage = 1; s.lastProgress = now;
+        const at = this.worldTime();
+        console.log(`[PLAYER] YouTube hasn't moved for ${Math.round(stalled / 1000)}s (at ${t.toFixed(1)}s, state ${state}), loading it again at ${at.toFixed(1)}s.`);
+        this.core.showToast("YouTube stopped, reloading the video...");
+        p.loadVideoById(id, at);
+        p.playVideo();
+      } else if (s.stage === 1 && stalled > STALL_REBUILD_MS) {
+        s.stage = 2; s.lastProgress = now;
+        console.log(`[PLAYER] YouTube still isn't playing (state ${state}), starting a new YouTube player.`);
+        this.core.showToast("YouTube still stopped, restarting the player...");
+        this.rebuildYouTube();
+      } else if (s.stage === 2 && stalled > STALL_RETRY_MS) {
+        s.stage = 0; s.lastProgress = now - STALL_RELOAD_MS; // the next check loads it again
+      }
+    }
+
+    /** Where the world's playing track is now, in seconds. */
+    worldTime() {
+      const d = this.playerData;
+      const live = (Date.now() / 1000) - (this.clockSkew || 0) - Number(d.lastStartTime);
+      if (Number.isFinite(live) && live >= 0) return live;
+      return (this.stall.lastTime || 0) + (Date.now() - this.stall.lastProgress) / 1000;
+    }
+
+    /**
+     * Replaces the YouTube player with a new one, as a page reload would. The old one takes
+     * every call until the new one is ready, then the new one takes its place and plays the
+     * world's track from where the world is.
+     */
+    rebuildYouTube() {
+      const old = this.yt;
+      const oldFrame = old.getIframe && old.getIframe();
+      const parent = (oldFrame && oldFrame.parentNode) || document.getElementById('stage') || document.body;
+      const el = document.createElement('div');
+      Object.assign(el.style, { position: 'absolute', top: '0', left: '0', width: '100%', height: '100%', border: '0', visibility: 'hidden' });
+      parent.insertBefore(el, oldFrame ? oldFrame.nextSibling : parent.firstChild);
+      const yt = this.pendingYt = new YT.Player(el, {
+        height: window.innerHeight,
+        width: window.innerWidth,
+        playerVars: this.youTubePlayerVars(0),
+        events: {
+          onStateChange: event => { if (this.yt === yt) this.onYouTubeState(event); },
+          onError: event => { if (this.yt === yt) this.onYouTubeError(event); },
+          onReady: () => {
+            if (this.pendingYt !== yt) return;
+            this.pendingYt = null;
+            try { old.destroy(); } catch (e) {}
+            const frame = yt.getIframe();
+            const left = document.getElementById('player'); // anything the old player left behind
+            if (left && left !== frame) left.remove();
+            frame.id = 'player';
+            this.yt = yt;
+            if (this.player === old) this.player = yt; else this.player.yt = yt;
+            yt.setVolume(Number(this.core.params.volume));
+            if (this.core.params.mute === 'true' || this.core.params.mute === true || Number(this.core.params.volume) === 0) yt.mute(); else yt.unMute();
+            // Another site's player may have taken over the screen meanwhile.
+            if (this.player.isYouTube && !this.player.isYouTube()) return;
+            frame.style.visibility = 'visible';
+            const d = this.playerData;
+            const video = this.currentVideo;
+            if (!video || !d) return;
+            if (d.paused) yt.cueVideoById(this.core.getId(video.link), Number(d.currentTime) || 0);
+            else yt.loadVideoById(this.core.getId(video.link), this.worldTime());
+            console.log('[PLAYER] The new YouTube player is ready.');
+          }
+        }
+      });
+      // A new player that never gets ready is dropped, and the old one kept.
+      setTimeout(() => {
+        if (this.pendingYt !== yt) return;
+        this.pendingYt = null;
+        console.log('[PLAYER] The new YouTube player never got ready, keeping the old one.');
+        try { yt.destroy(); } catch (e) {}
+      }, 20000);
     }
 
     /**

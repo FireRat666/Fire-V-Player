@@ -50,7 +50,7 @@ async function resolveVideoData(app, ws, v) {
       // series (a search result) plays its first episode, and a Library of Congress page its film's
       // file: their pages aren't videos.
       const kind = media.detect(link);
-      if (kind.type === 'archive' || kind.type === 'loc' || (kind.type === 'tubi' && kind.kind === 'series')) {
+      if (kind.type === 'archive' || kind.type === 'loc' || kind.type === 'eso' || (kind.type === 'tubi' && kind.kind === 'series')) {
         const file = await media.resolveMediaLink(link);
         return { ...v, ...file, duration: file.duration || (Number(v.duration) > 0 ? Number(v.duration) : 0) };
       }

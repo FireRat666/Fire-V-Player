@@ -7,12 +7,14 @@
 
 /**
  * @typedef {Object} DetectedMedia
- * @property {'youtube'|'file'|'hls'|'dash'|'mpegts'|'twitch'|'twitchclip'|'vimeo'|'vdoninja'|'archive'|'loc'|'tubi'|'nasa'} type - The detected media stream/source type.
+ * @property {'youtube'|'file'|'hls'|'dash'|'mpegts'|'twitch'|'twitchclip'|'vimeo'|'vdoninja'|'archive'|'loc'|'tubi'|'nasa'|'eso'} type - The detected media stream/source type.
  *   'tubi' is a Tubi movie, episode or series page, and 'nasa' a NASA+ video page: the player asks the
  *   server for the page's stream when it plays (`stream` is true), as Tubi's stream links expire.
  *   'archive' is an Internet Archive page or item (or a publicdomainmovie.net page) that the server
  *   turns into one of the item's files before it is played. 'loc' is a Library of Congress film page
- *   or handle, which the server turns into the film's video file on tile.loc.gov.
+ *   or handle, which the server turns into the film's video file on tile.loc.gov. 'eso' is an ESO or
+ *   ESA/Hubble video page, which the server turns into the video's .mp4 on cdn.eso.org (or
+ *   cdn.esahubble.org): a fulldome video's dome preview, or any other's 1080p file.
  * @property {string} [channel] - Twitch channel name if applicable.
  * @property {string} [video] - Twitch VOD ID if applicable.
  * @property {string} [clip] - Twitch clip slug if applicable.
@@ -25,6 +27,8 @@
  * @property {boolean} [drive] - True for a Google Drive file.
  * @property {string} [archive] - For a 'file' on the Internet Archive: the item's identifier.
  * @property {boolean} [loc] - For a 'file' on the Library of Congress's tile.loc.gov.
+ * @property {boolean} [eso] - For a 'file' on ESO's or ESA/Hubble's own servers.
+ * @property {'eso'|'hubble'} [site] - For an 'eso' page: which site it's on.
  * @property {string} [collection] - For a Library of Congress film handle: its collection (ntscrm, say).
  * @property {string} [number] - For a Library of Congress film handle: its number.
  * @property {string} [file] - For an Internet Archive link to one of an item's video files: its name.
@@ -168,6 +172,18 @@ var MediaSources = (() => {
       if (!kind || !/^\d{1,12}$/.test(id)) return null;
       return kind === 'series' ? { type: 'tubi', kind, id } : { type: 'tubi', kind, id, stream: true };
     }
+    // ESO and ESA/Hubble videos: www.eso.org/public/videos/<id>/ (or /public/<country>/videos/<id>/)
+    // and esahubble.org/videos/<id>/. Their archive pages (a category, a search) are lists.
+    if (host === 'eso.org' || host === 'esahubble.org') {
+      const at = host === 'eso.org' ? (parts[0] === 'public' ? parts.indexOf('videos') : -1) : (parts[0] === 'videos' ? 0 : -1);
+      const rest = at >= 0 && at <= 2 ? parts.slice(at + 1) : [];
+      const id = rest.length === 1 ? rest[0] : '';
+      if (/^[A-Za-z0-9_.-]{1,120}$/.test(id) && !/^(archive|search|feed|list|category|viewall)$/.test(id)) {
+        return { type: 'eso', site: host === 'eso.org' ? 'eso' : 'hubble', id };
+      }
+      return null;
+    }
+    if ((host === 'cdn.eso.org' || host === 'cdn.esahubble.org') && FILE_EXT.test(u.pathname)) return { type: 'file', eso: true };
     // NASA+: plus.nasa.gov/video/<name>/
     if (host === 'plus.nasa.gov') {
       const slug = parts[0] === 'video' ? parts[1] || '' : '';
@@ -225,9 +241,10 @@ var MediaSources = (() => {
    * (its links and its files): it is a well-known library hosting public-domain and Creative
    * Commons films, not an arbitrary server, much like Vimeo. So are Tubi (a free, licensed
    * streaming service) and NASA+ (NASA's own videos), whose streams the server looks up, and the
-   * Library of Congress's films (its pages and its tile.loc.gov files).
+   * Library of Congress's films (its pages and its tile.loc.gov files), and ESO's and ESA/Hubble's
+   * videos (their pages and their own servers' files).
    */
-  const TRUSTED = new Set(['youtube', 'twitch', 'twitchclip', 'vimeo', 'archive', 'loc', 'tubi', 'nasa']);
+  const TRUSTED = new Set(['youtube', 'twitch', 'twitchclip', 'vimeo', 'archive', 'loc', 'tubi', 'nasa', 'eso']);
 
   /**
    * Checks whether a detected media source is from an inherently trusted service.
@@ -236,11 +253,11 @@ var MediaSources = (() => {
    * @returns {boolean} True if media source is trusted without requiring untrusted-links override.
    */
   function isTrusted(media) {
-    return !!media && (TRUSTED.has(media.type) || (media.type === 'file' && (!!media.archive || !!media.loc)));
+    return !!media && (TRUSTED.has(media.type) || (media.type === 'file' && (!!media.archive || !!media.loc || !!media.eso)));
   }
 
   /** Rejection message displayed when untrusted direct media links are queued in restricted rooms. */
-  const UNTRUSTED_MESSAGE = 'This world only plays YouTube, Twitch, Vimeo, Tubi, NASA+, Internet Archive and Library of Congress links. Its owner can allow other links with the untrusted-links snippet setting.';
+  const UNTRUSTED_MESSAGE = 'This world only plays YouTube, Twitch, Vimeo, Tubi, NASA+, Internet Archive, Library of Congress and ESO links. Its owner can allow other links with the untrusted-links snippet setting.';
 
   /**
    * The 11-character id of a YouTube video, from a bare id or a YouTube link (with or without

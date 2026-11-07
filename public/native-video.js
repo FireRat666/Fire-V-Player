@@ -23,8 +23,17 @@ var FireNativeScreen = (() => {
   const TOGGLE_COOLDOWN_MS = 1500;
   /** Timeout in milliseconds before warning that video failed to prepare. */
   const PREPARE_TIMEOUT_MS = 20000;
+  /** The same for WebM, which most often fails for its codec (VP9), and loads as fast as MP4 when it plays. */
+  const WEBM_PREPARE_TIMEOUT_MS = 10000;
   /** Skip jump increment in seconds for standard and karaoke mode. */
   const SKIP_S = 5, SKIP_KARAOKE_S = 0.25;
+  /**
+   * An object in the world's Unity scene with this name (in any case) holds the video player: it's
+   * made under it, so a Unity graph that knows the object can find the player and share its picture
+   * (the Fire-V-Player video kit's Video Walls and Video Screens do). It must be at the world's
+   * origin, unturned and unscaled, as the screen's place is given in world terms.
+   */
+  const HOME_NAME = 'fire-v-player world video';
 
   /**
    * Controller class managing the lifecycle of an in-world native video screen.
@@ -70,9 +79,10 @@ var FireNativeScreen = (() => {
     async create() {
       const core = this.core;
       if (!core.inWorld() || !(BS.VideoPlayer || BS.BanterVideoPlayer)) throw new Error('No BS SDK scene or video player.');
-      // In the browser screen's place.
+      // In the browser screen's place, under the world's video home if it has one (see HOME_NAME).
       const t = core.screenTransform();
-      const go = this.go = await core.makeObject('FireVPlayer_VideoScreen', { position: t.position, rotation: t.rotation, scale: t.scale });
+      const home = this.findHome();
+      const go = this.go = await core.makeObject('FireVPlayer_VideoScreen', { parent: home || undefined, position: t.position, rotation: t.rotation, scale: t.scale });
       if (this.destroyed) { core.destroyObject(go); return; }
       const [w, h] = this.size();
       // The plane's renderer has to exist before the video player, which draws onto its material.
@@ -95,6 +105,23 @@ var FireNativeScreen = (() => {
       this.pollTimer = setInterval(() => this.poll(), POLL_MS);
       this.syncTimer = setInterval(() => { if (this.autoSync && !this.wantPaused) this.requestSync(false); }, SYNC_EVERY_MS);
       console.log(`[NativeScreen] Playing ${this.link} on the world's video player.`);
+    }
+
+    /**
+     * The scene's "Fire-V-Player World Video" object (see HOME_NAME), or null. The page knows every
+     * object with a BS component; the home has a BS Object Id for that.
+     * @returns {Object|null}
+     */
+    findHome() {
+      try {
+        const scene = this.core.banterScene();
+        const home = Object.values((scene && scene.objects) || {})
+          .find(go => go && String(go.name || '').trim().toLowerCase() === HOME_NAME);
+        if (home) console.log('[NativeScreen] Playing under the world\'s video home, so the world can share the picture.');
+        return home || null;
+      } catch (e) {
+        return null;
+      }
     }
 
     /**
@@ -165,10 +192,17 @@ var FireNativeScreen = (() => {
         this.reportDuration();
         this.requestSync(true); // start where everyone else is
       }
-      if (!this.prepared && now - this.startedAt > PREPARE_TIMEOUT_MS && !this.warned) {
+      // Not loaded in time: the browser tries it instead (it plays more formats). WebM gets less
+      // time, as Unity's player takes only VP8 WebM on PC, and most WebM now is VP9.
+      // The path only, as core.js's wantsNativeScreen reads it, so a query can't make a link look like WebM.
+      const u = typeof MediaSources !== 'undefined' ? MediaSources.parseUrl(String(this.link)) : null;
+      const webm = !!u && /\.webm$/i.test(u.pathname);
+      const timeout = webm ? WEBM_PREPARE_TIMEOUT_MS : PREPARE_TIMEOUT_MS;
+      if (!this.prepared && now - this.startedAt > timeout && !this.warned) {
         this.warned = true;
-        console.warn(`[NativeScreen] ${this.link} hasn't loaded after ${PREPARE_TIMEOUT_MS / 1000}s.`);
-        this.core.showToast("This file won't load on the world's video player. The link may be wrong, or the format unsupported.", 8000);
+        console.warn(`[NativeScreen] ${this.link} hasn't loaded after ${timeout / 1000}s.`);
+        if (typeof this.core.playFileInBrowser === 'function') this.core.playFileInBrowser(this.link);
+        else this.core.showToast("This file won't load on the world's video player. The link may be wrong, or the format unsupported.", 8000);
       }
       if (this.prepared) {
         if (!this.durationReported) this.reportDuration(); // the length may come later than the first frame

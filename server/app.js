@@ -13,6 +13,7 @@ const path = require('path');
 const { searchVideos, videoById } = require('./youtube/search.js');
 const archive = require('./archive.js');
 const streaming = require('./streaming.js');
+const eso = require('./eso.js');
 const media = require('./media.js');
 const MediaSources = require('../public/media-sources.js');
 const Commands = require('../public/commands.js');
@@ -69,13 +70,13 @@ class App {
    * Compresses the playlist and user data into a lean format for efficient storage.
    *
    * @param {string} instanceId - Room/instance identifier.
-   * @returns {Promise<void>}
+   * @returns {Promise<boolean>} Whether the state was saved.
    * @private
    */
   async _performSave(instanceId) {
-    if (!this.dbConnected) return;
+    if (!this.dbConnected) return false;
     const player = this.videoPlayers[instanceId];
-    if (!player) return;
+    if (!player) return false;
 
     // Clear the timeout handle since we are now executing the save
     player.saveStateTimeout = null;
@@ -130,8 +131,10 @@ class App {
         playerData: stateToSave
       });
       console.log(`[DEBOUNCED SAVE] Persisted state for instance ${instanceId}.`);
+      return true;
     } catch (err) {
       console.error(`Error saving state for instance ${instanceId}:`, err);
+      return false;
     }
   }
 
@@ -414,7 +417,9 @@ class App {
           ws.i = msg.data;
           // The world's snippet may allow links from any site (untrusted-links="true").
           ws.allowUntrusted = msg.untrusted === true;
-          await this.createVideoPlayer(msg.data, msg.u, ws);
+          // The space and player pages also name the room its code used before (core.js setRoom),
+          // so the old room is copied whichever of them joins first.
+          await this.createVideoPlayer(msg.data, msg.u, ws, typeof msg.legacy === 'string' ? msg.legacy : null);
           this.blacklist.seen(msg.u, msg.data);
           // Always, so a player that missed an unblock while disconnected is unfrozen.
           this.blacklist.tell(ws);
@@ -799,9 +804,9 @@ class App {
    * Transmits `SEARCH_RESULTS` back to the requesting WebSocket client.
    *
    * The SEARCH message's data is either a plain string (a YouTube search or a link) or
-   * `{ term: string, source: 'youtube' | 'archive' | 'tubi' | 'nasa', searchId?: string|number }`;
+   * `{ term: string, source: 'youtube' | 'archive' | 'tubi' | 'nasa' | 'eso' | 'esodome', searchId?: string|number }`;
    * 'archive' searches the Internet Archive's public-domain movies and TV, 'tubi' the titles in Tubi's
-   * categories and 'nasa' NASA+ (see server/streaming.js). A pasted link is looked up whichever source
+   * categories, 'nasa' NASA+ (see server/streaming.js), and 'eso' ESO's videos and 'esodome' its fulldome ones (server/eso.js). A pasted link is looked up whichever source
    * is picked. A `searchId` comes back on the SEARCH_RESULTS reply (and on the search's ERROR), so
    * a client can tell which of its searches a reply answers. Every search gets one SEARCH_RESULTS.
    *
@@ -812,7 +817,7 @@ class App {
   async search(data, ws) {
     const isObject = data && typeof data === 'object';
     const term = String((isObject ? data.term : data) || '').trim().slice(0, 500);
-    const source = isObject && ['archive', 'tubi', 'nasa'].includes(data.source) ? data.source : 'youtube';
+    const source = isObject && ['archive', 'tubi', 'nasa', 'eso', 'esodome'].includes(data.source) ? data.source : 'youtube';
     const rawId = isObject ? data.searchId : undefined;
     const tag = (typeof rawId === 'number' && Number.isFinite(rawId)) || (typeof rawId === 'string' && rawId.length <= 64)
       ? { searchId: rawId } : undefined;
@@ -874,6 +879,17 @@ class App {
       } catch (error) {
         console.error(`Error searching ${name} for ${JSON.stringify(term)}:`, error.message);
         fail(`${name} search failed. Try again in a moment.`);
+      }
+      return;
+    }
+    if (source === 'eso' || source === 'esodome') {
+      try {
+        const videos = await eso.search(term, source === 'esodome');
+        console.log(`[SEARCH] ${source} ${JSON.stringify(term)}: ${videos.length} results in ${Date.now() - started}ms (socket type: ${ws.type || 'N/A'}).`);
+        results(videos);
+      } catch (error) {
+        console.error(`Error searching ESO for ${JSON.stringify(term)}:`, error.message);
+        fail('ESO search failed. Try again in a moment.');
       }
       return;
     }
@@ -1139,12 +1155,23 @@ class App {
    * @param {Object} ws - Client WebSocket.
    * @returns {Promise<void>}
    */
-  async createVideoPlayer(instanceId, user, ws) {
+  async createVideoPlayer(instanceId, user, ws, legacyId) {
     if (!this.videoPlayers[instanceId]) {
       let existingState = null;
+      let copiedFrom = null;
       if (this.dbConnected) {
         try {
-          const result = await models.PlayerState.findByPk(instanceId);
+          let result = await models.PlayerState.findByPk(instanceId);
+          // A room with nothing saved yet starts with what was saved under the room its code
+          // used before. The old room is kept, as other worlds may still use it.
+          // Only that code's own old room: the code is everything after the first " room:" in the
+          // new room's name (the page address has no spaces), and must be exactly legacyId.
+          const at = instanceId.indexOf(' room:');
+          const code = at === -1 ? null : instanceId.slice(at + 6);
+          if (!result && legacyId && code === legacyId) {
+            result = await models.PlayerState.findByPk(legacyId);
+            if (result) copiedFrom = legacyId;
+          }
           if (result) {
             existingState = result.playerData;
 
@@ -1233,6 +1260,15 @@ class App {
       }
 
       const player = this.videoPlayers[instanceId];
+      if (copiedFrom) {
+        // Saved now, not after the usual delay, so the new room has its own record from the start.
+        // If that fails the old room is still there, and the next join copies it again.
+        if (await this._performSave(instanceId)) {
+          console.log(`Instance ${instanceId} started from the saved state of ${copiedFrom}, and saved it.`);
+        } else {
+          console.warn(`Instance ${instanceId} started from the saved state of ${copiedFrom}, but couldn't save it; the copy will be tried again next time.`);
+        }
+      }
 
       // --- FIX for stuck takeover state on load ---
       // If an instance is loaded from the database with an absent host and takeover disabled,

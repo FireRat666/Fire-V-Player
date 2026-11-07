@@ -27,7 +27,7 @@ module.exports = (sequelize, DataTypes) => {
   class PlayerState extends Model {}
   PlayerState.init({
     instanceId: {
-      type: DataTypes.STRING,
+      type: DataTypes.TEXT, // the space's address and room code (see the widen migration)
       primaryKey: true,
       allowNull: false,
       field: 'instance_id'

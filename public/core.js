@@ -17,8 +17,10 @@ var SCREEN_PIXELS_PER_M = 1300;
 var SCREEN_WIDTH_M = 1;
 var SCREEN_MIN_RESOLUTION = 640;
 var SCREEN_MAX_RESOLUTION = 3840;
-// The choices in the panel's More view, as page widths.
-var SCREEN_RESOLUTIONS = [1280, 1600, 1920];
+// The choices in the panel's More view, as page widths: up to 2K (1440p) on standalone headsets
+// (Quest), whose browsers struggle with more, and 4K (2160p) too on PC and PC VR.
+var SCREEN_RESOLUTIONS = [1280, 1600, 1920, 2560, 3840];
+var SCREEN_STANDALONE_MAX_RESOLUTION = 2560;
 var RESOLUTION_PREF_KEY = 'fire-v-player-resolution';
 // Where each viewer keeps their hand controls (see HAND_PLACES), remembered on their device.
 var HAND_PLACE_PREF_KEY = 'fire-v-player-hand-place';
@@ -162,7 +164,7 @@ var Core = class {
       document.body.appendChild(iframe);
 
       const proto = this.getProtocol();
-      const playlistUrl = `${proto}://${this.hostUrl}/playlist/?instance=${this.params.instance}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}`;
+      const playlistUrl = `${proto}://${this.hostUrl}/playlist/?instance=${encodeURIComponent(this.params.instance)}&legacy-instance=${encodeURIComponent(this.params['legacy-instance'] || '')}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}`;
       this.showToast(`Player is in 2D mode. See console for playlist URL.`, 5000);
       console.log(`Player is in 2D mode. Open the playlist controls here: ${playlistUrl}`);
       return;
@@ -307,7 +309,21 @@ var Core = class {
     // Audio files play in the browser: Unity's player on Quest doesn't play audio without video,
     // and can't play Ogg or Opus anywhere.
     const u = MediaSources.parseUrl(media.url || link);
-    return !(u && /\.(ogg|oga|opus|mp3|m4a|aac|wav|flac)$/i.test(u.pathname));
+    if (u && /\.(ogg|oga|opus|mp3|m4a|aac|wav|flac)$/i.test(u.pathname)) return false;
+    // WebM that Unity can't play (it takes VP8 only on PC) plays in the browser: files named as VP9
+    // or AV1 (Wikimedia's copies are), and Wikimedia's own WebM, which is almost always VP9.
+    if (u && /\.webm$/i.test(u.pathname) && (/[._-](vp9|av1)[._-]/i.test(u.pathname) || /(^|\.)wikimedia\.org$/i.test(u.hostname))) return false;
+    // A file the world's player couldn't start for this viewer plays in the browser too.
+    return !(this.browserFiles && this.browserFiles.has(link));
+  }
+  // The world's video player couldn't start this file (native-video.js gives up on it), so it plays
+  // in the browser for this viewer from now on, as the browser plays more formats (VP9, AV1...).
+  playFileInBrowser(link) {
+    if (!link) return;
+    (this.browserFiles = this.browserFiles || new Set()).add(link);
+    console.log(`[Core] The world's video player couldn't start ${link}, so it plays in the browser.`);
+    this.showToast("The world's video player can't play this file, so it plays in the browser instead.", 6000);
+    if (this.currentLink() === link) this.updateScreen();
   }
   // Twitch won't start until someone clicks its player, and the space-page screen can't be clicked
   // (it's a picture of a page nobody can reach), so Twitch gets a BS Browser screen, as on clients
@@ -711,7 +727,9 @@ var Core = class {
   // whose Texture is "Fire-V-Player" (the Unity menu Fire-V-Player > Second Screen makes one).
   // Their material follows whichever texture the screen draws: the space
   // page's, or the BS Browser's, whose reference is only known once it exists. The world's video
-  // player (files) has no texture to share, so they go black while it plays.
+  // player (files) has no texture to share, so they go black while it plays. (The Unity video kit's
+  // walls and screens still show it: the player is made under "Fire-V-Player World Video", see
+  // native-video.js.)
 
   // The texture reference the screen draws now, or null when there isn't one to share.
   secondScreenTexture() {
@@ -846,6 +864,18 @@ var Core = class {
     return Math.max(SCREEN_MIN_RESOLUTION, Math.min(SCREEN_MAX_RESOLUTION, w));
   }
   defaultResolution() { return this.clampResolution(this.params.resolution) || 1600; }
+  // A standalone headset (Quest, Pico) or phone: its browser says Android (or Quest, Pico, Mobile).
+  isStandaloneDevice() {
+    try { return /Android|Quest|OculusBrowser|Pico|Mobile/i.test(navigator.userAgent || ''); } catch (e) { return false; }
+  }
+  // The highest resolution a viewer can pick for themselves on this device (the snippet's own
+  // `resolution` still goes up to SCREEN_MAX_RESOLUTION for everyone).
+  viewerMaxResolution() { return this.isStandaloneDevice() ? SCREEN_STANDALONE_MAX_RESOLUTION : SCREEN_MAX_RESOLUTION; }
+  // The panel's choices on this device, without the snippet's own (that's the "default" step).
+  screenResolutionChoices() {
+    const max = this.viewerMaxResolution();
+    return SCREEN_RESOLUTIONS.filter(w => w <= max && w !== this.defaultResolution());
+  }
   screenResolution() { return this.viewerResolution || this.defaultResolution(); }
   screenPageSize() {
     const w = this.screenResolution();
@@ -860,13 +890,14 @@ var Core = class {
   loadResolutionPref() {
     try {
       const saved = this.clampResolution(localStorage.getItem(RESOLUTION_PREF_KEY));
-      if (saved) this.viewerResolution = saved;
+      if (saved) this.viewerResolution = Math.min(saved, this.viewerMaxResolution());
     } catch (e) {}
     return this.screenResolution();
   }
   // null goes back to the snippet's resolution.
   setScreenResolution(width) {
-    const w = this.clampResolution(width);
+    const picked = this.clampResolution(width);
+    const w = picked && Math.min(picked, this.viewerMaxResolution());
     this.viewerResolution = w && w !== this.defaultResolution() ? w : null;
     try {
       if (this.viewerResolution) localStorage.setItem(RESOLUTION_PREF_KEY, String(this.viewerResolution));
@@ -1267,7 +1298,9 @@ var Core = class {
       + (this.params.playlists ? `&playlists=${encodeURIComponent(this.params.playlists)}` : "");
     // Pass the mode as a URL parameter so the UI page knows its context.
     const proto = this.getProtocol();
-    return `${proto}://${this.hostUrl}/${mode}/?instance=${encodeURIComponent(this.params.instance)}${playlistParam}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}&mode=${mode}`;
+    // The room's old code too, so the old room is copied even when this page joins first.
+    const legacy = this.params['legacy-instance'] ? `&legacy-instance=${encodeURIComponent(this.params['legacy-instance'])}` : '';
+    return `${proto}://${this.hostUrl}/${mode}/?instance=${encodeURIComponent(this.params.instance)}${legacy}${playlistParam}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}&mode=${mode}`;
   }
 
   // Opens the 2D playlist page in the client's menu browser.
@@ -2067,7 +2100,16 @@ var Core = class {
     // The world video player's size for files (native-video.js); empty matches the browser.
     this.setOrDefault("native-screen-size", '');
     this.setOrDefault("one-for-each-instance", "false");
-    this.setOrDefault("instance", location.href);
+    // The room. Pages the player opens get the finished room in their address (?instance=). Only
+    // those pages (on the player's own server) take it from there: a space's own address can have
+    // ?instance= too (a private copy of the space), and that's already part of the room.
+    const ownPage = !!this.hostUrl && location.host === this.hostUrl;
+    const roomFromAddress = ownPage && !this.currentScript.getAttribute('instance') && this.urlParams.has('instance');
+    if (ownPage) this.setOrDefault("instance", "");
+    else this.params.instance = this.currentScript.getAttribute('instance') || '';
+    if (!roomFromAddress) this.setRoom(this.params.instance);
+    // A page the player opens gets the room's old code too, so whichever page joins first copies it.
+    else this.params['legacy-instance'] = this.urlParams.get('legacy-instance') || '';
     this.setOrDefault("playlist", "");
     this.setOrDefault("volume", '40');
     this.setOrDefault("mute", 'false');
@@ -2133,7 +2175,33 @@ var Core = class {
     this.allowUntrusted = String(this.params["untrusted-links"]).toLowerCase() === 'true';
     if(this.params["one-for-each-instance"] === "true" && window.user && window.user.instance) {
         this.params.instance += window.user.instance;
+        // The old room had the same ending (it was the code and this), so the server can match it.
+        if (this.params['legacy-instance']) this.params['legacy-instance'] += window.user.instance;
     }
+  }
+  /**
+   * The room (instance) for this space, from the world's room code:
+   * - no code: the space's address, as before;
+   * - a code: the space's address and the code, so spaces that happen to pick the same code
+   *   don't share a playlist;
+   * - "shared:<code>": the code alone, the same room in every world that uses it (how every code
+   *   worked before), for linking worlds on purpose.
+   * Unity play mode has the same localhost address for every creator, so there the snippet's own
+   * id (BSSnippet's per-placement id) is added too, giving each project its own room.
+   * `legacy-instance` is the room this code used before, which the server copies a saved
+   * playlist from the first time the new room is used.
+   * @param {string} code - The world's room code (`room` on the snippet, `instance` on the script tag).
+   */
+  setRoom(code) {
+    code = String(code || '').trim();
+    let room = location.href, legacy = '';
+    if (/^shared:/i.test(code)) room = code.slice(7).trim() || location.href;
+    else if (code) { room = `${location.href} room:${code}`; legacy = code; }
+    const local = /^(localhost|127\.0\.0\.1|\[::1\])$/i.test(location.hostname);
+    const placement = local && this.currentScript.getAttribute('placement-id');
+    if (placement) { room += ` snippet:${placement}`; legacy = ''; }
+    this.params.instance = room;
+    this.params['legacy-instance'] = legacy;
   }
   setOrDefault(attr, defaultValue) {
     const value = this.currentScript.getAttribute(attr);
@@ -2524,7 +2592,7 @@ var Core = class {
     if (single && single.type !== 'archive') {
       const names = { youtube: 'YouTube video', twitch: single.channel ? `Twitch: ${single.channel}` : 'Twitch video', twitchclip: 'Twitch clip',
         vimeo: 'Vimeo video', vdoninja: 'VDO.Ninja stream', hls: 'Stream', mpegts: single.live ? 'Live stream' : 'Video', file: 'Video file',
-        tubi: single.kind === 'series' ? 'Tubi series' : 'Tubi video', nasa: 'NASA+ video' };
+        tubi: single.kind === 'series' ? 'Tubi series' : 'Tubi video', nasa: 'NASA+ video', eso: 'ESO video' };
       return names[single.type] || 'Video';
     }
     try {
@@ -2534,6 +2602,8 @@ var Core = class {
       if (/archive\.org$/i.test(u.hostname)) return `archive.org: ${u.pathname.split('/').filter(Boolean)[1] || 'item'}`;
       if (/tubitv\.com$/i.test(u.hostname)) return `Tubi: ${(u.pathname.split('/').filter(Boolean)[1] || 'category').replace(/_/g, ' ')}`;
       if (/plus\.nasa\.gov$/i.test(u.hostname)) return 'NASA+ series';
+      if (/(^|\.)eso\.org$/i.test(u.hostname)) return 'ESO videos';
+      if (/(^|\.)esahubble\.org$/i.test(u.hostname)) return 'ESA/Hubble videos';
       let name = u.pathname.split('/').filter(Boolean).pop() || u.hostname;
       try { name = decodeURIComponent(name); } catch (e) {}
       return name.replace(/\.(txt|m3u)$/i, '') || u.hostname;

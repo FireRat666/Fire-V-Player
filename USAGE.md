@@ -14,7 +14,7 @@ In a SideQuest / Altspace Creator SDK world, add the player as a snippet. Its sl
 4. Type `fire-v-player` as the slug, then refresh / load it. The component downloads the snippet and writes it into your world's `Assets/WebRoot/index.html`.
 5. The player's settings now show in the Inspector. Change them there, or drag the handles in the Scene view to place the screen, buttons and playlist panel. See [Settings](#sidequest--altspace-creator-sdk-snippet) for what each one does.
 
-**Live preview (optional):** the SDK's outlines follow a setting's position, but not its scale or rotation. For a preview that updates as you change anything, copy [`unity/Editor/FireVPlayerSnippetPreview.cs`](unity/Editor/FireVPlayerSnippetPreview.cs) into an `Editor` folder in your project (e.g. `Assets/Editor/`). With the snippet's GameObject selected, it draws the screen, buttons and playlist panel in orange, and karaoke's Singers button in pink, where the player will put them. In karaoke it also gives the Singers button a drag handle, which the SDK doesn't.
+**Live preview (optional):** the SDK's outlines follow a setting's position, but not its scale or rotation. For a preview that updates as you change anything, copy [`unity/Editor/FireVPlayerSnippetPreview.cs`](unity/Editor/FireVPlayerSnippetPreview.cs) into an `Editor` folder in your project (e.g. `Assets/Editor/`). With the snippet's GameObject selected, it draws the screen, buttons and playlist panel in orange, and karaoke's Singers button in pink, where the player will put them. In karaoke it also gives the Singers button a drag handle, which the SDK doesn't. It also makes **Undo and Redo work for snippet settings**: the SDK leaves them out of Undo, so Ctrl+Z after changing a setting or dragging a gizmo undid something else instead. A drag, or a quick run of typing in one field, is one Undo step. This works for every snippet in the world, not only Fire-V-Player.
 
 #### Second screens
 
@@ -23,7 +23,7 @@ To show the video on more surfaces, give any object a **BS Material** and name t
 In the world, the player shows whatever its own screen draws on it:
 - **YouTube and most links:** the space page.
 - **Twitch:** the player's own browser.
-- **Video files on the world's video player:** there's no picture to share, so second screens go black.
+- **Video files on the world's video player:** there's no picture the page can share, so second screens go black. The player makes the world's video player under the scene's `Fire-V-Player World Video` object when it has one, so a Unity graph that knows that object can share its picture.
 
 While the player loads, second screens show a "Fire-V-Player loading" picture. Before the player starts, Unity draws a Texture of `Fire-V-Player` as plain white, so for a screen marked by its name, put the picture's link in **Texture** instead to show it from the moment the world loads: `https://vidya.firer.at/assets/SecondScreenLoading.png` (or the same path on your own server).
 

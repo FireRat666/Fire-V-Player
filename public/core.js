@@ -711,7 +711,9 @@ var Core = class {
   // whose Texture is "Fire-V-Player" (the Unity menu Fire-V-Player > Second Screen makes one).
   // Their material follows whichever texture the screen draws: the space
   // page's, or the BS Browser's, whose reference is only known once it exists. The world's video
-  // player (files) has no texture to share, so they go black while it plays.
+  // player (files) has no texture to share, so they go black while it plays. (The Unity video kit's
+  // walls and screens still show it: the player is made under "Fire-V-Player World Video", see
+  // native-video.js.)
 
   // The texture reference the screen draws now, or null when there isn't one to share.
   secondScreenTexture() {

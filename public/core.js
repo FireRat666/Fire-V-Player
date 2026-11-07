@@ -164,7 +164,7 @@ var Core = class {
       document.body.appendChild(iframe);
 
       const proto = this.getProtocol();
-      const playlistUrl = `${proto}://${this.hostUrl}/playlist/?instance=${encodeURIComponent(this.params.instance)}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}`;
+      const playlistUrl = `${proto}://${this.hostUrl}/playlist/?instance=${encodeURIComponent(this.params.instance)}&legacy-instance=${encodeURIComponent(this.params['legacy-instance'] || '')}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}`;
       this.showToast(`Player is in 2D mode. See console for playlist URL.`, 5000);
       console.log(`Player is in 2D mode. Open the playlist controls here: ${playlistUrl}`);
       return;

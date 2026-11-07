@@ -129,7 +129,12 @@ async function resolveMediaLink(link) {
 
   // An ESO or ESA/Hubble video page becomes its .mp4 on the site's own server, and a file there gets
   // the video's title.
-  if (media.type === 'eso' || (media.type === 'file' && media.eso)) return eso.resolveLink(link);
+  if (media.type === 'eso') return eso.resolveLink(link);
+  if (media.type === 'file' && media.eso) {
+    try {
+      return await eso.resolveLink(link);
+    } catch (e) { /* played as a plain file below */ }
+  }
 
   // Tubi and NASA+ pages keep their page link; the player asks for the stream (/api/stream).
   if (media.type === 'tubi' || media.type === 'nasa') return streaming.resolveLink(link);

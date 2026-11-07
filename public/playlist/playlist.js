@@ -63,7 +63,9 @@ var Playlist = class {
     await this.core.init();
     await this.core.setupWebsocket("playlist", d => this.parseMessage(d), () => {
       // The in-world player sets the room's mode (it can change in world), so this page doesn't.
-      this.core.sendMessage({path: "instance", data: this.core.params.instance, u: window.user});
+      // The room's old code as well, as the player page sends: this page can join first.
+      this.core.sendMessage({path: "instance", data: this.core.params.instance, u: window.user,
+        legacy: this.core.params['legacy-instance'] || undefined});
     }, ()=>{
         this.core.showToast("Reconnecting...");
     });

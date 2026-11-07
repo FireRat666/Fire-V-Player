@@ -1,8 +1,9 @@
 #PLAYLIST:Fire-V-Player Showcase videos
 # Free videos picked to show off each kind of screen, in the order of the showcase space's rooms.
-# Each title starts with where it looks best and, for 3D, the panel setting to pick. Video files
-# need untrusted-links="true". In a world they play on the world's video player (H.264 MP4); a file it
-# can't start (some 3840x3840 ones on some graphics cards) moves to the browser screen.
+# Each title starts with where it looks best and, for 3D, the panel setting to pick. YouTube, ESO and
+# Internet Archive links play with untrusted-links off; the NASA files, the Google Drive files and the
+# HLS stream need untrusted-links="true". With it on, files play on the world's video player (H.264
+# MP4); a file it can't start (some 3840x3840 ones on some graphics cards) moves to the browser screen.
 # Credits are in each title; check each source's page before reusing a video anywhere else.
 
 # ---- Planetarium (dome fisheye). The Planetarium's dome starts on Fill, which is right for these.
@@ -24,16 +25,17 @@ https://cdn.eso.org/videos/dome_preview/waitingfaraway.mp4 [Planetarium] Waiting
 https://cdn.eso.org/videos/dome_preview/cycle_ericfreeman.mp4 [Planetarium] Cycle, 7 min (Eric Freeman, via ESO)
 https://cdn.eso.org/videos/dome_preview/illustris.mp4 [Planetarium] Illustris: the Universe's evolution, 2 min (The Illustris Project, Dylan Nelson, via ESO)
 
-# Sharper but shorter: NASA Scientific Visualization Studio (svs.gsfc.nasa.gov) dome masters, public domain.
+# Sharper but shorter: dome masters from NASA's Scientific Visualization Studio (svs.gsfc.nasa.gov).
 https://svs.gsfc.nasa.gov/vis/a000000/a005200/a005214/multiField_11-30-2023a_magnetosphere_anim_dome4k_2048p30_sunFix.mp4 [Planetarium] A geomagnetic storm, 2048x2048, 2 min (NASA/SVS)
 https://svs.gsfc.nasa.gov/vis/a000000/a005500/a005514/marsMagnetosphere_domePickups_10-30-2025a_jmag_normal_flightA_dome_ZeroDegree_2048p30.mp4 [Planetarium] A solar storm at Mars, 2048x2048, 1 min (NASA/SVS)
 https://svs.gsfc.nasa.gov/vis/a000000/a005300/a005333/dyamondPointCloud_11-22-2023b_dyamond_co2_anim_sphere_zoom_dome_2048p30_h264.mp4 [Planetarium] Carbon dioxide round the Earth, 2048x2048, 1 min (NASA/SVS)
 https://svs.gsfc.nasa.gov/vis/a000000/a003800/a003879/dome_show_cme_earth_with_circ_1536x1536.mp4 [Planetarium] Winds and ocean currents, from Dynamic Earth, 3 min (NASA/SVS)
 https://svs.gsfc.nasa.gov/vis/a000000/a003800/a003813/domeSeaIce_Lg.mp4 [Planetarium] Arctic and Antarctic sea ice, from Dynamic Earth, 2 min (NASA/SVS)
 
-# ---- 360 Sphere (360 equirectangular). Public domain from NASA: 4K from its Scientific Visualization
-# Studio (svs.gsfc.nasa.gov), the rest from its image and video library (images.nasa.gov). "Heavy" ones stream
-# at 60 to 80 Mbps, so they need a fast connection.
+# ---- 360 Sphere (360 equirectangular). From NASA: 4K from its Scientific Visualization Studio
+# (svs.gsfc.nasa.gov), the rest from its image and video library (images.nasa.gov). NASA's own material
+# is usually free to use, but check each video's page for its rights, its music included. "Heavy" ones
+# stream at 60 to 80 Mbps, so they need a fast connection.
 https://svs.gsfc.nasa.gov/vis/a010000/a013200/a013251/13251_Hubble_Careers_360.mp4 [360 Sphere] Inside the Hubble team, 4K, 3 min (NASA/SVS)
 https://svs.gsfc.nasa.gov/vis/a010000/a013000/a013043/SMBHB_Gaia_Warp_360_4096x2048_30.mp4 [360 Sphere] Two black holes warp the Milky Way, 4K, 2 min (NASA/SVS)
 https://svs.gsfc.nasa.gov/vis/a010000/a013000/a013043/SMBHB_WISE_Warp_360_4096x2048_30.mp4 [360 Sphere] Two black holes warp the infrared sky, 4K, 2 min (NASA/SVS)
@@ -44,7 +46,7 @@ https://images-assets.nasa.gov/video/GSFC_20181004_GPM_m13079_Hurricane_Maria360
 https://svs.gsfc.nasa.gov/vis/a000000/a004200/a004201/tdrs_access_4k_360_60fps_09_2000p60_injected.mp4 [360 Sphere] NASA's relay satellites at work, 4K 60fps, 2 min, no sound (NASA/SVS)
 https://svs.gsfc.nasa.gov/vis/a000000/a004400/a004478/REMA_comp_360_02_shaded_2000p60_injected.mp4 [360 Sphere] Flying over Antarctica, 4K 60fps, 3 min, no sound (NASA/SVS)
 https://svs.gsfc.nasa.gov/vis/a000000/a005400/a005481/VIIRS_fires_4096x204830p_equirectangular.mp4 [360 Sphere] The world's fires from space, 4K, 1 min, no sound (NASA/SVS)
-https://svs.gsfc.nasa.gov/vis/a000000/a005300/a005377/hurricane_tracks_by_year_equirectangular_caribbean_2048p30.mp4 [360 Sphere] Every hurricane since 1900, 4K, 1 min, no sound (NASA/SVS)
+https://svs.gsfc.nasa.gov/vis/a000000/a005300/a005377/hurricane_tracks_by_year_equirectangular_caribbean_2048p30.mp4 [360 Sphere] Atlantic hurricanes through the Caribbean, 1890 to 2023, 4K, 1 min, no sound (NASA/SVS)
 https://svs.gsfc.nasa.gov/vis/a000000/a005600/a005603/GISTEMP_2025_equirectangular_2048p.mp4 [360 Sphere] Global temperatures 1880 to 2025, 4K, 1 min, no sound (NASA/SVS)
 https://images-assets.nasa.gov/video/GSFC_20201016_M13733_BennuIn360/GSFC_20201016_M13733_BennuIn360~orig.mp4 [360 Sphere] Asteroid Bennu, 4 min (NASA)
 https://images-assets.nasa.gov/video/JPL-20240717-MSLf-0001-Curiosity_Explores_Gediz_Vallis_360_View_8k/JPL-20240717-MSLf-0001-Curiosity_Explores_Gediz_Vallis_360_View_8k~large.mp4 [360 Sphere] Curiosity on Mars: Gediz Vallis, 1080p, 2 min (NASA/JPL-Caltech)

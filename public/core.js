@@ -1283,7 +1283,9 @@ var Core = class {
       + (this.params.playlists ? `&playlists=${encodeURIComponent(this.params.playlists)}` : "");
     // Pass the mode as a URL parameter so the UI page knows its context.
     const proto = this.getProtocol();
-    return `${proto}://${this.hostUrl}/${mode}/?instance=${encodeURIComponent(this.params.instance)}${playlistParam}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}&mode=${mode}`;
+    // The room's old code too, so the old room is copied even when this page joins first.
+    const legacy = this.params['legacy-instance'] ? `&legacy-instance=${encodeURIComponent(this.params['legacy-instance'])}` : '';
+    return `${proto}://${this.hostUrl}/${mode}/?instance=${encodeURIComponent(this.params.instance)}${legacy}${playlistParam}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}&mode=${mode}`;
   }
 
   // Opens the 2D playlist page in the client's menu browser.
@@ -2154,6 +2156,8 @@ var Core = class {
     this.allowUntrusted = String(this.params["untrusted-links"]).toLowerCase() === 'true';
     if(this.params["one-for-each-instance"] === "true" && window.user && window.user.instance) {
         this.params.instance += window.user.instance;
+        // The old room had the same ending (it was the code and this), so the server can match it.
+        if (this.params['legacy-instance']) this.params['legacy-instance'] += window.user.instance;
     }
   }
   /**

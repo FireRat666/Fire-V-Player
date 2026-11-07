@@ -194,7 +194,9 @@ var FireNativeScreen = (() => {
       }
       // Not loaded in time: the browser tries it instead (it plays more formats). WebM gets less
       // time, as Unity's player takes only VP8 WebM on PC, and most WebM now is VP9.
-      const webm = /\.webm(\?|#|$)/i.test(String(this.link));
+      // The path only, as core.js's wantsNativeScreen reads it, so a query can't make a link look like WebM.
+      const u = typeof MediaSources !== 'undefined' ? MediaSources.parseUrl(String(this.link)) : null;
+      const webm = !!u && /\.webm$/i.test(u.pathname);
       const timeout = webm ? WEBM_PREPARE_TIMEOUT_MS : PREPARE_TIMEOUT_MS;
       if (!this.prepared && now - this.startedAt > timeout && !this.warned) {
         this.warned = true;

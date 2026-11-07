@@ -2100,9 +2100,13 @@ var Core = class {
     // The world video player's size for files (native-video.js); empty matches the browser.
     this.setOrDefault("native-screen-size", '');
     this.setOrDefault("one-for-each-instance", "false");
-    // The room. Pages the player opens get the finished room in their address (?instance=).
-    const roomFromAddress = !this.currentScript.getAttribute('instance') && this.urlParams.has('instance');
-    this.setOrDefault("instance", "");
+    // The room. Pages the player opens get the finished room in their address (?instance=). Only
+    // those pages (on the player's own server) take it from there: a space's own address can have
+    // ?instance= too (a private copy of the space), and that's already part of the room.
+    const ownPage = !!this.hostUrl && location.host === this.hostUrl;
+    const roomFromAddress = ownPage && !this.currentScript.getAttribute('instance') && this.urlParams.has('instance');
+    if (ownPage) this.setOrDefault("instance", "");
+    else this.params.instance = this.currentScript.getAttribute('instance') || '';
     if (!roomFromAddress) this.setRoom(this.params.instance);
     // A page the player opens gets the room's old code too, so whichever page joins first copies it.
     else this.params['legacy-instance'] = this.urlParams.get('legacy-instance') || '';

@@ -17,8 +17,10 @@ var SCREEN_PIXELS_PER_M = 1300;
 var SCREEN_WIDTH_M = 1;
 var SCREEN_MIN_RESOLUTION = 640;
 var SCREEN_MAX_RESOLUTION = 3840;
-// The choices in the panel's More view, as page widths.
-var SCREEN_RESOLUTIONS = [1280, 1600, 1920];
+// The choices in the panel's More view, as page widths: up to 2K (1440p) on standalone headsets
+// (Quest), whose browsers struggle with more, and 4K (2160p) too on PC and PC VR.
+var SCREEN_RESOLUTIONS = [1280, 1600, 1920, 2560, 3840];
+var SCREEN_STANDALONE_MAX_RESOLUTION = 2560;
 var RESOLUTION_PREF_KEY = 'fire-v-player-resolution';
 // Where each viewer keeps their hand controls (see HAND_PLACES), remembered on their device.
 var HAND_PLACE_PREF_KEY = 'fire-v-player-hand-place';
@@ -862,6 +864,18 @@ var Core = class {
     return Math.max(SCREEN_MIN_RESOLUTION, Math.min(SCREEN_MAX_RESOLUTION, w));
   }
   defaultResolution() { return this.clampResolution(this.params.resolution) || 1600; }
+  // A standalone headset (Quest, Pico) or phone: its browser says Android (or Quest, Pico, Mobile).
+  isStandaloneDevice() {
+    try { return /Android|Quest|OculusBrowser|Pico|Mobile/i.test(navigator.userAgent || ''); } catch (e) { return false; }
+  }
+  // The highest resolution a viewer can pick for themselves on this device (the snippet's own
+  // `resolution` still goes up to SCREEN_MAX_RESOLUTION for everyone).
+  viewerMaxResolution() { return this.isStandaloneDevice() ? SCREEN_STANDALONE_MAX_RESOLUTION : SCREEN_MAX_RESOLUTION; }
+  // The panel's choices on this device, without the snippet's own (that's the "default" step).
+  screenResolutionChoices() {
+    const max = this.viewerMaxResolution();
+    return SCREEN_RESOLUTIONS.filter(w => w <= max && w !== this.defaultResolution());
+  }
   screenResolution() { return this.viewerResolution || this.defaultResolution(); }
   screenPageSize() {
     const w = this.screenResolution();
@@ -876,13 +890,14 @@ var Core = class {
   loadResolutionPref() {
     try {
       const saved = this.clampResolution(localStorage.getItem(RESOLUTION_PREF_KEY));
-      if (saved) this.viewerResolution = saved;
+      if (saved) this.viewerResolution = Math.min(saved, this.viewerMaxResolution());
     } catch (e) {}
     return this.screenResolution();
   }
   // null goes back to the snippet's resolution.
   setScreenResolution(width) {
-    const w = this.clampResolution(width);
+    const picked = this.clampResolution(width);
+    const w = picked && Math.min(picked, this.viewerMaxResolution());
     this.viewerResolution = w && w !== this.defaultResolution() ? w : null;
     try {
       if (this.viewerResolution) localStorage.setItem(RESOLUTION_PREF_KEY, String(this.viewerResolution));

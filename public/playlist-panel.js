@@ -851,9 +851,9 @@ var FirePlaylistPanel = class {
       this.core.setCaptions(this.core.captions === false);
       this.render();
     });
-    // Steps through the screen resolutions (page widths), then back to the snippet's.
+    // Steps through the screen resolutions (page widths; 4K on PC only), then back to the snippet's.
     this.resolutionBtn = await this.button(mineRow, 'Resolution', () => {
-      const choices = SCREEN_RESOLUTIONS.filter(w => w !== this.core.defaultResolution());
+      const choices = this.core.screenResolutionChoices();
       const now = this.core.viewerResolution;
       const next = now ? choices[choices.indexOf(now) + 1] : choices[0];
       this.core.setScreenResolution(next || null);

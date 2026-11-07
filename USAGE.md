@@ -151,7 +151,7 @@ In these worlds the Playlist button opens an **in-world panel** beside the scree
 
 - host controls: lock, take over, voting, clear, load the default playlist
 - seek to a time (host)
-- your player only: **Reload Video**, skip back/forward, Auto Sync, Captions (closed captions on or off for you, remembered on your device) and Resolution (steps your screen's page through 1280 x 720, 1600 x 900 and 1920 x 1080, then back to the snippet's `resolution`; remembered on your device), and, when the snippet has `hand-controls`, **Hand Controls** (moves your hand buttons, see [Hand controls](#hand-controls))
+- your player only: **Reload Video**, skip back/forward, Auto Sync, Captions (closed captions on or off for you, remembered on your device) and Resolution (steps your screen's page through 1280 x 720, 1600 x 900, 1920 x 1080 and 2560 x 1440 (2K), and on PC and PC VR also 3840 x 2160 (4K), then back to the snippet's `resolution`; remembered on your device. Standalone headsets such as Quest stop at 2K, as their browsers struggle with more. Higher is sharper, mostly for 4K and 360 videos, but costs more to draw), and, when the snippet has `hand-controls`, **Hand Controls** (moves your hand buttons, see [Hand controls](#hand-controls))
 - add by link: a video (YouTube, Twitch, Vimeo or a direct link, see [Links from other sites](#links-from-other-sites)), or a YouTube playlist or list of links (see [Playlists of links](#playlists-of-links)): **Add** adds a video, and asks what to do with a playlist (see [Saved lists](#saved-lists))
 - space admins only: **Admin Take Over** (see [Admin Take Over](#admin-take-over)) and the mode switch between playlist and karaoke (see [Switching mode in world](#switching-mode-in-world))
 

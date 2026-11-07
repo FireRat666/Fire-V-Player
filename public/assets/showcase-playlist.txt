@@ -1,0 +1,91 @@
+#PLAYLIST:Fire-V-Player Showcase videos
+# Free videos picked to show off each kind of screen, in the order of the showcase space's rooms.
+# Each title starts with where it looks best and, for 3D, the panel setting to pick. Video files
+# need untrusted-links="true". In a world they play on the world's video player (H.264 MP4); a file it
+# can't start (some 3840x3840 ones on some graphics cards) moves to the browser screen.
+# Credits are in each title; check each source's page before reusing a video anywhere else.
+
+# ---- Planetarium (dome fisheye). The Planetarium's dome starts on Fill, which is right for these.
+# For hundreds more, add ESO's fulldome category as a list, or search with the ESO Fulldome search source:
+# https://www.eso.org/public/videos/archive/category/fulldome/
+# Full planetarium shows and shorts from ESO's fulldome archive (eso.org/public/videos/archive/category/fulldome/),
+# 1024x1024 previews of the dome masters.
+https://cdn.eso.org/videos/dome_preview/europe-to-the-stars.mp4 [Planetarium] Europe to the Stars, 31 min (ESO)
+https://cdn.eso.org/videos/dome_preview/eso-jcmw.mp4 [Planetarium] Journey to the Centre of the Milky Way, 7 min (ESO)
+https://cdn.eso.org/videos/dome_preview/eso-fd-10min-2025.mp4 [Planetarium] Galaxies, nebulae and more, 9 min, no sound (ESO)
+https://cdn.eso.org/videos/dome_preview/dark.mp4 [Planetarium] Dark, the fulldome movie, 20 min (Peter Morse and Paul Bourke, via ESO)
+https://cdn.eso.org/videos/dome_preview/potu.mp4 [Planetarium] Phantom of the Universe, 27 min (Phantom of the Universe collaboration, via ESO)
+https://cdn.eso.org/videos/dome_preview/tspog.mp4 [Planetarium] Two Small Pieces of Glass, 23 min (Imiloa Astronomy Center, Interstellar Studios, Carnegie Science Center, via ESO)
+https://cdn.eso.org/videos/dome_preview/seeing_show.mp4 [Planetarium] Seeing! A Photon's Journey, 27 min (Koenig Films and Mirage 3D, via ESO)
+https://cdn.eso.org/videos/dome_preview/einsteingp.mp4 [Planetarium] Einstein's Gravity Playlist, 23 min (Montana State University, via ESO)
+https://cdn.eso.org/videos/dome_preview/fronteras.mp4 [Planetarium] Fronteras (Borders), 29 min (Medellin Planetarium, via ESO)
+https://cdn.eso.org/videos/dome_preview/tour_universe.mp4 [Planetarium] Tour of the Universe, 4 min (California Academy of Sciences, via ESO)
+https://cdn.eso.org/videos/dome_preview/waitingfaraway.mp4 [Planetarium] Waiting Far Away, 11 min (Charles Hayden Planetarium, Museum of Science Boston, via ESO)
+https://cdn.eso.org/videos/dome_preview/cycle_ericfreeman.mp4 [Planetarium] Cycle, 7 min (Eric Freeman, via ESO)
+https://cdn.eso.org/videos/dome_preview/illustris.mp4 [Planetarium] Illustris: the Universe's evolution, 2 min (The Illustris Project, Dylan Nelson, via ESO)
+
+# Sharper but shorter: NASA Scientific Visualization Studio (svs.gsfc.nasa.gov) dome masters, public domain.
+https://svs.gsfc.nasa.gov/vis/a000000/a005200/a005214/multiField_11-30-2023a_magnetosphere_anim_dome4k_2048p30_sunFix.mp4 [Planetarium] A geomagnetic storm, 2048x2048, 2 min (NASA/SVS)
+https://svs.gsfc.nasa.gov/vis/a000000/a005500/a005514/marsMagnetosphere_domePickups_10-30-2025a_jmag_normal_flightA_dome_ZeroDegree_2048p30.mp4 [Planetarium] A solar storm at Mars, 2048x2048, 1 min (NASA/SVS)
+https://svs.gsfc.nasa.gov/vis/a000000/a005300/a005333/dyamondPointCloud_11-22-2023b_dyamond_co2_anim_sphere_zoom_dome_2048p30_h264.mp4 [Planetarium] Carbon dioxide round the Earth, 2048x2048, 1 min (NASA/SVS)
+https://svs.gsfc.nasa.gov/vis/a000000/a003800/a003879/dome_show_cme_earth_with_circ_1536x1536.mp4 [Planetarium] Winds and ocean currents, from Dynamic Earth, 3 min (NASA/SVS)
+https://svs.gsfc.nasa.gov/vis/a000000/a003800/a003813/domeSeaIce_Lg.mp4 [Planetarium] Arctic and Antarctic sea ice, from Dynamic Earth, 2 min (NASA/SVS)
+
+# ---- 360 Sphere (360 equirectangular). Public domain from NASA: 4K from its Scientific Visualization
+# Studio (svs.gsfc.nasa.gov), the rest from its image and video library (images.nasa.gov). "Heavy" ones stream
+# at 60 to 80 Mbps, so they need a fast connection.
+https://svs.gsfc.nasa.gov/vis/a010000/a013200/a013251/13251_Hubble_Careers_360.mp4 [360 Sphere] Inside the Hubble team, 4K, 3 min (NASA/SVS)
+https://svs.gsfc.nasa.gov/vis/a010000/a013000/a013043/SMBHB_Gaia_Warp_360_4096x2048_30.mp4 [360 Sphere] Two black holes warp the Milky Way, 4K, 2 min (NASA/SVS)
+https://svs.gsfc.nasa.gov/vis/a010000/a013000/a013043/SMBHB_WISE_Warp_360_4096x2048_30.mp4 [360 Sphere] Two black holes warp the infrared sky, 4K, 2 min (NASA/SVS)
+https://svs.gsfc.nasa.gov/vis/a010000/a014500/a014576/14576_BHFlyBy_360_FINAL_4k.mp4 [360 Sphere] Flying past a black hole, 4K, heavy, 1 min (NASA/SVS)
+https://svs.gsfc.nasa.gov/vis/a010000/a014500/a014576/14576_BHPlunge_360_FINAL_4k.mp4 [360 Sphere] Falling into a black hole, 4K, heavy, 1 min (NASA/SVS)
+https://svs.gsfc.nasa.gov/vis/a000000/a004600/a004685/maria_360_4k_withCredits.mp4 [360 Sphere] Inside Hurricane Maria, 4K, heavy, 5 min (NASA/SVS)
+https://images-assets.nasa.gov/video/GSFC_20181004_GPM_m13079_Hurricane_Maria360/GSFC_20181004_GPM_m13079_Hurricane_Maria360~large.mp4 [360 Sphere] Inside Hurricane Maria, 1080p, 5 min (NASA)
+https://svs.gsfc.nasa.gov/vis/a000000/a004200/a004201/tdrs_access_4k_360_60fps_09_2000p60_injected.mp4 [360 Sphere] NASA's relay satellites at work, 4K 60fps, 2 min, no sound (NASA/SVS)
+https://svs.gsfc.nasa.gov/vis/a000000/a004400/a004478/REMA_comp_360_02_shaded_2000p60_injected.mp4 [360 Sphere] Flying over Antarctica, 4K 60fps, 3 min, no sound (NASA/SVS)
+https://svs.gsfc.nasa.gov/vis/a000000/a005400/a005481/VIIRS_fires_4096x204830p_equirectangular.mp4 [360 Sphere] The world's fires from space, 4K, 1 min, no sound (NASA/SVS)
+https://svs.gsfc.nasa.gov/vis/a000000/a005300/a005377/hurricane_tracks_by_year_equirectangular_caribbean_2048p30.mp4 [360 Sphere] Every hurricane since 1900, 4K, 1 min, no sound (NASA/SVS)
+https://svs.gsfc.nasa.gov/vis/a000000/a005600/a005603/GISTEMP_2025_equirectangular_2048p.mp4 [360 Sphere] Global temperatures 1880 to 2025, 4K, 1 min, no sound (NASA/SVS)
+https://images-assets.nasa.gov/video/GSFC_20201016_M13733_BennuIn360/GSFC_20201016_M13733_BennuIn360~orig.mp4 [360 Sphere] Asteroid Bennu, 4 min (NASA)
+https://images-assets.nasa.gov/video/JPL-20240717-MSLf-0001-Curiosity_Explores_Gediz_Vallis_360_View_8k/JPL-20240717-MSLf-0001-Curiosity_Explores_Gediz_Vallis_360_View_8k~large.mp4 [360 Sphere] Curiosity on Mars: Gediz Vallis, 1080p, 2 min (NASA/JPL-Caltech)
+https://images-assets.nasa.gov/video/KSC_20210615_Core_stage_lift_360_video_timelapse/KSC_20210615_Core_stage_lift_360_video_timelapse~large.mp4 [360 Sphere] Artemis I core stage lift, time-lapse, 1080p, 3 min (NASA)
+https://images-assets.nasa.gov/video/KSC-20220808-MH-FMX02-Artemis1_Rollout_VAB_360-TIMELAPSE-WON_3311944/KSC-20220808-MH-FMX02-Artemis1_Rollout_VAB_360-TIMELAPSE-WON_3311944~large.mp4 [360 Sphere] Artemis I rollout, time-lapse, 1080p, 2 min (NASA)
+# Kandao's own camera samples (kandaovr.com's free downloads), played from their Google Drive shares.
+https://drive.google.com/file/d/1ARjpD1HNJ-NiY7litsborLalfq-ZtQrj/view [360 Sphere] The Temple of Heaven, Beijing, 4K, heavy, 2 min (Kandao)
+
+# ---- 3D Theatre (and every 3D screen). Pick the panel's 3D movie demo that matches.
+https://www.youtube.com/watch?v=ecaANeeVyJM [3D over-under] Big Buck Bunny, 4K, 11 min (Blender Foundation, CC BY)
+https://www.youtube.com/watch?v=7fk6aHmIPmM [3D side by side] Sintel, 15 min (Blender Foundation, CC BY)
+https://www.youtube.com/watch?v=OBkoJyU6124 [3D over-under] The Green Planet: Bugs World, 5 min
+https://www.youtube.com/watch?v=A1YcjP1OH-M [3D side by side] Romania, cinematic travel guide, 4K, 5 min (Real3D)
+https://www.youtube.com/watch?v=HIW-dQJYW1g [3D side by side] Yellowstone Falls, 4K, 4 min
+https://www.youtube.com/watch?v=L8fHAf187DM [3D side by side] Snorkelling Green Island Reef, 4K, 5 min
+https://www.youtube.com/watch?v=fON-otB9wG0 [3D side by side] Miniature Mega Cities, 4K, 4 min (inouek3D)
+https://drive.google.com/file/d/1GPLwFTWrg2OkQOhEnUU2hYahtUgUgaC5/view [3D side by side] Y2K Boy, 4K, heavy, 28 s (Kandao camera sample)
+https://drive.google.com/file/d/1B2qB6g8zOqoiO9Nmf3xGIX79cIqlYn_h/view [3D side by side] Boxing, 4K, heavy, 26 s (Kandao camera sample)
+https://archive.org/download/PalmyraAuto3DHSXS/Palmyra%20Auto%203D%20HSXS.mp4 [3D side by side] Palmyra, 8 min (CC BY-NC-ND)
+
+# ---- Hologram Deck (things on black: pick the Holograms demo so black turns see-through).
+https://www.youtube.com/watch?v=gBafgqB5ArU [Holograms, 3D side by side] Fireworks at Kuwana, slow motion, 5 min (inouek3D)
+https://www.youtube.com/watch?v=0ZcirU4J4YI [Holograms, 3D side by side] Fireworks over Montreal, 9 min
+https://images-assets.nasa.gov/video/GSFC_20170211_SDO_m12500_Year7/GSFC_20170211_SDO_m12500_Year7~large.mp4 [Holograms] The Sun: SDO's seventh year, 3 min (NASA/SDO)
+https://images-assets.nasa.gov/video/GSFC_20150211_SDO_m11762_5Years/GSFC_20150211_SDO_m11762_5Years~large.mp4 [Holograms] Five years of the Sun, 3 min (NASA/SDO)
+https://images-assets.nasa.gov/video/GSFC_20160426_SDO_m12224_SolarFlare_4K/GSFC_20160426_SDO_m12224_SolarFlare_4K~large.mp4 [Holograms] A solar flare, 1 min (NASA/SDO)
+https://images-assets.nasa.gov/video/GSFC_20181002_SMBH_m13043_Simulation/GSFC_20181002_SMBH_m13043_Simulation~large.mp4 [Holograms] Two supermassive black holes, 2 min (NASA)
+https://svs.gsfc.nasa.gov/vis/a010000/a013300/a013326/BH_AccretionDisk_360_4k.mp4 [Holograms] A black hole's glowing disc turning, 3840x3840, 15 s (NASA/SVS)
+https://svs.gsfc.nasa.gov/vis/a010000/a013300/a013326/BH_Accretion_Disk_Sim_360_4k.mp4 [Holograms] A black hole's disc, simulated, 3840x3840, 24 s (NASA/SVS)
+https://svs.gsfc.nasa.gov/vis/a010000/a013200/a013266/GJ357_b_360_2K_LQ.mp4 [Holograms] Planet GJ 357 b turning, 25 s (NASA/SVS)
+
+# ---- Cinema, Gallery and the Video walls party: Blender's open movies (CC BY unless noted),
+# from the Internet Archive.
+https://archive.org/download/charge-blender-open-movie-1608p/Charge%20-%20Blender%20Open%20Movie%201608p.mp4 [Cinema] Charge, 4K, 4 min (Blender Studio)
+https://archive.org/download/big-buck-bunny-2008-4k-60fps/bbb_sunflower_2160p_60fps_normal.mp4 [Cinema] Big Buck Bunny, 4K 60fps, 11 min (Blender Foundation)
+https://archive.org/download/Sintel/sintel-2048-surround.mp4 [Cinema] Sintel, 15 min (Blender Foundation)
+https://archive.org/download/CosmosLaundromatFirstCycle/Cosmos%20Laundromat%20-%20First%20Cycle%20(1080p).mp4 [Cinema] Cosmos Laundromat, 12 min (Blender Institute)
+https://archive.org/download/sprite-fright/Sprite%20Fright%20-%20Open%20Movie%20by%20Blender%20Studio-804p.mp4 [Cinema] Sprite Fright, 10 min (Blender Studio)
+https://archive.org/download/springopenmovie/springopenmovie.mp4 [Video walls party] Spring, 8 min (Blender Animation Studio)
+https://archive.org/download/agent327operationbarbershop/agent327-1080.mp4 [Video walls party] Agent 327: Operation Barbershop, 4 min (Blender Animation Studio, CC BY-ND)
+https://archive.org/download/Caminandes2GranDillama/02_gran_dillama_1080p.mp4 [Gallery] Caminandes: Gran Dillama, 2 min (Blender Foundation)
+https://archive.org/download/CaminandesLlamigos/Caminandes_%20Llamigos-1080p.mp4 [Gallery] Caminandes: Llamigos, 3 min (Blender Institute)
+https://archive.org/download/coffee-run/Coffee%20Run.mp4 [Gallery] Coffee Run, 3 min (Blender Studio, CC BY-ND)
+https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8 [Cinema] Tears of Steel, 12 min (Blender Foundation, HLS stream)

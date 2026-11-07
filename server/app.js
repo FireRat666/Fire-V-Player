@@ -13,6 +13,7 @@ const path = require('path');
 const { searchVideos, videoById } = require('./youtube/search.js');
 const archive = require('./archive.js');
 const streaming = require('./streaming.js');
+const eso = require('./eso.js');
 const media = require('./media.js');
 const MediaSources = require('../public/media-sources.js');
 const Commands = require('../public/commands.js');
@@ -416,7 +417,8 @@ class App {
           ws.i = msg.data;
           // The world's snippet may allow links from any site (untrusted-links="true").
           ws.allowUntrusted = msg.untrusted === true;
-          // The space page also names the room its code used before (core.js setRoom).
+          // The space and player pages also name the room its code used before (core.js setRoom),
+          // so the old room is copied whichever of them joins first.
           await this.createVideoPlayer(msg.data, msg.u, ws, typeof msg.legacy === 'string' ? msg.legacy : null);
           this.blacklist.seen(msg.u, msg.data);
           // Always, so a player that missed an unblock while disconnected is unfrozen.
@@ -802,9 +804,9 @@ class App {
    * Transmits `SEARCH_RESULTS` back to the requesting WebSocket client.
    *
    * The SEARCH message's data is either a plain string (a YouTube search or a link) or
-   * `{ term: string, source: 'youtube' | 'archive' | 'tubi' | 'nasa', searchId?: string|number }`;
+   * `{ term: string, source: 'youtube' | 'archive' | 'tubi' | 'nasa' | 'eso' | 'esodome', searchId?: string|number }`;
    * 'archive' searches the Internet Archive's public-domain movies and TV, 'tubi' the titles in Tubi's
-   * categories and 'nasa' NASA+ (see server/streaming.js). A pasted link is looked up whichever source
+   * categories, 'nasa' NASA+ (see server/streaming.js), and 'eso' ESO's videos and 'esodome' its fulldome ones (server/eso.js). A pasted link is looked up whichever source
    * is picked. A `searchId` comes back on the SEARCH_RESULTS reply (and on the search's ERROR), so
    * a client can tell which of its searches a reply answers. Every search gets one SEARCH_RESULTS.
    *
@@ -815,7 +817,7 @@ class App {
   async search(data, ws) {
     const isObject = data && typeof data === 'object';
     const term = String((isObject ? data.term : data) || '').trim().slice(0, 500);
-    const source = isObject && ['archive', 'tubi', 'nasa'].includes(data.source) ? data.source : 'youtube';
+    const source = isObject && ['archive', 'tubi', 'nasa', 'eso', 'esodome'].includes(data.source) ? data.source : 'youtube';
     const rawId = isObject ? data.searchId : undefined;
     const tag = (typeof rawId === 'number' && Number.isFinite(rawId)) || (typeof rawId === 'string' && rawId.length <= 64)
       ? { searchId: rawId } : undefined;
@@ -877,6 +879,17 @@ class App {
       } catch (error) {
         console.error(`Error searching ${name} for ${JSON.stringify(term)}:`, error.message);
         fail(`${name} search failed. Try again in a moment.`);
+      }
+      return;
+    }
+    if (source === 'eso' || source === 'esodome') {
+      try {
+        const videos = await eso.search(term, source === 'esodome');
+        console.log(`[SEARCH] ${source} ${JSON.stringify(term)}: ${videos.length} results in ${Date.now() - started}ms (socket type: ${ws.type || 'N/A'}).`);
+        results(videos);
+      } catch (error) {
+        console.error(`Error searching ESO for ${JSON.stringify(term)}:`, error.message);
+        fail('ESO search failed. Try again in a moment.');
       }
       return;
     }

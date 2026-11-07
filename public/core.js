@@ -307,7 +307,21 @@ var Core = class {
     // Audio files play in the browser: Unity's player on Quest doesn't play audio without video,
     // and can't play Ogg or Opus anywhere.
     const u = MediaSources.parseUrl(media.url || link);
-    return !(u && /\.(ogg|oga|opus|mp3|m4a|aac|wav|flac)$/i.test(u.pathname));
+    if (u && /\.(ogg|oga|opus|mp3|m4a|aac|wav|flac)$/i.test(u.pathname)) return false;
+    // WebM that Unity can't play (it takes VP8 only on PC) plays in the browser: files named as VP9
+    // or AV1 (Wikimedia's copies are), and Wikimedia's own WebM, which is almost always VP9.
+    if (u && /\.webm$/i.test(u.pathname) && (/[._-](vp9|av1)[._-]/i.test(u.pathname) || /(^|\.)wikimedia\.org$/i.test(u.hostname))) return false;
+    // A file the world's player couldn't start for this viewer plays in the browser too.
+    return !(this.browserFiles && this.browserFiles.has(link));
+  }
+  // The world's video player couldn't start this file (native-video.js gives up on it), so it plays
+  // in the browser for this viewer from now on, as the browser plays more formats (VP9, AV1...).
+  playFileInBrowser(link) {
+    if (!link) return;
+    (this.browserFiles = this.browserFiles || new Set()).add(link);
+    console.log(`[Core] The world's video player couldn't start ${link}, so it plays in the browser.`);
+    this.showToast("The world's video player can't play this file, so it plays in the browser instead.", 6000);
+    if (this.currentLink() === link) this.updateScreen();
   }
   // Twitch won't start until someone clicks its player, and the space-page screen can't be clicked
   // (it's a picture of a page nobody can reach), so Twitch gets a BS Browser screen, as on clients
@@ -2073,6 +2087,8 @@ var Core = class {
     const roomFromAddress = !this.currentScript.getAttribute('instance') && this.urlParams.has('instance');
     this.setOrDefault("instance", "");
     if (!roomFromAddress) this.setRoom(this.params.instance);
+    // A page the player opens gets the room's old code too, so whichever page joins first copies it.
+    else this.params['legacy-instance'] = this.urlParams.get('legacy-instance') || '';
     this.setOrDefault("playlist", "");
     this.setOrDefault("volume", '40');
     this.setOrDefault("mute", 'false');
@@ -2553,7 +2569,7 @@ var Core = class {
     if (single && single.type !== 'archive') {
       const names = { youtube: 'YouTube video', twitch: single.channel ? `Twitch: ${single.channel}` : 'Twitch video', twitchclip: 'Twitch clip',
         vimeo: 'Vimeo video', vdoninja: 'VDO.Ninja stream', hls: 'Stream', mpegts: single.live ? 'Live stream' : 'Video', file: 'Video file',
-        tubi: single.kind === 'series' ? 'Tubi series' : 'Tubi video', nasa: 'NASA+ video' };
+        tubi: single.kind === 'series' ? 'Tubi series' : 'Tubi video', nasa: 'NASA+ video', eso: 'ESO video' };
       return names[single.type] || 'Video';
     }
     try {
@@ -2563,6 +2579,8 @@ var Core = class {
       if (/archive\.org$/i.test(u.hostname)) return `archive.org: ${u.pathname.split('/').filter(Boolean)[1] || 'item'}`;
       if (/tubitv\.com$/i.test(u.hostname)) return `Tubi: ${(u.pathname.split('/').filter(Boolean)[1] || 'category').replace(/_/g, ' ')}`;
       if (/plus\.nasa\.gov$/i.test(u.hostname)) return 'NASA+ series';
+      if (/(^|\.)eso\.org$/i.test(u.hostname)) return 'ESO videos';
+      if (/(^|\.)esahubble\.org$/i.test(u.hostname)) return 'ESA/Hubble videos';
       let name = u.pathname.split('/').filter(Boolean).pop() || u.hostname;
       try { name = decodeURIComponent(name); } catch (e) {}
       return name.replace(/\.(txt|m3u)$/i, '') || u.hostname;

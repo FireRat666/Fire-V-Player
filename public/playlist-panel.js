@@ -67,7 +67,9 @@ var SEARCH_SOURCES = {
   youtube: { label: 'YouTube', color: '#c62828', status: 'Searching YouTube.' },
   archive: { label: 'Archive Films', color: '#6d4c41', status: 'Searching Internet Archive films and TV.' },
   tubi: { label: 'Tubi', color: '#5e35b1', status: 'Searching Tubi. The first search takes a few seconds.' },
-  nasa: { label: 'NASA+', color: '#0b3d91', status: 'Searching NASA+.' }
+  nasa: { label: 'NASA+', color: '#0b3d91', status: 'Searching NASA+.' },
+  eso: { label: 'ESO', color: '#00695c', status: "Searching ESO's videos." },
+  esodome: { label: 'ESO Fulldome', color: '#004d40', status: "Searching ESO's fulldome videos, for domes." }
 };
 var LIST_PREVIEWS_AT_ONCE = 3;
 // A list preview older than this is loaded again when it's next shown (the server re-reads lists
@@ -639,7 +641,7 @@ var FirePlaylistPanel = class {
     const searchHint = this.karaoke ? 'Search for a song to sing, or paste a video link' : 'Search YouTube, or paste a YouTube / Twitch / Vimeo / video link';
     this.searchField = await this.textField(this.searchRow, searchHint, v => { this.searchQuery = v; }, () => this.doSearch());
     if (!this.searchField) await this.label(this.searchRow, 'Search needs text input, which this client does not have.', { color: '#bbbbbb', flexGrow: 1 });
-    // What to search: YouTube, Internet Archive films and TV, Tubi or NASA+ (not for karaoke).
+    // What to search: YouTube, Internet Archive films and TV, Tubi, NASA+ or ESO (not for karaoke).
     // Without a text field it still picks where words sent from a phone are searched.
     if (!this.karaoke) this.sourceBtn = await this.button(this.searchRow, 'YouTube', () => this.toggleSearchSource(), { backgroundColor: '#c62828', width: '170px' });
     if (this.searchField) {
@@ -762,7 +764,7 @@ var FirePlaylistPanel = class {
       ['Vol / Mute', 'Only change what you hear, not anyone else.'],
       ['Hand controls', 'Move them in More... The orange button folds them away to one button.']
     ] : [
-      ['Search & Add', 'Search YouTube, Internet Archive, Tubi or NASA+ (the button beside the box picks), or paste a link.'],
+      ['Search & Add', 'Search YouTube, Internet Archive, Tubi, NASA+ or ESO (the button beside the box picks), or paste a link.'],
       ['Phone', 'Shows a code. Send a link from your phone into your search, no typing in VR.'],
       ['Host', 'The host runs the player for everyone. Take Over in More... makes you the host, when allowed.'],
       ['Locked', 'Only the host can add videos. Unlocked, anyone can add.'],
@@ -1627,7 +1629,7 @@ var FirePlaylistPanel = class {
     this.render();
   }
 
-  // Switches the search to the next source (YouTube, Archive films, Tubi, NASA+). It only searches
+  // Switches the search to the next source (YouTube, Archive films, Tubi, NASA+, ESO, ESO Fulldome). It only searches
   // when Search is pressed, so clicking through the sources doesn't start one each time.
   toggleSearchSource() {
     const order = Object.keys(SEARCH_SOURCES);

@@ -115,7 +115,9 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         // We pass it to setupYoutubeScript to ensure it's used when the player is created.
         const start = this.core.params.start || 0;
         this.setupYoutubeScript(start);
-        this.core.sendMessage({path: "instance", data: this.core.params.instance, u: window.user});
+        // The room's old code as well: this page can join before the space page does.
+        this.core.sendMessage({path: "instance", data: this.core.params.instance, u: window.user,
+          legacy: this.core.params['legacy-instance'] || undefined});
         this.core.sendMessage({path: "user-video-player", data: window.user});
       }, ()=>{
           this.core.showToast("Reconnecting...");

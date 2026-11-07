@@ -23,6 +23,8 @@ var FireNativeScreen = (() => {
   const TOGGLE_COOLDOWN_MS = 1500;
   /** Timeout in milliseconds before warning that video failed to prepare. */
   const PREPARE_TIMEOUT_MS = 20000;
+  /** The same for WebM, which most often fails for its codec (VP9), and loads as fast as MP4 when it plays. */
+  const WEBM_PREPARE_TIMEOUT_MS = 10000;
   /** Skip jump increment in seconds for standard and karaoke mode. */
   const SKIP_S = 5, SKIP_KARAOKE_S = 0.25;
   /**
@@ -190,10 +192,15 @@ var FireNativeScreen = (() => {
         this.reportDuration();
         this.requestSync(true); // start where everyone else is
       }
-      if (!this.prepared && now - this.startedAt > PREPARE_TIMEOUT_MS && !this.warned) {
+      // Not loaded in time: the browser tries it instead (it plays more formats). WebM gets less
+      // time, as Unity's player takes only VP8 WebM on PC, and most WebM now is VP9.
+      const webm = /\.webm(\?|#|$)/i.test(String(this.link));
+      const timeout = webm ? WEBM_PREPARE_TIMEOUT_MS : PREPARE_TIMEOUT_MS;
+      if (!this.prepared && now - this.startedAt > timeout && !this.warned) {
         this.warned = true;
-        console.warn(`[NativeScreen] ${this.link} hasn't loaded after ${PREPARE_TIMEOUT_MS / 1000}s.`);
-        this.core.showToast("This file won't load on the world's video player. The link may be wrong, or the format unsupported.", 8000);
+        console.warn(`[NativeScreen] ${this.link} hasn't loaded after ${timeout / 1000}s.`);
+        if (typeof this.core.playFileInBrowser === 'function') this.core.playFileInBrowser(this.link);
+        else this.core.showToast("This file won't load on the world's video player. The link may be wrong, or the format unsupported.", 8000);
       }
       if (this.prepared) {
         if (!this.durationReported) this.reportDuration(); // the length may come later than the first frame

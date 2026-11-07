@@ -1151,7 +1151,8 @@ class App {
           let result = await models.PlayerState.findByPk(instanceId);
           // A room with nothing saved yet starts with what was saved under the room its code
           // used before. The old room is kept, as other worlds may still use it.
-          if (!result && legacyId && legacyId !== instanceId) {
+          // Only that code's own old room: the new room's name ends with " room:<code>".
+          if (!result && legacyId && legacyId !== instanceId && instanceId.endsWith(` room:${legacyId}`)) {
             result = await models.PlayerState.findByPk(legacyId);
             if (result) copiedFrom = legacyId;
           }

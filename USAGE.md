@@ -328,7 +328,7 @@ Everyone in the same room sees the same player and playlist. The room comes from
 
 Before this, a code alone was the room, shared by every world that used it. When a space opens its new room and the server has nothing saved for that room yet, it copies the playlist, lists and settings saved under the old code into it, once. After that the two rooms are separate: changes to the old room don't reach the new one. The old room is left as it was, so a world that still uses it (or `shared:` with the same code) keeps it. The lists each viewer saved on their own device come along the same way: the ones saved under the old code are used only while none are saved for the new room.
 
-Unity play mode doesn't copy anything: its old rooms were the ones every creator shared, so a play-mode room starts empty.
+In Unity play mode a snippet doesn't copy anything: its old rooms were the ones every creator shared, so its play-mode room (which has the snippet's id) starts empty. A script tag has no such id, so in play mode it still copies its old room for a code that isn't `shared:`.
 
 ### Blacklist
 

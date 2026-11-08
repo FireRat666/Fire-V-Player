@@ -1425,7 +1425,9 @@ var Core = class {
   async retryModeOverride(tries = 6, everyMs = 5000) {
     for (let i = 0; i < tries && !this.modeStateRead; i++) {
       await new Promise(r => setTimeout(r, everyMs));
+      if (this.destroyed) return;
       const v = await this.loadModeOverride();
+      if (this.destroyed) return;
       if (!this.modeStateRead && !v) continue;
       this.modeOverride = v;
       const mode = v || this.defaultMode;

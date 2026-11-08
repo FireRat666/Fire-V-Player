@@ -8,6 +8,7 @@
 const MediaSources = require('../public/media-sources.js');
 const archive = require('./archive.js');
 const loc = require('./loc.js');
+const eso = require('./eso.js');
 const streaming = require('./streaming.js');
 
 const FETCH_TIMEOUT_MS = 5000;
@@ -125,6 +126,15 @@ async function resolveMediaLink(link) {
   // A Library of Congress film page or handle becomes its tile.loc.gov video file, and a file there
   // gets the film's title when the server knows it.
   if (media.type === 'loc' || (media.type === 'file' && media.loc)) return loc.resolveLink(link);
+
+  // An ESO or ESA/Hubble video page becomes its .mp4 on the site's own server, and a file there gets
+  // the video's title.
+  if (media.type === 'eso') return eso.resolveLink(link);
+  if (media.type === 'file' && media.eso) {
+    try {
+      return await eso.resolveLink(link);
+    } catch (e) { /* played as a plain file below */ }
+  }
 
   // Tubi and NASA+ pages keep their page link; the player asks for the stream (/api/stream).
   if (media.type === 'tubi' || media.type === 'nasa') return streaming.resolveLink(link);

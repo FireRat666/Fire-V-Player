@@ -50,7 +50,7 @@ async function resolveVideoData(app, ws, v) {
       // series (a search result) plays its first episode, and a Library of Congress page its film's
       // file: their pages aren't videos.
       const kind = media.detect(link);
-      if (kind.type === 'archive' || kind.type === 'loc' || (kind.type === 'tubi' && kind.kind === 'series')) {
+      if (kind.type === 'archive' || kind.type === 'loc' || kind.type === 'eso' || (kind.type === 'tubi' && kind.kind === 'series')) {
         const file = await media.resolveMediaLink(link);
         return { ...v, ...file, duration: file.duration || (Number(v.duration) > 0 ? Number(v.duration) : 0) };
       }
@@ -385,7 +385,7 @@ async function saveList(app, ws, data) {
     broadcastLists(app, player);
     app.send(ws, Commands.ERROR, { message: `Saved "${player.lists[0].title}" to Lists for everyone here.` });
     await app.savePlayerState(ws.i);
-  }, player.locked);
+  }, player.locked, true); // saved lists aren't playback, so karaoke doesn't change who may
 }
 
 /**
@@ -405,7 +405,7 @@ async function removeList(app, ws, data) {
     if (player.lists.length === before) return;
     broadcastLists(app, player);
     await app.savePlayerState(ws.i);
-  }, player.locked);
+  }, player.locked, true);
 }
 
 /**
@@ -507,7 +507,7 @@ async function addAndPlay(app, ws, v) {
         app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, playlist: player.playlist });
       });
       await app.savePlayerState(ws.i);
-    }, app.videoPlayers[ws.i].locked);
+    }, app.videoPlayers[ws.i].locked, true); // karaoke turns are checked above
   }
 }
 

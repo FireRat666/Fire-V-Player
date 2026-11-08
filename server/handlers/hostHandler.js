@@ -209,7 +209,16 @@ async function internalStop(app, instanceId) {
  * @returns {Promise<void>}
  */
 async function stop(app, ws) {
-  app.onlyIfHost(ws, async () => internalStop(app, ws.i), app.videoPlayers[ws.i].locked);
+  const player = app.videoPlayers[ws.i];
+  if (!player) return;
+  // In karaoke the singer may stop their own song (as they may restart it). Anyone else needs to
+  // be the host: onlyIfHost keeps karaoke's controls the host's even while unlocked.
+  const current = player.playlist[player.currentTrack];
+  if (player.isKaraoke && current && current.user && ws.u && current.user.id === ws.u.id) {
+    await internalStop(app, ws.i);
+    return;
+  }
+  app.onlyIfHost(ws, async () => internalStop(app, ws.i), player.locked);
 }
 
 /**

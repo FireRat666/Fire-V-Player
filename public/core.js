@@ -1408,6 +1408,7 @@ var Core = class {
           new Promise((_, reject) => setTimeout(() => reject(new Error('timed out')), timeoutMs))
         ]);
         if (all && all.protected) {
+          this.modeStateRead = true;
           const v = all.protected[MODE_STATE_KEY];
           return v === undefined ? this.readModeOverride() : this.parseModeValue(v);
         }
@@ -1415,7 +1416,25 @@ var Core = class {
         console.log(`[Core] Could not read the space state (${e && (e.code || e.message)}), using the local copy.`);
       }
     }
+    this.modeStateRead = false;
     return this.readModeOverride();
+  }
+
+  // When the space state couldn't be read at the start, keep trying for a while, so a player that
+  // loaded slowly still ends up in the space admin's mode. Changes this player only.
+  async retryModeOverride(tries = 6, everyMs = 5000) {
+    for (let i = 0; i < tries && !this.modeStateRead; i++) {
+      await new Promise(r => setTimeout(r, everyMs));
+      const v = await this.loadModeOverride();
+      if (!this.modeStateRead && !v) continue;
+      this.modeOverride = v;
+      const mode = v || this.defaultMode;
+      if (mode !== this.getMode()) {
+        console.log(`[Core] Read the space admin's mode late: ${mode}.`);
+        await this.switchMode(mode);
+      }
+      return;
+    }
   }
 
   // Follows changes to the saved mode. Public writes to the same key are ignored, so only an
@@ -1437,7 +1456,9 @@ var Core = class {
       if (isPublic) return;
       const override = isProtected ? this.parseModeValue(c.newValue) : this.readModeOverride();
       this.modeOverride = override;
-      this.switchMode(override || this.defaultMode);
+      // Only a change known to be to the protected value (which only admins can write) switches
+      // the room for everyone. Anything less certain changes this player only.
+      this.switchMode(override || this.defaultMode, isProtected);
     });
     scene.On('space-state-error', e => {
       const d = (e && e.detail) || {};
@@ -1584,22 +1605,28 @@ var Core = class {
 
   // Switches this player in place: the server room, the buttons, the panel and the video page.
   // Switches run one at a time, so quick changes can't interleave the panel rebuild.
-  switchMode(mode) {
-    const run = () => this._switchMode(mode).catch(e => console.error('[Core] Mode switch failed:', e));
+  // Each player follows the space admin's mode (the protected space state) by itself. Only a
+  // change an admin made to that setting (forEveryone, from watchModeOverride) switches the room on
+  // the server; any other switch, e.g. a player that read the setting late, changes this player
+  // only, so one player seeing something different can't switch everyone else.
+  switchMode(mode, forEveryone = false) {
+    const run = () => this._switchMode(mode, forEveryone).catch(e => console.error('[Core] Mode switch failed:', e));
     this.modeSwitch = (this.modeSwitch || Promise.resolve()).then(run, run);
     return this.modeSwitch;
   }
 
-  async _switchMode(mode) {
+  async _switchMode(mode, forEveryone = false) {
     mode = mode === 'karaoke' ? 'karaoke' : 'playlist';
     if (mode === this.getMode()) {
       if (this.playlistPanel) this.playlistPanel.renderSoon();
       return;
     }
     const karaoke = mode === 'karaoke';
-    console.log(`[Core] Switching to ${mode} mode.`);
+    console.log(`[Core] Switching to ${mode} mode${forEveryone ? ' (a space admin changed it)' : ''}.`);
     this.isKaraoke = karaoke;
-    this.sendMessage({ path: Commands.SET_INSTANCE_MODE, data: mode });
+    // Without forEveryone the server only uses this when nobody else is in the space (see
+    // App.requestInstanceMode).
+    this.sendMessage({ path: Commands.SET_INSTANCE_MODE, data: mode, switch: forEveryone === true });
     // The video page only uses the mode for its skip times, and every message to it carries the
     // mode (see sendBrowserMessage), so it needs no message of its own.
     this.setPlaylistLabel(karaoke).catch(e => console.error('[Core] Could not change the Playlist button label:', e));

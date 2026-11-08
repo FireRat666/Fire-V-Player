@@ -33,7 +33,6 @@ const ALLOWED_WHEN_BLOCKED = new Set([
   Commands.REQUEST_STATE,
   Commands.REQUEST_SYNC,
   Commands.USER_VIDEO_PLAYER,
-  Commands.SET_INSTANCE_MODE,     // follows the snippet / space admin's mode, sent on connect
   Commands.MEDIA_DURATION,        // a player reporting how long a file is
   Commands.VIDEO_UNAVAILABLE,     // a player reporting it can't play the video
   Commands.CLICK_BROWSER,         // a player asking for a click on its own screen (Twitch)

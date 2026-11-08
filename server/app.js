@@ -577,7 +577,7 @@ class App {
         this.localSkip(ws, true);
         break;
       case Commands.SET_INSTANCE_MODE:
-        await this.setInstanceMode(ws.i, msg.data === 'karaoke');
+        await this.requestInstanceMode(ws, msg);
         break;
       case Commands.VIDEO_UNAVAILABLE:
         await this.handleVideoUnavailable(msg.data, ws);
@@ -918,12 +918,16 @@ class App {
    * @param {Object} ws - Client WebSocket attempting the action.
    * @param {Function} callback - Action to run if permitted.
    * @param {boolean} [locked] - Optional override for lock check.
+   * @param {boolean} [inKaraoke] - Also let anyone do it in karaoke mode while unlocked.
    * @returns {void}
    */
-  onlyIfHost(ws, callback, locked) {
+  onlyIfHost(ws, callback, locked, inKaraoke = false) {
     if (ws.u && ws.u.id && ws.i) {
-      if (this.videoPlayers[ws.i]
-        && (this.videoPlayers[ws.i].host.id === ws.u.id || locked === false)) {
+      const player = this.videoPlayers[ws.i];
+      // Unlocked, anyone may use the playlist's controls. In karaoke they stay the host's (unless
+      // the caller says otherwise), so nobody can stop, seek, restart or remove someone's song.
+      const open = locked === false && (!player || !player.isKaraoke || inKaraoke);
+      if (player && (player.host.id === ws.u.id || open)) {
         callback();
       } else {
         this.send(ws, Commands.ERROR);
@@ -1427,6 +1431,32 @@ class App {
    * @param {boolean} karaoke - True for karaoke mode, false for playlist mode.
    * @returns {Promise<void>}
    */
+  /**
+   * A player's mode message. Each in-world player follows the space admin's mode (the protected
+   * space state, which only admins can write) by itself, and sends its mode when it connects or
+   * changes. Only a change an admin made to that setting (`switch`) switches the room. Otherwise
+   * the mode is only used when nobody else is in the space (the room is starting): a player that
+   * sees something different for some reason must not switch everyone else.
+   *
+   * @param {Object} ws - The player's socket.
+   * @param {Object} msg - The message: `data` is 'karaoke' or 'playlist'.
+   * @returns {Promise<void>}
+   */
+  async requestInstanceMode(ws, msg) {
+    const player = this.videoPlayers[ws.i];
+    if (!player) return;
+    const karaoke = msg.data === 'karaoke';
+    if (!!player.isKaraoke === karaoke) return;
+    if (msg.switch !== true) {
+      const othersHere = player.sockets.some(s => s !== ws && s.type === 'space' && s.u && (!ws.u || s.u.id !== ws.u.id));
+      if (othersHere) {
+        console.log(`[MODE] ${App.who(ws.u)} is in ${karaoke ? 'karaoke' : 'playlist'} mode; ${ws.i} stays in ${player.isKaraoke ? 'karaoke' : 'playlist'} mode.`);
+        return;
+      }
+    }
+    await this.setInstanceMode(ws.i, karaoke);
+  }
+
   async setInstanceMode(instanceId, karaoke) {
     const player = this.videoPlayers[instanceId];
     if (!player || !!player.isKaraoke === karaoke) return;

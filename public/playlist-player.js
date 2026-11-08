@@ -162,8 +162,10 @@
         const latest = core.readModeOverride();
         if (latest && latest !== core.modeOverride) {
           core.modeOverride = latest;
-          await core.switchMode(latest || defaultMode);
+          await core.switchMode(latest || defaultMode); // this player only
         }
+        // Couldn't read the space state at the start: keep trying in the background.
+        if (!core.modeStateRead) core.retryModeOverride().catch(e => console.warn('[Core] Could not read the mode:', e));
       }
     };
     const instance = new Player();

@@ -287,6 +287,9 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
      * @param {boolean} [shouldClear] - Whether to clear existing server playlist before loading.
      */
     playPlaylist(shouldClear) {
+      // In karaoke an empty room is the normal idle state (nobody singing), so the default
+      // playlist isn't loaded: it would start its first song as if someone were singing it.
+      if (this.core.isKaraoke) return;
       this.core.sendMessage({path: Commands.FROM_PLAYLIST, data: {id: this.core.params.playlist, shouldClear, fromPlayer: true}});
     }
 

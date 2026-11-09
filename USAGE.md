@@ -147,32 +147,50 @@ Settings are the same as the script attributes below, except:
 
 The player builds everything in the world with the BS SDK (`BS.GameObject` and components such as `BS.Browser`), so the page needs no `<a-scene>`; one left over from older versions does no harm. Script-tag positions and rotations still use A-Frame axes (Z flipped from Unity's), as before, so existing script tags keep working.
 
-In these worlds the Playlist button opens an **in-world panel** beside the screen. The main view has playback and volume controls, **Reload** (see [Reloading your screen](#reloading-your-screen)), the playlist (play, reorder, remove, vote), the saved **Lists** (see [Saved lists](#saved-lists)) and YouTube search. Under the search box are your last five searches (kept on your device; click one to search again, **Clear** forgets them) and, in karaoke mode, **+ karaoke**, **+ lyrics** and **+ zoom karaoke**, which add that word to the search. Next to the search box, **Phone** gives you a 6-letter code and a QR code: scan the QR with your phone (it opens the page with the code filled in), or open `vidya.firer.at/paste` (your server's `/paste`) and type the code, then send a link or search, and it lands in your own search box in the world. It never adds anything by itself, so you still press Add, and the lock and karaoke approval rules still apply. A code works for 10 minutes, only for you, and too many wrong codes from one phone make it wait. Search also accepts a video link, or a playlist link, which asks whether to replace the playlist, add it all, or save it to Lists (see [Saved lists](#saved-lists)). The list scrolls (thumbstick, or drag it), 20 rows at a time; the panel opens at the video that's playing. Beside the tabs, **21-40 / 300** says which rows are shown, **<** and **>** move to the previous or next 20, **<<** and **>>** move 100, **|<** and **>|** go to the start and end, and **Now** goes back to the video that's playing. (On a client without scroll views, the list shows in pages of 7 and the same buttons turn the pages.) To move the panel, grab the pill under it in VR and carry it; the panel comes with it, stays upright and stays where you let go. The hand's Playlist button opens it in front of you, karaoke's Singers button opens it just above that button, and the Playlist button by the screen puts it back beside the screen. Only your own panel moves. **Refresh** fetches the latest playlist from the server; the panel also does this each time it opens. **Info** shows who made the player, how to use it, and the setup guide (a QR code to scan with your phone, and its short link firer.at/fvp) for adding it to your own world. The red **X** closes the panel. **More...** opens a second view with:
+In these worlds the Playlist button opens an **in-world panel** beside the screen. Its buttons use symbols rather than words where they can, so they read in any language; **ⓘ** (Info) has a legend of what each one means. (The world's UI font has symbols such as ▶ ◀◀ ✓ ✕ ♛ but no colour emoji, so the padlock and speaker are drawn.)
 
-- host controls: lock, take over, voting, clear, load the default playlist
-- seek to a time (host)
-- your player only: **Reload Video**, skip back/forward, Auto Sync, Captions (closed captions on or off for you, remembered on your device) and Resolution (steps your screen's page through 1280 x 720, 1600 x 900, 1920 x 1080 and 2560 x 1440 (2K), and on PC and PC VR also 3840 x 2160 (4K), then back to the snippet's `resolution`; remembered on your device. Standalone headsets such as Quest stop at 2K, as their browsers struggle with more. Higher is sharper, mostly for 4K and 360 videos, but costs more to draw), and, when the snippet has `hand-controls`, **Hand Controls** (moves your hand buttons, see [Hand controls](#hand-controls))
-- add by link: a video (YouTube, Twitch, Vimeo or a direct link, see [Links from other sites](#links-from-other-sites)), or a YouTube playlist or list of links (see [Playlists of links](#playlists-of-links)): **Add** adds a video, and asks what to do with a playlist (see [Saved lists](#saved-lists))
-- space admins only: **Admin Take Over** (see [Admin Take Over](#admin-take-over)) and the mode switch between playlist and karaoke (see [Switching mode in world](#switching-mode-in-world))
+- **Top row:** the host chip (**♛** and the host's name, with a padlock coloured by who controls the player, see [Who controls the player](#who-controls-the-player); pressing it opens **☰**), **ⓘ** Info, **☰** More, and the red **✕** to close. While Info or More is open, its button shows **↩** to go back.
+- **Playback:** **|◀** previous, **◀◀** / **▶▶** skip back and forward, **❚❚** / **▶** pause and play, **▶|** next, and the brown **↻** reload (see [Reloading your screen](#reloading-your-screen)). On the right, the speaker buttons turn your own volume down (**−**) and up (**+**), with the volume between them, and mute (the speaker with **✕**, red while muted).
+- **Tabs:** **♫ Playlist**, **☰ Lists** (see [Saved lists](#saved-lists)) and **+ Search & Add**. Each video has **▶** play (host), **⬆** / **⬇** move (host), **✕** remove (host), or **▲** / **▼** to vote when voting is on. Search results have **▶ Now** and **▶| Next** (host) and **+ Add**.
+
+Under the search box are your last five searches (kept on your device; click one to search again, **✕** forgets them) and, in karaoke mode, **+ karaoke**, **+ lyrics** and **+ zoom karaoke**, which add that word to the search. Next to the search box, **☎ Phone** gives you a 6-letter code and a QR code: scan the QR with your phone (it opens the page with the code filled in), or open `vidya.firer.at/paste` (your server's `/paste`) and type the code, then send a link or search, and it lands in your own search box in the world. It never adds anything by itself, so you still press Add, and the control and karaoke approval rules still apply. A code works for 10 minutes, only for you, and too many wrong codes from one phone make it wait. Search also accepts a video link, or a playlist link, which asks whether to replace the playlist, add it all, or save it to Lists (see [Saved lists](#saved-lists)). The list scrolls (thumbstick, or drag it), 20 rows at a time; the panel opens at the video that's playing. Beside the tabs, **21-40 / 300** says which rows are shown, **‹** and **›** move to the previous or next 20, **«** and **»** move 100, **⇤** and **⇥** go to the start and end, and **◉ Now** goes back to the video that's playing. (On a client without scroll views, the list shows in pages of 7 and the same buttons turn the pages.) To move the panel, grab the pill under it in VR and carry it; the panel comes with it, stays upright and stays where you let go. The hand's Playlist button opens it in front of you, karaoke's Singers button opens it just above that button, and the Playlist button by the screen puts it back beside the screen. Only your own panel moves. The panel fetches the latest playlist from the server each time it opens (**☰ > ↻ Refresh List** does it again).
+
+**ⓘ** (Info) scrolls: how to use it, the setup guide (a QR code to scan with your phone, and its short link firer.at/fvp) for adding the player to your own world, what each button means, and who controls the player. **☰** (More) scrolls too, and has:
+
+- **♛ Who controls the player** (see [Who controls the player](#who-controls-the-player)), with **♛ Take Over** for anyone else when the host allows it
+- **♛ Host controls** (the host only): **Voting** (playlist) or **Auto Advance** (karaoke, starts the next singer when a song ends), **✕ Clear Playlist**, **↻ Load Default Playlist**, and **Go to** a time with **◀◀ 30s** / **30s ▶▶**, which move everyone
+- **☺ Just for you**: **↻ Reload Video**, **◀◀** / **▶▶** skip, **Auto Sync**, **CC** (closed captions on or off for you, remembered on your device), **↻ Refresh List**, **▣** resolution (steps your screen's page through 1280 x 720, 1600 x 900, 1920 x 1080 and 2560 x 1440 (2K), and on PC and PC VR also 3840 x 2160 (4K), then back to the snippet's `resolution`; remembered on your device. Standalone headsets such as Quest stop at 2K, as their browsers struggle with more. Higher is sharper, mostly for 4K and 360 videos, but costs more to draw), and, when the snippet has `hand-controls`, **☚** hand controls (moves your hand buttons, see [Hand controls](#hand-controls)). On/off settings show **✓** in green when on and **✕** in grey when off.
+- **+ Add by link**: a video (YouTube, Twitch, Vimeo or a direct link, see [Links from other sites](#links-from-other-sites)), or a YouTube playlist or list of links (see [Playlists of links](#playlists-of-links)): **+ Add** adds a video, and asks what to do with a playlist (see [Saved lists](#saved-lists))
+- space admins only: **♛ Admin Take Over** (see [Admin Take Over](#admin-take-over)) and the mode switch between playlist and karaoke (see [Switching mode in world](#switching-mode-in-world))
 
 The Creator SDK client currently doesn't open the 2D playlist page, so the panel has no button for it.
 
-When someone can't play a video, the panel shows the suggested replacement with Replace (host) and Dismiss.
+When someone can't play a video, the panel shows the suggested replacement with **⇄ Replace** (host) and **✕**.
+
+### Who controls the player
+
+The host (**♛**) runs the player for everyone. In **☰**, the host picks one of three, and the chip at the top of everyone's panel shows which is on:
+
+- **Only the host** (green, closed padlock): only the host can add and change videos (in karaoke, only the host starts songs and new songs wait for approval), and nobody can take over while the host is in the space.
+- **Everyone** (orange, open padlock): anyone can add, play, skip and remove videos (in karaoke, anyone can join the queue, and the next singer can start their own song), and the host stays the host: nobody can take over while they're in the space.
+- **Everyone + Take Over** (red, open padlock): anyone can press **♛ Take Over** and become the host, and then change anything.
+
+These are the server's lock and Take Over settings, set together, so a locked player can't be left open to Take Over by mistake (a player locked with Take Over on, from before, shows as **Everyone + Take Over**, as anyone can still become the host). When the host leaves the space, Take Over turns on after 42 seconds, so the player is never stuck. Taking over leaves Take Over on, so the new host picks again if they want to keep it.
 
 In karaoke mode the Singers button (and the Join/Leave Queue button) opens the same panel as a **Singers panel**:
 
-- **Now singing** shows who is singing which song. The host and the person singing get **Restart Song** and **Stop Song**.
-- **Singers** is the queue. The host can **Play & Sing** anyone, move singers **Up** / **Down** and **Remove** them, and anyone can **Remove Me**.
-- While the player is unlocked, the singer at the top can start their own song with **Play & Sing**, but only when no song is playing, so nobody can cut into someone else's song. While it's locked, only the host can start songs.
-- While it's locked, other people can still pick a song with **Sing It**. It waits in the queue until the host presses **Approve** or **Reject**. Unlocking approves every waiting song.
-- **Search** finds a song (or takes a pasted video link). **Preview** plays the song on the main screen just for you (with **<< Skip**, **Skip >>**, **Sing It** and **Stop Preview** on the panel), so you can check that it loads and has lyrics before adding it; **Stop Preview**, **Sing It** or closing the panel returns your screen to the room's song. **Sing It** adds you to the queue with that song. You can be in the queue once.
-- **More...** has the host controls (lock, take over, Auto Advance, which starts the next singer when a song ends), seek, and your own player's skip, Auto Sync and Captions.
+- **Now singing** shows who is singing which song. The host and the person singing get **|◀** (start the song again) and **■** (stop it).
+- **♪ Singers** is the queue. The host can **▶ Sing** anyone (start their song), move singers **⬆** / **⬇** and **✕** remove them, and anyone can **✕ Leave**.
+- With control on **Everyone**, the singer at the top can start their own song with **▶ Sing**, but only when no song is playing, so nobody can cut into someone else's song. Otherwise only the host can start songs.
+- When only the host controls it, other people can still pick a song with **♪ Sing It**. It waits in the queue until the host presses **✓** (approve) or **✕** (reject). Switching to **Everyone** approves every waiting song.
+- **+ Search Songs** finds a song (or takes a pasted video link). **▶ Preview** plays the song on the main screen just for you (with **◀◀**, **▶▶**, **♪ Sing It** and **■ Stop** on the panel), so you can check that it loads and has lyrics before adding it; **■ Stop**, **♪ Sing It** or closing the panel returns your screen to the room's song. **♪ Sing It** adds you to the queue with that song. You can be in the queue once.
+- **☰** has who controls the player, the host controls (Auto Advance, which starts the next singer when a song ends), and your own player's skip, Auto Sync and CC.
 
 Whoever runs the karaoke should take over the player first, as only the host can start other people's songs.
 
 ### Hand controls
 
-With `hand-controls="true"`, each player gets seven buttons that go with them: mute, volume down and up, reload (see [Reloading your screen](#reloading-your-screen)), skip back and forward, and the Playlist (or Singers) panel. **More... > Hand Controls** in the panel moves them, one place per click, and your choice is remembered on your device:
+With `hand-controls="true"`, each player gets seven buttons that go with them: mute, volume down and up, reload (see [Reloading your screen](#reloading-your-screen)), skip back and forward, and the Playlist (or Singers) panel. **☰ > ☚** (hand controls) in the panel moves them, one place per click, and your choice is remembered on your device:
 
 - **Left Wrist**: on the back of the left wrist (the default in VR).
 - **Right Wrist**: the same on the right wrist, for when another menu is on your left hand.
@@ -188,11 +206,11 @@ The volume buttons are on the top row and Reload is at the far end of the bottom
 
 ### Reloading your screen
 
-When a video or stream freezes or won't load for you, **Reload** (the circular arrow under the screen and on the hand controls, the panel's **Reload** beside the playback controls, or **More... > Reload Video**) builds your own screen again. The video starts again at the same point as everyone else's, as when someone joins late. Nobody else's screen changes, so the host doesn't need to switch videos back and forth to fix it for you. In karaoke it's in **More...** and on the hand controls.
+When a video or stream freezes or won't load for you, **Reload** (the circular arrow under the screen and on the hand controls, the panel's brown **↻** beside the playback controls, or **☰ > ↻ Reload Video**) builds your own screen again. The video starts again at the same point as everyone else's, as when someone joins late. Nobody else's screen changes, so the host doesn't need to switch videos back and forth to fix it for you.
 
 ### Saved lists
 
-The panel's **Lists** tab (and **More... > Saved Lists** on the 2D playlist page) shows the snippet's playlists: the default `playlist` first, then each one in `playlists`, a comma separated list of YouTube playlists and [playlists of links](#playlists-of-links), up to 10 in all:
+The panel's **☰ Lists** tab (and **More... > Saved Lists** on the 2D playlist page) shows the snippet's playlists: the default `playlist` first, then each one in `playlists`, a comma separated list of YouTube playlists and [playlists of links](#playlists-of-links), up to 10 in all:
 
 ```html
 playlists="PLZWiw-xxQ4SPDmADhvme7-pU2bx3s7nKX, https://docs.google.com/document/d/<id>/edit, https://example.com/friday.m3u"
@@ -206,12 +224,12 @@ A YouTube playlist can be its ID or any link with `list=` in it, including a vid
 playlists="PLZWiw-xxQ4SPDmADhvme7-pU2bx3s7nKX, https://www.youtube.com/watch?v=jfKfPfyJRdk, https://stream.vrcdn.live/live/vrcdn.live.ts"
 ```
 
-Each shows its name and how many videos it has. **Open** lists its videos under it, each with **Add** (and, for the host, **Play Now** and **Play Next**, or **Play** when it's already in the playlist). **Add All** adds every video to the end of the playlist, skipping ones already in it, and **Replace** (host) makes the list the playlist. Adding follows the usual rules: anyone can add while the player is unlocked, only the host while it's locked.
+Each shows its name and how many videos it has. **▼ Open** lists its videos under it, each with **+ Add** (and, for the host, **▶ Now** and **▶| Next**, or **▶** when it's already in the playlist). **+ All** adds every video to the end of the playlist, skipping ones already in it, and **⇄ Replace** (host) makes the list the playlist. Adding follows the usual rules: anyone can add while control is on **Everyone**, otherwise only the host (see [Who controls the player](#who-controls-the-player)).
 
-Lists can also be saved from inside the world. Pasting a YouTube playlist or a list of links into **Search & Add** or **More... > Add by link** asks what to do with it: **Replace Playlist** (host), **Add All to End**, **Save for Everyone**, **Save for Me**, or **Just This Video** for a video link inside a playlist.
+Lists can also be saved from inside the world. Pasting a YouTube playlist or a list of links into **+ Search & Add** or **☰ > + Add by link** asks what to do with it: **⇄ Replace Playlist** (host), **+ Add All to End**, **★ Save for Everyone**, **☆ Save for Me**, or **+ Just This Video** for a video link inside a playlist.
 
-- **Save for Everyone** adds it to the room's shared lists, marked **(shared)** with who saved it. The server checks the list works first, keeps it with the playlist (so it's still there next time), and shows it to everyone in the room straight away, in the panel and on the 2D page (**Add Playlist > Save to Lists** there). Saving and **Remove** follow the same rules as adding: anyone while unlocked, only the host while locked. A room keeps up to 50.
-- **Save for Me** keeps it only on your device, for this world, marked **(mine)**. **Share** turns it into a shared list, and **Remove** takes it out.
+- **★ Save for Everyone** adds it to the room's shared lists, marked **(shared)** with who saved it. The server checks the list works first, keeps it with the playlist (so it's still there next time), and shows it to everyone in the room straight away, in the panel and on the 2D page (**Add Playlist > Save to Lists** there). Saving and removing (**✕**) follow the same rules as adding. A room keeps up to 50.
+- **☆ Save for Me** keeps it only on your device, for this world, marked **(mine)**. **★ Share** turns it into a shared list, and **✕** takes it out.
 
 The snippet's lists come first, then the shared ones, then your own. A list opened with **Browse** on the 2D page joins its list until you leave.
 
@@ -304,7 +322,7 @@ Files, streams and Twitch videos show no length until the first player loads the
 
 ### Switching mode in world
 
-At the bottom of the panel's **More...** view, the **Space admins only** section has:
+At the bottom of the panel's **☰** (More) view, the **Space admins only** section has:
 
 - **Switch to Karaoke** / **Switch to Playlist**, which switches the player for everyone in the space.
 - **Use Snippet Default**, shown once the mode has been changed, which goes back to the snippet's `karaoke` setting.
@@ -319,7 +337,7 @@ Everyone sees these buttons, because the client can't always tell who is a space
 
 The **Space admins only** section also has **Admin Take Over** (shown when you aren't the host). It makes a space admin the host even when the player is locked or the host has turned Take Over off, so a world's owner or moderators can always stop someone running the player.
 
-- While the admin is in the space, nobody else can take over (Take Over is turned off for them). They can turn it back on, or Lock / Unlock, like any host.
+- While the admin is in the space, nobody else can take over (Take Over is turned off for them). They can change who controls the player (see [Who controls the player](#who-controls-the-player)) like any host.
 - When they leave the space, the usual rule applies: 42 seconds later anyone can take over again. So people can still use the player when no admin is around.
 - It works the same way as the mode switch: pressing it saves the admin's ID as protected space state (the key `fire-v-player-admin`), which only space admins can write. When that change arrives, the admin's own player asks the server for control. For anyone else the write is refused, and after a few seconds the panel says "Only space admins can take control this way."
 - The player server can't check who is a space admin itself. It trusts the admin's player, as it trusts every player's own user ID. That stops anyone using the normal client, but not a modified one.
@@ -355,7 +373,7 @@ All parameters are optional unless marked as **(Required)**.
 | :--- | :--- | :--- |
 | `src` | **(Required)** The URL to your running Fire-V-Player instance's `playlist.js` or `karaoke.js` file. | N/A |
 | `instance` | The room code (`room` on the snippet). Each space has its own room for a code; `shared:<code>` is the same room in every world that uses it. See [Rooms](#rooms). | Empty: the space's URL |
-| `playlist` | The playlist to load by default if the instance is empty: a YouTube playlist ID (e.g., `PL...`) or link, or a link to a list of links (a `.txt` or `.m3u` file, a Google Doc, a Drive folder or an archive.org item; see [Playlists of links](#playlists-of-links)), a Tubi category or series, or a NASA+ series (see [Links from other sites](#links-from-other-sites)). | `""` |
+| `playlist` | The playlist to load by default if the instance is empty (not in karaoke mode, where empty means nobody is singing): a YouTube playlist ID (e.g., `PL...`) or link, or a link to a list of links (a `.txt` or `.m3u` file, a Google Doc, a Drive folder or an archive.org item; see [Playlists of links](#playlists-of-links)), a Tubi category or series, or a NASA+ series (see [Links from other sites](#links-from-other-sites)). | `""` |
 | `playlists` | Saved playlists for the Lists tab: comma separated YouTube playlists (IDs or links), links to lists of links, Tubi categories and series, NASA+ series, ESO and ESA/Hubble archive pages, and single video or stream links, up to 10 with `playlist`. See [Saved lists](#saved-lists). | `""` |
 | `youtube` | The URL of a single YouTube video to use as the default "silent" video when nothing is playing. | A silent visual video |
 | `volume` | The initial volume, from `0` to `100`. | `40` |

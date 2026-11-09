@@ -266,6 +266,9 @@ async function fromPlaylist(app, ws, data) {
 
   app.onlyIfHost(ws, async () => {
     if (!(player.playlist.length === 0 || data.shouldClear)) return;
+    // A screen loading the default playlist when it joins. In karaoke an empty room means nobody is
+    // singing, so the list's first song would start as if someone had chosen to sing it.
+    if (data.fromPlayer === true && player.isKaraoke) return;
     let list;
     try {
       list = await loadPlaylistSource(ws, id);

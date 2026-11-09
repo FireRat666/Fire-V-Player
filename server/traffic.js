@@ -46,7 +46,9 @@ class Traffic {
   track(netSocket) {
     if (!netSocket) return;
     this.connections++;
-    const s = { net: netSocket, out: 0, in: 0 };
+    // Counting starts from what the connection has already carried: the host's proxy can send
+    // page and file requests on a connection before upgrading it, and those are counted as files.
+    const s = { net: netSocket, out: netSocket.bytesWritten || 0, in: netSocket.bytesRead || 0 };
     this.sockets.add(s);
     netSocket.once('close', () => {
       this.take(s);

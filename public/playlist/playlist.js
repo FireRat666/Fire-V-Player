@@ -926,7 +926,7 @@ var Playlist = class {
     const proto = this.getProtocol(host);
 
     // Set the spinner's src from the config
-    this.loadingSpinner.src = `${proto}://${host}/assets/3-dots-move.svg`;
+    this.loadingSpinner.src = `https://firer.at/files/fvp/3-dots-move.svg`;
     
     this.lockPlayer = document.querySelector('#lockPlayer');
     
@@ -1129,7 +1129,7 @@ var Playlist = class {
     // into the document head. This ensures that any element with the '.teal' class,
     // including ones created later like the move up/down buttons, will get the style.
     const style = document.createElement('style');
-    style.innerHTML = `.teal { background: url(${proto}://${host}/assets/Button_bg.png); background-size: 100% 100%; }`;
+    style.innerHTML = `.teal { background: url(https://firer.at/files/fvp/Button_bg.png); background-size: 100% 100%; }`;
     document.head.appendChild(style);
     // --- End of FIX ---
 

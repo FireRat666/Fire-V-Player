@@ -56,6 +56,9 @@ var SURFACE_FLIP_Y = 1;
 // An object in the world's Unity scene with a BS Material, named "Fire-V-Player..." or with
 // "Fire-V-Player" as its Texture (in any case), shows the screen as well. See syncSecondScreens.
 var SECOND_SCREEN_TEXTURE = 'fire-v-player';
+// The player's pictures (button icons, labels, the loading picture) come from the static host,
+// not the player's server, to save its bandwidth. public/assets keeps copies for older links.
+var ASSETS_URL = 'https://firer.at/files/fvp';
 
 var Core = class {
     constructor() {
@@ -86,21 +89,19 @@ var Core = class {
     // Check the URL for the 'mode' parameter to determine behavior (e.g., skip times).
     this.isKaraoke = this.urlParams.get('mode') === 'karaoke';
     this.imIn = false;
-    // Set defaults for parameters that depend on the host URL.
-    // This runs after parseParams, so this.hostUrl is available.
-    const proto = this.getProtocol();
-    this.setOrDefault("data-playlist-icon-url", `${proto}://${this.hostUrl}/assets/Playlist.png`);
-    this.setOrDefault("data-vol-up-icon-url", `${proto}://${this.hostUrl}/assets/VolUp.png`);
-    this.setOrDefault("data-vol-down-icon-url", `${proto}://${this.hostUrl}/assets/VolDown.png`);
-    this.setOrDefault("data-mute-icon-url", `${proto}://${this.hostUrl}/assets/Mute.png`);
-    this.setOrDefault("data-controls-show-icon-url", `${proto}://${this.hostUrl}/assets/ControlsShow.png`);
-    this.setOrDefault("data-controls-hide-icon-url", `${proto}://${this.hostUrl}/assets/ControlsHide.png`);
-    this.setOrDefault("data-skip-forward-icon-url", `${proto}://${this.hostUrl}/assets/Forward.png`);
-    this.setOrDefault("data-skip-backward-icon-url", `${proto}://${this.hostUrl}/assets/Backwards.png`);
-    this.setOrDefault("data-reload-icon-url", `${proto}://${this.hostUrl}/assets/Reload.png`);
-    this.setOrDefault("data-unmute-icon-url", `${proto}://${this.hostUrl}/assets/Unmute.png`);
-    this.setOrDefault("data-play-icon-url", `${proto}://${this.hostUrl}/assets/Play.png`);
-    this.setOrDefault("data-pause-icon-url", `${proto}://${this.hostUrl}/assets/Pause.png`);
+    // The button icons' defaults, each of which a snippet attribute can replace.
+    this.setOrDefault("data-playlist-icon-url", this.assetUrl('Playlist.png'));
+    this.setOrDefault("data-vol-up-icon-url", this.assetUrl('VolUp.png'));
+    this.setOrDefault("data-vol-down-icon-url", this.assetUrl('VolDown.png'));
+    this.setOrDefault("data-mute-icon-url", this.assetUrl('Mute.png'));
+    this.setOrDefault("data-controls-show-icon-url", this.assetUrl('ControlsShow.png'));
+    this.setOrDefault("data-controls-hide-icon-url", this.assetUrl('ControlsHide.png'));
+    this.setOrDefault("data-skip-forward-icon-url", this.assetUrl('Forward.png'));
+    this.setOrDefault("data-skip-backward-icon-url", this.assetUrl('Backwards.png'));
+    this.setOrDefault("data-reload-icon-url", this.assetUrl('Reload.png'));
+    this.setOrDefault("data-unmute-icon-url", this.assetUrl('Unmute.png'));
+    this.setOrDefault("data-play-icon-url", this.assetUrl('Play.png'));
+    this.setOrDefault("data-pause-icon-url", this.assetUrl('Pause.png'));
 
     if(this.params.announce === 'true') { 
       // this.setupSayNamesScript();
@@ -283,7 +284,7 @@ var Core = class {
       'BanterMaterial', [shader, url, this.white(), 0, true]));
     return go;
   }
-  assetUrl(file) { return `${this.getProtocol()}://${this.hostUrl}/assets/${file}`; }
+  assetUrl(file) { return `${ASSETS_URL}/${file}`; }
   /**
    * Adds a box collider component to a GameObject.
    * @param {Object} go - Banter GameObject.
@@ -739,9 +740,9 @@ var Core = class {
     const id = browser.component && browser.component.unityId;
     return id != null && id !== '' ? `asset_browser_${id}` : null;
   }
-  // The picture second screens show while the player loads (public/assets).
+  // The picture second screens show while the player loads.
   secondScreenLoadingUrl() {
-    return this.hostUrl ? `${this.getProtocol()}://${this.hostUrl}/assets/SecondScreenLoading.png` : null;
+    return this.assetUrl('SecondScreenLoading.png');
   }
   // The BS Materials of the scene's second screens. The page knows every object with a BS
   // component, so these are among scene.objects.
@@ -1232,7 +1233,7 @@ var Core = class {
         },
         // stopOnFocus: true, // Prevents dismissing of toast on hover
         style: {
-          background: `url(${this.getProtocol()}://${this.hostUrl}/assets/Button_bg.png) center center no-repeat`,
+          background: `url(${this.assetUrl('Button_bg.png')}) center center no-repeat`,
           backgroundSize: "cover",
           opacity: 0.7,
           fontSize: "2em",

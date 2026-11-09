@@ -37,8 +37,8 @@ namespace FireVPlayer.EditorTools
         const string MarkerTexture = "Fire-V-Player";
         // What a new second screen's Texture starts as: the player's loading picture, so it shows
         // that (not plain white) until the player sets it. The object's name marks it as a screen.
-        const string LoadingImage = "/assets/SecondScreenLoading.png";
-        const string DefaultHost = "https://vidya.firer.at";
+        // It's on the static host, as core.js's ASSETS_URL, wherever the player itself is served from.
+        const string LoadingImage = "https://firer.at/files/fvp/SecondScreenLoading.png";
         const string SnippetName = "fire-v-player";
         const float ScreenAspect = 9f / 16f; // the player's screen is 1 m wide at scale 1, 16:9
         const float DefaultWidth = 2f;
@@ -86,7 +86,7 @@ namespace FireVPlayer.EditorTools
             var material = go.AddComponent<BSMaterial>();
             var so = new SerializedObject(material);
             SetString(so, "shaderName", "Unlit/Diffuse");
-            SetString(so, "texture", LoadingImageUrl(player));
+            SetString(so, "texture", LoadingImage);
             var color = so.FindProperty("color");
             if (color != null) color.vector4Value = Vector4.one;
             so.ApplyModifiedPropertiesWithoutUndo();
@@ -158,19 +158,6 @@ namespace FireVPlayer.EditorTools
                     return e;
             }
             return null;
-        }
-
-        /// <summary>
-        /// The loading picture on the server the snippet's script comes from (vidya.firer.at if unknown).
-        /// </summary>
-        static string LoadingImageUrl(XElement player)
-        {
-            var host = DefaultHost;
-            Uri script;
-            if (player != null && Uri.TryCreate(((string)player.Attribute("script") ?? "").Trim(), UriKind.Absolute, out script) &&
-                (script.Scheme == Uri.UriSchemeHttps || script.Scheme == Uri.UriSchemeHttp))
-                host = script.GetLeftPart(UriPartial.Authority);
-            return host + LoadingImage;
         }
 
         /// <summary>

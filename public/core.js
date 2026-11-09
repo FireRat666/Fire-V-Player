@@ -2437,6 +2437,19 @@ var Core = class {
         // The server's build (see server/version.js), shown in the panel. Older servers don't send it.
         if (typeof json.data.version === 'string') this.serverVersion = json.data.version;
         break;
+      // Playlist mode: videos added while locked, waiting for the host. The host hears of new ones.
+      case Commands.WAITING_VIDEOS:
+        if (this.player && json.data && Array.isArray(json.data.waiting)) {
+          const before = new Set((this.player.waiting || []).map(w => w.v && w.v.link));
+          const added = json.data.waiting.filter(w => w.v && !before.has(w.v.link));
+          this.player.waiting = json.data.waiting;
+          const isHost = this.player.host && window.user && this.player.host.id === window.user.id;
+          if (isHost && added.length) {
+            const w = added[added.length - 1];
+            this.showToast(`${w.name || 'Someone'} wants to add "${(w.v && w.v.title) || 'a video'}". Approve it in the playlist.`);
+          }
+        }
+        break;
       case Commands.SINGER_LIST_UPDATED:
         if (this.player) {
           this.player.players = json.data.players;

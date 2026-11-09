@@ -122,7 +122,8 @@ class App {
         isKaraoke: player.isKaraoke,
         savedPlaylist: savedPlaylist,
         paused: player.paused,
-        lists: player.lists || []
+        lists: player.lists || [],
+        waiting: (player.waiting || []).slice(0, 30) // videos waiting for the host (playlist mode)
       };
 
       // Use Sequelize's "upsert" method to insert or update the record.
@@ -541,6 +542,12 @@ class App {
         break;
       case Commands.APPROVE_SINGER:
         await karaokeHandler.approveSinger(this, ws, msg.data);
+        break;
+      case Commands.APPROVE_VIDEO:
+        await playlistHandler.approveVideo(this, ws, msg.data);
+        break;
+      case Commands.REJECT_VIDEO:
+        await playlistHandler.rejectVideo(this, ws, msg.data);
         break;
       case Commands.PLAY_KARAOKE_TRACK:
         await karaokeHandler.playKaraokeTrack(this, ws, msg.data);
@@ -1249,7 +1256,8 @@ class App {
         saveStateTimeout: null, // For debouncing database writes
         lastSyncTime: 0,
         paused: false,
-        lists: [] // the room's shared saved lists (see playlistHandler.saveList)
+        lists: [], // the room's shared saved lists (see playlistHandler.saveList)
+        waiting: [] // videos added while locked, waiting for the host (see playlistHandler.suggestVideo)
       };
 
       if (existingState) {
@@ -1260,6 +1268,9 @@ class App {
         }
         if (!Array.isArray(this.videoPlayers[instanceId].lists)) {
           this.videoPlayers[instanceId].lists = [];
+        }
+        if (!Array.isArray(this.videoPlayers[instanceId].waiting)) {
+          this.videoPlayers[instanceId].waiting = [];
         }
       }
 
@@ -1371,6 +1382,7 @@ class App {
       if (includePlaylist) {
         videoObject.playlist = player.playlist;
         videoObject.lists = player.lists || [];
+        videoObject.waiting = playlistHandler.waitingFor(player);
       }
 
       // Optionally include the singer list for karaoke mode.

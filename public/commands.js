@@ -82,6 +82,9 @@ var Commands = {
   PASTE_CODE: 'paste-code', // server -> that UI: { code, expiresIn }
   PASTE_RECEIVED: 'paste-received', // server -> that UI: { text } sent from the phone, for the search box
   APPROVE_SINGER: 'approve-singer', // the host's UI -> server: userId of a singer whose song waits for approval
+  WAITING_VIDEOS: 'waiting-videos', // server -> UIs: { waiting } videos added while locked, waiting for the host (playlist mode)
+  APPROVE_VIDEO: 'approve-video', // the host's UI -> server: link of a waiting video, which goes to the end of the playlist
+  REJECT_VIDEO: 'reject-video', // the host's (or the adder's) UI -> server: link of a waiting video to drop
   SINGER_LIST_UPDATED: 'singer-list-updated',
   RESTART_SONG: 'restart-song',
   TOGGLE_AUTO_ADVANCE: 'toggle-auto-advance',

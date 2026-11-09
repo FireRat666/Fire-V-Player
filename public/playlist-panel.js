@@ -157,10 +157,20 @@ var FirePlaylistPanel = class {
     return !!(p && p.host && window.user && p.host.id === window.user.id);
   }
 
-  // The list on the first tab: the playlist, or in karaoke mode the singer queue.
+  // The list on the first tab: the playlist, then the videos waiting for the host to approve them
+  // (added while locked; after the playlist, so its indexes stay the same), or in karaoke mode the
+  // singer queue.
   listItems() {
     const p = this.core.player || {};
-    return (this.karaoke ? p.players : p.playlist) || [];
+    if (this.karaoke) return p.players || [];
+    const waiting = Array.isArray(p.waiting) ? p.waiting.map(w => Object.assign({ waiting: true }, w)) : [];
+    return (p.playlist || []).concat(waiting);
+  }
+
+  // Whether this user's + Add asks the host instead (playlist mode, locked, not the host).
+  addWaits() {
+    const p = this.core.player;
+    return !this.karaoke && !!p && !!p.locked && !this.isHost();
   }
 
   isInQueue() {
@@ -479,11 +489,11 @@ var FirePlaylistPanel = class {
   controlText(level) {
     const k = this.karaoke;
     if (level === 'host') {
-      return (k ? 'Only the host starts songs, and new songs wait for the host to approve them.' : 'Only the host can add and change videos.')
+      return (k ? 'Only the host starts songs, and new songs wait for the host to approve them.' : 'Only the host changes videos, and new ones wait for the host to approve them.')
         + ' Nobody can take over while the host is here.';
     }
     if (level === 'everyone') {
-      return (k ? 'Anyone can join the queue, and the next singer can start their own song.' : 'Anyone can add, play, skip and remove videos.')
+      return (k ? 'Anyone can join the queue, and the next singer can start their own song.' : 'Anyone can add videos. Only the host can play, skip, move or remove them.')
         + ' Nobody can take over while the host is here.';
     }
     return 'Anyone can press Take Over and become the host, and then change anything.';
@@ -743,12 +753,15 @@ var FirePlaylistPanel = class {
     this.mainView = await this.div(rootEl, { display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, overflow: 'hidden' });
 
     const tabs = await row(this.mainView, { marginTop: '6px' });
-    this.tabPlaylistBtn = await this.button(tabs, this.karaoke ? 'Singers' : 'Playlist', () => this.setTab('playlist'));
+    // Tight padding, so the page buttons still fit beside the tabs with a long playlist and
+    // videos waiting for the host (Playlist (322+2), 101-120 / 322).
+    const tabBtn = { paddingLeft: '10px', paddingRight: '10px' };
+    this.tabPlaylistBtn = await this.button(tabs, this.karaoke ? 'Singers' : 'Playlist', () => this.setTab('playlist'), tabBtn);
     // Saved lists (not in karaoke mode, where the first tab is the singer queue).
-    this.tabListsBtn = this.karaoke ? null : await this.button(tabs, 'Lists', () => this.setTab('lists'));
+    this.tabListsBtn = this.karaoke ? null : await this.button(tabs, 'Lists', () => this.setTab('lists'), tabBtn);
     // Search opens over the whole panel (see render), so it stands out from the tabs.
     this.tabSearchBtn = await this.button(tabs, this.karaoke ? '+ Search Songs' : '+ Search & Add', () => this.openSearch(), {
-      backgroundColor: SEARCH_COLOR, paddingLeft: '22px', paddingRight: '22px', fontWeight: 'bold'
+      backgroundColor: SEARCH_COLOR, paddingLeft: '12px', paddingRight: '12px', fontWeight: 'bold'
     });
     // While searching: a title and the way back, instead of the tabs.
     this.searchTitle = await this.label(tabs, this.karaoke ? 'Search for a song' : 'Search', { fontSize: '26px', fontWeight: 'bold', marginLeft: '6px', marginRight: '12px' });
@@ -1674,6 +1687,13 @@ var FirePlaylistPanel = class {
     el.OnMouseLeave(() => finish());
   }
 
+  // + Add on a search result or a list's video. While locked, someone else's video waits for the
+  // host (the server says so).
+  addVideo(v) {
+    this.send(Commands.ADD_TO_PLAYLIST, v);
+    this.setStatus(this.addWaits() ? `Asking the host to add "${v.title}"...` : `Added "${v.title}"`);
+  }
+
   // mode: false (one video), 'replace' (load as the playlist), 'append' (add a whole list to the
   // end) or 'browse' (open it in the Lists tab).
   // Add by link: a video is added, a playlist or list of links asks what to do with it.
@@ -1717,8 +1737,8 @@ var FirePlaylistPanel = class {
     else if (choice === 'share') this.shareList(found.id);
     else if (choice === 'save') this.saveList(found.id);
     else if (choice === 'video') {
-      if (!this.canAdd()) this.setStatus('The player is locked: only the host can add videos.');
-      else { this.send(Commands.ADD_TO_PLAYLIST, found.link); this.setStatus('Adding video...'); }
+      if (!this.canAdd() && !this.addWaits()) this.setStatus('The player is locked: only the host can add videos.');
+      else { this.send(Commands.ADD_TO_PLAYLIST, found.link); this.setStatus(this.addWaits() ? 'Asking the host...' : 'Adding video...'); }
     }
     this.render();
   }
@@ -2471,10 +2491,11 @@ var FirePlaylistPanel = class {
       this.display(this.promptAppendBtn, this.canAdd() && !failed);
       this.display(this.promptShareBtn, this.canAdd() && !failed);
       this.display(this.promptSaveBtn, !failed);
-      this.display(this.promptVideoBtn, pl.video && this.canAdd());
+      this.display(this.promptVideoBtn, pl.video && (this.canAdd() || this.addWaits()));
     }
     const list = this.listItems();
-    this.setText(this.tabPlaylistBtn, `${this.karaoke ? '♪ Singers' : '♫ Playlist'} (${list.length})`);
+    const waitingCount = this.karaoke ? 0 : list.length - playlist.length;
+    this.setText(this.tabPlaylistBtn, `${this.karaoke ? '♪ Singers' : '♫ Playlist'} (${this.karaoke ? list.length : playlist.length}${waitingCount ? `+${waitingCount}` : ''})`);
     this.setStyle(this.tabPlaylistBtn, 'backgroundColor', this.tab === 'playlist' ? '#1565c0' : '#455a64');
     if (this.tabListsBtn) {
       const lists = this.getLists();
@@ -2516,6 +2537,7 @@ var FirePlaylistPanel = class {
     // Rows
     const canAdd = this.canAdd();
     const inPlaylist = (onLists || onSearch) ? new Set(playlist.map(v => v.link)) : null;
+    this.waitingLinks = new Set(list.filter(v => v.waiting).map(v => v.v && v.v.link));
     for (let k = 0; k < this.rows.length; k++) {
       const slot = this.rows[k];
       const i = start + k;
@@ -2528,6 +2550,7 @@ var FirePlaylistPanel = class {
       }
       else if (onSearch) this.fillSearchRow(slot, v, host, inPlaylist);
       else if (this.karaoke) this.fillSingerRow(slot, v, i, items, host);
+      else if (v.waiting) this.fillWaitingRow(slot, v, host);
       else this.fillPlaylistRow(slot, v, i, player, host);
     }
 
@@ -2627,6 +2650,23 @@ var FirePlaylistPanel = class {
     this.setButtons(slot, defs.slice(0, 4));
   }
 
+  // Playlist mode: a video added while the player was locked, waiting after the playlist until the
+  // host approves (✓, it goes to the end) or rejects it (✕). Whoever added it can take it back.
+  // `w` is { v: video, id, name, p }.
+  fillWaitingRow(slot, w, host) {
+    const v = w.v || {};
+    const me = !!(window.user && w.id === window.user.id);
+    this.setStyle(slot.row, 'backgroundColor', '#4a3f1e');
+    this.setText(slot.title, v.title || 'Untitled');
+    const dur = v.duration ? this.timeCode(v.duration / 1000) : '';
+    this.setText(slot.sub, `Waiting for the host to approve  -  added by ${me ? 'you' : (w.name || 'someone')}${dur ? '  -  ' + dur : ''}`);
+    this.setThumb(slot, v.thumbnail, v.link);
+    const defs = [];
+    if (host) defs.push({ text: '✓', color: '#2e7d32', fn: () => this.send(Commands.APPROVE_VIDEO, v.link) });
+    if (host || me) defs.push({ text: '✕', color: '#c62828', fn: () => this.send(Commands.REJECT_VIDEO, v.link) });
+    this.setButtons(slot, defs);
+  }
+
   // Karaoke: one singer in the queue. `s` is { id, name, v: video, a: approved }. A song added
   // while the player was locked waits (a === false) until the host approves or rejects it.
   fillSingerRow(slot, s, i, singers, host) {
@@ -2669,12 +2709,13 @@ var FirePlaylistPanel = class {
 
   fillSearchRow(slot, v, host, inPlaylist) {
     const added = !this.karaoke && inPlaylist && inPlaylist.has(v.link);
+    const waits = !this.karaoke && !added && !!this.waitingLinks && this.waitingLinks.has(v.link);
     const previewing = this.karaoke && this.isPreviewing(v);
     this.setStyle(slot.row, 'backgroundColor', previewing ? '#1e3a5f' : added ? '#1b3a2a' : '#2a2a33');
     this.setText(slot.title, v.title || 'Untitled');
     const channel = v.channel && v.channel.name ? v.channel.name : '';
     const dur = typeof v.duration === 'number' && v.duration > 0 ? this.timeCode(v.duration / 1000) : '';
-    this.setText(slot.sub, [previewing ? 'Previewing on your screen' : added ? 'In the playlist' : '', channel, dur].filter(Boolean).join('  -  '));
+    this.setText(slot.sub, [previewing ? 'Previewing on your screen' : added ? 'In the playlist' : waits ? 'Waiting for the host' : '', channel, dur].filter(Boolean).join('  -  '));
     this.setThumb(slot, v.thumbnail, v.link);
 
     if (this.karaoke) {
@@ -2691,7 +2732,7 @@ var FirePlaylistPanel = class {
     // Play comes first, on the left, as in the playlist.
     const defs = [];
     if (host) defs.push({ text: '▶ Now', color: '#2e7d32', fn: () => { this.send(Commands.ADD_AND_PLAY, v); this.setTab('playlist'); } });
-    if (!added && this.canAdd()) defs.push({ text: '+ Add', fn: () => { this.send(Commands.ADD_TO_PLAYLIST, v); this.setStatus(`Added "${v.title}"`); } });
+    if (!added && !waits && (this.canAdd() || this.addWaits())) defs.push({ text: '+ Add', fn: () => this.addVideo(v) });
     if (host) defs.push({ text: '▶| Next', fn: () => { this.send(Commands.ADD_AND_PLAY_NEXT, v); this.setStatus(`"${v.title}" plays next`); } });
     this.setButtons(slot, defs);
   }
@@ -2746,7 +2787,7 @@ var FirePlaylistPanel = class {
     this.setThumb(slot, v.thumbnail, v.link);
 
     const defs = [];
-    if (canAdd && !added) defs.push({ text: '+ Add', fn: () => { this.send(Commands.ADD_TO_PLAYLIST, v); this.setStatus(`Added "${v.title}"`); } });
+    if ((canAdd || this.addWaits()) && !added) defs.push({ text: '+ Add', fn: () => this.addVideo(v) });
     if (host && added) {
       // Already queued: play it where it is.
       defs.push({ text: '▶', color: '#2e7d32', fn: () => {

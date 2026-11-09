@@ -49,7 +49,7 @@ var FireNativeScreen = (() => {
       this.destroyed = false;
       this.prepared = false;
       this.autoSync = true;
-      this.wantPaused = !!(core.player && core.player.paused);
+      this.wantPaused = !this.isPreview() && !!(core.player && core.player.paused);
       this.volume = Number.isFinite(Number(core.tempVolume)) ? Number(core.tempVolume) : Number(core.params.volume);
       this.muted = core.params.mute === 'true' || core.params.mute === true;
       this.baseTime = 0;      // where the video was at baseAt (performance.now())
@@ -229,8 +229,14 @@ var FireNativeScreen = (() => {
       return d ? Math.min(t, d) : t;
     }
 
+    /** True when this screen is playing a viewer's local karaoke preview rather than the room's track. */
+    isPreview() {
+      return !!(this.core.previewVideo && this.core.previewVideo.link === this.link);
+    }
+
     /** Reports media duration to server via MEDIA_DURATION command. */
     reportDuration() {
+      if (this.isPreview()) return;
       const d = this.duration();
       if (!d) return;
       this.durationReported = true;
@@ -299,7 +305,7 @@ var FireNativeScreen = (() => {
      * @param {boolean} hard - If true, forces jump regardless of small drift.
      */
     requestSync(hard) {
-      if (this.destroyed) return;
+      if (this.destroyed || this.isPreview()) return;
       this.pendingSync = { hard: !!hard || (this.pendingSync && this.pendingSync.hard) };
       // native: the server answers the world's own connection, not only a browser page's.
       this.core.sendMessage({ path: Commands.REQUEST_SYNC, data: { clientTimestamp: Date.now(), native: true } });
@@ -307,6 +313,7 @@ var FireNativeScreen = (() => {
 
     /** Re-synchronizes after track changes or host seek events. */
     resync() {
+      if (this.isPreview()) return;
       this.autoSync = true;
       if (this.core.player) this.wantPaused = !!this.core.player.paused;
       this.hostSyncPending = true;
@@ -318,7 +325,7 @@ var FireNativeScreen = (() => {
      * @param {Object} data - Time sync payload.
      */
     onSync(data) {
-      if (!data || !this.prepared) return;
+      if (!data || !this.prepared || this.isPreview()) return;
       const p = this.core.player;
       if (p && typeof data.currentTrack === 'number' && data.currentTrack !== p.currentTrack) return; // stale
       const hard = this.pendingSync && this.pendingSync.hard;
@@ -359,6 +366,10 @@ var FireNativeScreen = (() => {
           break;
         case Commands.SKIP_BACK:
         case Commands.SKIP_FORWARD: {
+          if (this.isPreview()) {
+            this.seek(this.localTime() + (msg.path === Commands.SKIP_FORWARD ? SKIP_S : -SKIP_S));
+            break;
+          }
           // A viewer's own skip: stop pulling them back into step until the next track or host seek.
           if (this.autoSync) {
             this.autoSync = false;
@@ -379,6 +390,7 @@ var FireNativeScreen = (() => {
           break;
         }
         case Commands.PAUSE_STATE_CHANGED: {
+          if (this.isPreview()) break;
           const data = msg.data || {};
           this.wantPaused = !!data.paused;
           if (!this.wantPaused && Number.isFinite(Number(data.currentTime))) this.seek(Number(data.currentTime));

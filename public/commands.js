@@ -45,6 +45,7 @@ var Commands = {
   SET_VOLUME: 'set-volume',
   MUTE: 'mute',
   CAPTIONS: 'captions', // in-world script -> its own player page: show or hide closed captions
+  PREVIEW_VIDEO: 'preview-video', // in-world script -> its own player page: play a preview video (or null to go back to the room's track)
   AUTO_SYNC: 'auto-sync',
   SKIP_BACK: 'skip-back',
   SKIP_FORWARD: 'skip-forward',

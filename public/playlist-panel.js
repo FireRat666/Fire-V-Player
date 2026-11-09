@@ -578,8 +578,8 @@ var FirePlaylistPanel = class {
     this.nextTrackBtn = await this.button(controls, 'Next', () => this.changeTrack(1));
     if (this.karaoke) {
       // The host or the person singing can restart or stop the song.
-      this.restartBtn = await this.button(controls, 'Restart Song', () => this.send(Commands.RESTART_SONG));
-      this.stopBtn = await this.button(controls, 'Stop Song', () => this.send(Commands.STOP), { backgroundColor: '#c62828' });
+      this.restartBtn = await this.button(controls, 'Restart Song', () => { this.stopPreview(true); this.send(Commands.RESTART_SONG); });
+      this.stopBtn = await this.button(controls, 'Stop Song', () => { this.stopPreview(true); this.send(Commands.STOP); }, { backgroundColor: '#c62828' });
     }
     // Rebuilds only this viewer's screen, for a video that froze or didn't load for them. Karaoke's
     // row is full, so there it's only in More.
@@ -595,6 +595,24 @@ var FirePlaylistPanel = class {
     this.noticeLabel = await this.label(this.noticeRow, '', { fontSize: '18px', flexGrow: 1, flexShrink: 1, whiteSpace: 'normal' });
     this.replaceConfirmBtn = await this.button(this.noticeRow, 'Replace', () => this.confirmReplace(), { backgroundColor: '#2e7d32' });
     await this.button(this.noticeRow, 'Dismiss', () => this.dismissReplace(), { backgroundColor: '#c62828' });
+
+    // Karaoke preview: plays a searched song on this viewer's screen only, so they can check it has
+    // lyrics before adding it. Shown across Search and the other tabs while a preview is running.
+    if (this.karaoke) {
+      this.previewRow = await row(rootEl, {
+        display: 'none', marginTop: '6px', backgroundColor: '#1e3a5f', borderRadius: '10px',
+        paddingLeft: '10px', paddingRight: '6px', paddingTop: '4px', paddingBottom: '4px'
+      });
+      this.previewLabel = await this.label(this.previewRow, '', {
+        fontSize: '18px', flexGrow: 1, flexShrink: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
+      });
+      await this.button(this.previewRow, '<< Skip', () => this.core.back());
+      await this.button(this.previewRow, 'Skip >>', () => this.core.forward());
+      this.previewSingBtn = await this.button(this.previewRow, 'Sing It', () => {
+        if (this.core.previewVideo) this.singIt(this.core.previewVideo);
+      }, { backgroundColor: '#2e7d32' });
+      await this.button(this.previewRow, 'Stop Preview', () => this.stopPreview(), { backgroundColor: '#c62828' });
+    }
 
     // A pasted playlist: what to do with it.
     this.listPromptRow = await this.div(rootEl, {
@@ -756,6 +774,7 @@ var FirePlaylistPanel = class {
     await colText(howCol, 'How to use it', { fontSize: '26px', fontWeight: 'bold', marginTop: '0px' });
     const tips = this.karaoke ? [
       ['Search Songs', 'Find a song, or paste a video link. + karaoke and + lyrics help find versions with words on screen.'],
+      ['Preview', 'Plays the song on the screen just for you, so you can check it has lyrics before adding it.'],
       ['Sing It', 'Puts you in the singer queue with that song. You can be in the queue once.'],
       ['Play & Sing', 'When it is your turn and no song is playing, press it on your name to start.'],
       ['Locked', 'Only the host starts songs, and your song waits until the host approves it.'],
@@ -1058,6 +1077,7 @@ var FirePlaylistPanel = class {
     this.destroyed = true;
     this.built = false;
     this.visible = false;
+    if (this.core && this.core.previewVideo && typeof this.core.stopPreview === 'function') this.core.stopPreview();
     [this.tickTimer, this.renderTimer, this.statusTimer, this.searchTimer, this.scrollTimer, this.listExpiryTimer].forEach(t => { clearTimeout(t); clearInterval(t); });
     this.tickTimer = this.renderTimer = this.statusTimer = this.searchTimer = this.scrollTimer = this.listExpiryTimer = null;
     (this.thumbTimers || []).forEach(clearTimeout);
@@ -1302,6 +1322,7 @@ var FirePlaylistPanel = class {
    * @returns {Promise<void>}
    */
   async close() {
+    this.stopPreview(true);
     if (this.held && this.mover && typeof this.mover.ReleaseGrab === 'function') {
       try { await this.mover.ReleaseGrab(); } catch (e) {}
     }
@@ -1833,8 +1854,31 @@ var FirePlaylistPanel = class {
     this.core.showToast('Got the link from your phone');
   }
 
+  isPreviewing(v) {
+    return !!(v && this.core.previewVideo && this.core.previewVideo.link === v.link);
+  }
+
+  previewSong(v) {
+    if (!v || !v.link) return;
+    if (this.isPreviewing(v)) {
+      this.stopPreview();
+      return;
+    }
+    if (typeof this.core.startPreview === 'function') this.core.startPreview(v);
+    this.setStatus(`Previewing "${v.title || 'song'}" on your screen — only you see and hear this.`);
+    this.render();
+  }
+
+  stopPreview(silent) {
+    if (!this.core || !this.core.previewVideo) return;
+    if (typeof this.core.stopPreview === 'function') this.core.stopPreview();
+    if (!silent) this.setStatus('Stopped preview.');
+    this.renderSoon();
+  }
+
   singIt(v) {
     if (this.isInQueue()) { this.setStatus('You are already in the singer queue.'); return; }
+    this.stopPreview(true);
     this.send(Commands.ADD_TO_PLAYERS, v);
     this.setStatus(this.canAdd() ? `You're in the queue to sing "${v.title}"` : `"${v.title}" will be added once the host approves it`);
     this.setTab('playlist');
@@ -2155,6 +2199,16 @@ var FirePlaylistPanel = class {
     if (r) this.setText(this.noticeLabel, `Someone can't play "${r.original.title}". Replace it with "${r.alternative.title}"?`);
     this.display(this.replaceConfirmBtn, host);
 
+    // Karaoke preview bar
+    if (this.previewRow) {
+      const pv = this.core.previewVideo;
+      this.display(this.previewRow, !!pv);
+      if (pv) {
+        this.setText(this.previewLabel, `Previewing on your screen: ${pv.title || pv.link}`);
+        this.display(this.previewSingBtn, !this.isInQueue());
+      }
+    }
+
     // More view
     this.setText(this.autoSyncBtn, this.autoSync ? 'Auto Sync: On' : 'Auto Sync: Off');
     this.setStyle(this.autoSyncBtn, 'backgroundColor', this.autoSync ? '#2e7d32' : '#00838f');
@@ -2413,7 +2467,7 @@ var FirePlaylistPanel = class {
       const next = singers.find(x => x.a !== false);
       const playing = !!(p.playlist && p.playlist.length);
       if (host || (me && next === s && !p.locked && !playing)) {
-        defs.push({ text: 'Play & Sing', color: '#2e7d32', fn: () => this.send(Commands.PLAY_KARAOKE_TRACK, (host && next !== s) ? { userId: s.id } : null) });
+        defs.push({ text: 'Play & Sing', color: '#2e7d32', fn: () => { this.stopPreview(true); this.send(Commands.PLAY_KARAOKE_TRACK, (host && next !== s) ? { userId: s.id } : null); } });
       }
       if (host || me) {
         defs.push({ text: me ? 'Remove Me' : 'Remove', color: '#c62828', fn: () => this.send(Commands.REMOVE_FROM_PLAYERS, s.id) });
@@ -2428,15 +2482,22 @@ var FirePlaylistPanel = class {
 
   fillSearchRow(slot, v, host, inPlaylist) {
     const added = !this.karaoke && inPlaylist && inPlaylist.has(v.link);
-    this.setStyle(slot.row, 'backgroundColor', added ? '#1b3a2a' : '#2a2a33');
+    const previewing = this.karaoke && this.isPreviewing(v);
+    this.setStyle(slot.row, 'backgroundColor', previewing ? '#1e3a5f' : added ? '#1b3a2a' : '#2a2a33');
     this.setText(slot.title, v.title || 'Untitled');
     const channel = v.channel && v.channel.name ? v.channel.name : '';
     const dur = typeof v.duration === 'number' && v.duration > 0 ? this.timeCode(v.duration / 1000) : '';
-    this.setText(slot.sub, [added ? 'In the playlist' : '', channel, dur].filter(Boolean).join('  -  '));
+    this.setText(slot.sub, [previewing ? 'Previewing on your screen' : added ? 'In the playlist' : '', channel, dur].filter(Boolean).join('  -  '));
     this.setThumb(slot, v.thumbnail, v.link);
 
     if (this.karaoke) {
-      this.setButtons(slot, this.isInQueue() ? [] : [{ text: 'Sing It', color: '#2e7d32', fn: () => this.singIt(v) }]);
+      const defs = [{
+        text: previewing ? 'Stop Preview' : 'Preview',
+        color: previewing ? '#c62828' : '#00838f',
+        fn: () => this.previewSong(v)
+      }];
+      if (!this.isInQueue()) defs.push({ text: 'Sing It', color: '#2e7d32', fn: () => this.singIt(v) });
+      this.setButtons(slot, defs);
       return;
     }
     // Adding stays on the results, so several can be added from one search.

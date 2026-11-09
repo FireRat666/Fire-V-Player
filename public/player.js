@@ -183,7 +183,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       document.addEventListener('visibilitychange', () => {
         // When the tab/window becomes visible again (e.g., exiting Quest passthrough)
         if (document.visibilityState === 'visible') {
-          if (this.player && this.readyToPlay) {
+          if (this.player && this.readyToPlay && !this.previewVideo) {
             // The visibility change triggers a one-time, authoritative resync.
             // We set a flag to tell the
             // SYNC_TIME handler to perform a hard seek, bypassing the normal auto-sync logic.
@@ -328,7 +328,12 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       this.player = window.MediaSwitch ? new MediaSwitch(this.yt, {
         getId: link => this.core.getId(link),
         onDuration: (link, seconds) => this.reportMediaDuration(link, seconds),
-        onError: message => this.core.showToast(message, 6000),
+        onError: message => {
+          this.core.showToast(message, 6000);
+          if (this.previewVideo) {
+            this.sendBrowserMessage({ path: Commands.ERROR, data: { message, preview: true } });
+          }
+        },
         // Untrusted links only play if this viewer's own world allows them.
         allowUntrusted: () => this.core.allowUntrusted === true,
         // Asks this viewer's world to click the middle of their screen, for players (Twitch) that
@@ -365,6 +370,12 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
     }
 
     onYouTubeError(event) {
+      if (this.previewVideo) {
+        const msg = "Can't play this video here (blocked on embedded players). Try another version.";
+        this.core.showToast(msg, 6000);
+        this.sendBrowserMessage({ path: Commands.ERROR, data: { message: msg, preview: true } });
+        return;
+      }
       // Until the world's track starts, an error is the default video's, not the track's.
       if (this.readyToPlay) {
         const currentVideo = this.currentVideo || (this.playerData && this.playerData.playlist && this.playerData.playlist[this.playerData.currentTrack]);
@@ -398,7 +409,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       const p = this.player;
       const d = this.playerData;
       const video = this.currentVideo;
-      const watching = p && this.ytReady && this.readyToPlay && !this.pendingYt && video && d && !d.paused
+      const watching = p && this.ytReady && this.readyToPlay && !this.pendingYt && !this.previewVideo && video && d && !d.paused
         && !document.hidden && (!p.isYouTube || p.isYouTube()) && video.link !== this.unplayableLink;
       let t, state;
       try { t = p.getCurrentTime(); state = p.getPlayerState(); } catch (e) { t = null; }
@@ -480,6 +491,10 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
             // Another site's player may have taken over the screen meanwhile.
             if (this.player.isYouTube && !this.player.isYouTube()) return;
             frame.style.visibility = 'visible';
+            if (this.previewVideo) {
+              yt.loadVideoById(this.core.getId(this.previewVideo.link), 0);
+              return;
+            }
             const d = this.playerData;
             const video = this.currentVideo;
             if (!video || !d) return;
@@ -505,6 +520,12 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
     startPlaying() {
       if (this.readyToPlay) return;
       this.readyToPlay = true;
+      if (this.previewVideo) {
+        if (this.pendingTrackChange && this.playerData) this.applyTrackChange(this.pendingTrackChange);
+        this.pendingTrackChange = null;
+        this.initialSyncComplete = true;
+        return;
+      }
       if (this.pendingTrackChange && this.playerData) {
         // A track change was received before we were ready. Apply it now.
         const data = this.pendingTrackChange;
@@ -517,6 +538,10 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
 
     /** Plays where the world is (joining, or rejoining, an instance that has a playlist), once. */
     playInitialSync() {
+      if (this.previewVideo) {
+        this.initialSyncComplete = true;
+        return;
+      }
       if (!this.playerData || !this.playerData.playlist || !this.playerData.playlist.length || this.initialSyncComplete) return;
       // The sync may have waited (up to DEFAULT_VIDEO_WAIT_MS) for the player, so a playing track
       // starts where it is now; a paused one at its stored time.
@@ -567,6 +592,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
      * @param {number} seconds - Discovered duration in seconds.
      */
     reportMediaDuration(link, seconds) {
+      if (this.previewVideo) return;
       const video = this.currentVideo;
       if (!video || video.link !== link || video.duration) return;
       this.core.sendMessage({ path: Commands.MEDIA_DURATION, data: { link, duration: seconds } });
@@ -617,8 +643,21 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
           this.sendBrowserMessage(json);
         }
         break;
+      case Commands.PREVIEW_VIDEO:
+        this.applyPreview(json.data);
+        break;
       case Commands.SKIP_BACK:
       case Commands.SKIP_FORWARD: {
+        // While previewing a song, skip by the 5s playlist step so the viewer can check the lyrics,
+        // without turning off AutoSync or pausing for the host.
+        if (this.previewVideo) {
+          const amount = SkipJumpTimePlaylist;
+          const forward = json.path === Commands.SKIP_FORWARD;
+          this.player.seekTo(Math.max(0, this.player.getCurrentTime() + (forward ? amount : -amount)));
+          this.player.playVideo();
+          this.core.showToast(`${forward ? '+' : '-'}${amount}s (preview)`);
+          break;
+        }
         // A viewer's own skip. While the host has paused it stays paused (playing on would put
         // them ahead of everyone); the host's resume brings everyone to the same point.
         this.disableAutoSync(true);
@@ -661,11 +700,11 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         }
 
         // The specific 'set-track' logic is now handled by the TRACK_CHANGED command.
-        if (json.data.type === "stop" && this.readyToPlay) {
+        if (json.data.type === "stop" && this.readyToPlay && !this.previewVideo) {
           this.player.loadVideoById(this.core.getId("https://www.youtube.com/watch?v=GiwStUzx8fg"), 0);
         }
         // The initial sync waits for the player (startPlaying), unless the player was first.
-        if (json.data.type === 'initial-sync' && this.readyToPlay) this.playInitialSync();
+        if (json.data.type === 'initial-sync' && this.readyToPlay && !this.previewVideo) this.playInitialSync();
         break;
       case Commands.PLAYLIST_UPDATED:
         // This message is sent when the playlist order changes (e.g., move up/down).
@@ -720,6 +759,12 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         }
         break;
       case Commands.HOST_SEEK:
+        if (this.playerData && json.data) {
+          this.playerData.lastStartTime = json.data.newLastStartTime;
+          this.playerData.currentTime = json.data.newCurrentTime;
+          if (typeof json.data.paused === 'boolean') this.playerData.paused = json.data.paused;
+        }
+        if (this.previewVideo) break;
         if (this.player && this.readyToPlay && this.playerData) {
           const oldTime = this.player.getCurrentTime();
           const newTime = json.data.newCurrentTime;
@@ -727,10 +772,8 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
 
           this.player.seekTo(newTime);
           // A seek while paused stays paused, as the buttons and panel show.
-          if (typeof json.data.paused === 'boolean') this.playerData.paused = json.data.paused;
           if (this.playerData.paused) this.player.pauseVideo();
           else this.player.playVideo();
-          this.playerData.lastStartTime = json.data.newLastStartTime;
 
           // How far it really moved, from the server (older servers: from this screen's time).
           const moved = Number.isFinite(Number(json.data.skipped)) ? Number(json.data.skipped) : diff;
@@ -743,13 +786,14 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         break;
       case 'pause-state-changed':
         console.log("[PLAYER] PAUSE_STATE_CHANGED received from world", json.data);
+        if (this.playerData && json.data) {
+          this.playerData.paused = json.data.paused;
+          this.playerData.currentTime = json.data.currentTime;
+          this.playerData.lastStartTime = json.data.lastStartTime;
+        }
+        if (this.previewVideo) break;
         if (this.player && this.readyToPlay) {
           const { paused, currentTime, lastStartTime } = json.data;
-          if (this.playerData) {
-            this.playerData.paused = paused;
-            this.playerData.currentTime = currentTime;
-            this.playerData.lastStartTime = lastStartTime;
-          }
           if (paused) {
             console.log("[PLAYER] Pausing YouTube");
             this.player.pauseVideo();
@@ -788,6 +832,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         break;
       case Commands.SYNC_TIME:
         this.currentTime = json.data.currentTime;
+        if (this.previewVideo) break;
         // A live stream (Twitch channel, live .m3u8) has no shared position to keep in sync.
         if (this.player && this.player.isLive && this.player.isLive()) break;
         if(this.player && this.readyToPlay) {
@@ -1013,6 +1058,8 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       const index = data.newTrackIndex;
       // Plays the server's track even if this copy of the playlist has drifted, and refreshes it.
       this.core.fixTrackMismatch(this.playerData, data);
+      this.initialSyncComplete = true; // A track change is a definitive sync.
+      if (this.previewVideo) return;
 
       // The server provides the definitive start time.
       this.playVidya(index, data.newCurrentTime || 0, true, undefined, data.track);
@@ -1022,7 +1069,77 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         this.syncIntervalMs = SYNC_INTERVAL_FAST;
         this.scheduleNextSync();
       }
-      this.initialSyncComplete = true; // A track change is a definitive sync.
+    }
+
+    /**
+     * Starts or stops a local song preview on this viewer's screen.
+     * While previewing, room playback updates are recorded in `this.playerData` without
+     * interrupting the preview; stopping restores the room's current track (or silence when idle).
+     * @param {Object|null} video - Video object to preview, or null to return to the room's track.
+     */
+    applyPreview(video) {
+      clearTimeout(this.resumeSyncTimer);
+      this.resumeSyncPending = false;
+      this.isResumingFromPassthrough = false;
+      if (video && video.link) {
+        this.previewVideo = video;
+        // A track change that came before the player was ready only updates playerData now
+        // (applyTrackChange stops there while previewing), so stopping goes back to the right track.
+        if (this.pendingTrackChange && this.playerData) {
+          const pending = this.pendingTrackChange;
+          this.pendingTrackChange = null;
+          this.applyTrackChange(pending);
+        }
+        this.readyToPlay = true;
+        clearTimeout(this.syncTimeout);
+        try { this.player.setPlaybackRate(1.0); } catch (e) {}
+        if (this.player.loadMedia) this.player.loadMedia(video.link, 0);
+        else this.player.loadVideoById(this.core.getId(video.link), 0);
+        this.player.playVideo();
+        this.setVolume("spatial");
+        this.lastUrl = video.link;
+        this.currentVideo = video;
+        this.core.showToast("Previewing: " + (video.title || "song"));
+        return;
+      }
+      if (!this.previewVideo) return;
+      this.previewVideo = null;
+      this.lastUrl = null;
+      try { this.player.setPlaybackRate(1.0); } catch (e) {}
+      const d = this.playerData;
+      if (d && Array.isArray(d.playlist) && d.playlist.length > 0 && d.playlist[d.currentTrack]) {
+        const start = d.paused ? (Number(d.currentTime) || 0) : Math.max(0, this.worldTime());
+        this.playVidya(d.currentTrack, start, true);
+        this.initialSyncComplete = true;
+        if (!d.paused) {
+          // One sync to correct for the load time, once the track plays: YouTube drops a seek
+          // made while it's still loading, which would leave it at 0:00.
+          let tries = 0;
+          const resync = () => {
+            if (this.previewVideo) return;
+            let state;
+            try { state = this.player.getPlayerState(); } catch (e) {}
+            if (state !== YT.PlayerState.PLAYING && ++tries < 20) {
+              this.resumeSyncTimer = setTimeout(resync, 500);
+              return;
+            }
+            this.resumeSyncPending = true;
+            this.isResumingFromPassthrough = true;
+            this.core.sendMessage({ path: Commands.REQUEST_SYNC, data: { clientTimestamp: Date.now() } });
+          };
+          this.resumeSyncTimer = setTimeout(resync, 500);
+        }
+        if (this.autoSync) {
+          this.syncIntervalMs = SYNC_INTERVAL_FAST;
+          this.scheduleNextSync();
+        }
+      } else {
+        this.currentVideo = null;
+        const silenceUrl = "https://www.youtube.com/watch?v=GiwStUzx8fg";
+        if (this.player.loadMedia) this.player.loadMedia(silenceUrl, 0);
+        else this.player.loadVideoById(this.core.getId(silenceUrl), 0);
+        this.core.showToast("Preview stopped");
+      }
     }
 
     /**

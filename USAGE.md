@@ -165,7 +165,7 @@ In karaoke mode the Singers button (and the Join/Leave Queue button) opens the s
 - **Singers** is the queue. The host can **Play & Sing** anyone, move singers **Up** / **Down** and **Remove** them, and anyone can **Remove Me**.
 - While the player is unlocked, the singer at the top can start their own song with **Play & Sing**, but only when no song is playing, so nobody can cut into someone else's song. While it's locked, only the host can start songs.
 - While it's locked, other people can still pick a song with **Sing It**. It waits in the queue until the host presses **Approve** or **Reject**. Unlocking approves every waiting song.
-- **Search** finds a song (or takes a pasted video link). **Sing It** adds you to the queue with that song. You can be in the queue once.
+- **Search** finds a song (or takes a pasted video link). **Preview** plays the song on the main screen just for you (with **<< Skip**, **Skip >>**, **Sing It** and **Stop Preview** on the panel), so you can check that it loads and has lyrics before adding it; **Stop Preview**, **Sing It** or closing the panel returns your screen to the room's song. **Sing It** adds you to the queue with that song. You can be in the queue once.
 - **More...** has the host controls (lock, take over, Auto Advance, which starts the next singer when a song ends), seek, and your own player's skip, Auto Sync and Captions.
 
 Whoever runs the karaoke should take over the player first, as only the host can start other people's songs.

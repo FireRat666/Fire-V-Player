@@ -334,9 +334,37 @@ var Core = class {
     return !!media && (media.type === 'twitch' || media.type === 'twitchclip');
   }
   currentLink() {
+    if (this.previewVideo && this.previewVideo.link) return this.previewVideo.link;
     const p = this.player;
     const track = p && Array.isArray(p.playlist) && p.playlist.length ? p.playlist[p.currentTrack] : null;
     return track && track.link ? track.link : '';
+  }
+  // Plays `video` on this viewer's screen only (karaoke song preview), or goes back to the room's
+  // track when stopped.
+  startPreview(video) {
+    if (this.blocked || !video || !video.link) return;
+    const hadBrowser = this.browser;
+    const sameNative = this.nativeScreen && this.nativeScreen.link === video.link;
+    this.previewVideo = video;
+    this.updateScreen();
+    if (!this.nativeScreen && this.browser && this.browser === hadBrowser) {
+      Promise.resolve(this.sendBrowserMessage({ path: Commands.PREVIEW_VIDEO, data: video })).catch(() => {});
+    } else if (sameNative) {
+      this.nativeScreen.wantPaused = false;
+      this.nativeScreen.seek(0);
+      this.nativeScreen.applyPaused();
+    }
+  }
+  stopPreview() {
+    if (!this.previewVideo) return;
+    const hadBrowser = this.browser;
+    this.previewVideo = null;
+    this.updateScreen();
+    if (!this.nativeScreen && this.browser && this.browser === hadBrowser) {
+      Promise.resolve(this.sendBrowserMessage({ path: Commands.PREVIEW_VIDEO, data: null })).catch(() => {});
+    } else if (this.nativeScreen) {
+      this.nativeScreen.resync();
+    }
   }
   // The browser page's address, with the mode, captions, mute and volume as they are now.
   browserUrl() {
@@ -418,6 +446,9 @@ var Core = class {
   // on it instead, and the screen draws the space page's texture.
   createBrowser(url, surface = this.spaceSurface) {
     const browser = this.browser = { url, go: null, component: null, queue: [], removed: false, surface: surface || null };
+    if (this.previewVideo) {
+      Promise.resolve(this.sendBrowserMessage({ path: Commands.PREVIEW_VIDEO, data: this.previewVideo })).catch(() => {});
+    }
     const build = browser.surface ? this.buildSpaceScreen(browser) : this.buildBrowser(browser);
     browser.ready = build.catch(e => {
       console.error('[Core] Could not create the browser screen:', e);
@@ -1581,6 +1612,7 @@ var Core = class {
     // (Commands.CLICK_BROWSER, for Twitch) are browser actions, so they still work.
     this.setScreenInteraction(!blocked);
     if (!blocked) return;
+    this.stopPreview();
     if (this.playlistPanel && this.playlistPanel.visible) {
       Promise.resolve(this.playlistPanel.close()).catch(() => {});
     }
@@ -1626,6 +1658,7 @@ var Core = class {
     }
     const karaoke = mode === 'karaoke';
     console.log(`[Core] Switching to ${mode} mode${forEveryone ? ' (a space admin changed it)' : ''}.`);
+    this.stopPreview();
     this.isKaraoke = karaoke;
     // Without forEveryone the server only uses this when nobody else is in the space (see
     // App.requestInstanceMode).
@@ -2285,7 +2318,9 @@ var Core = class {
       this.browserAcks[msg.id] = null;
     }else{
       switch(msg.path) {
-          // handle other direct messages from the browser
+        case Commands.ERROR:
+          if (msg.data && msg.data.preview) this.notifyListeners(msg);
+          break;
       }
     }
   }
@@ -2484,6 +2519,10 @@ var Core = class {
           this.fixTrackMismatch(this.player, json.data);
           const track = this.player.playlist && this.player.playlist[this.player.currentTrack];
           if (track) this.player.duration = track.duration / 1000;
+          // If this viewer's own karaoke turn just started, end any song preview so their song plays.
+          if (this.isKaraoke && this.previewVideo && track && track.user && window.user && track.user.id === window.user.id) {
+            this.stopPreview();
+          }
         }
         break;
       case Commands.LISTS_UPDATED:
@@ -2739,6 +2778,7 @@ var Core = class {
     clearTimeout(this.adminWriteTimer);
     this.adminWriteTimer = null;
     this.removeJoinLeaveButton();
+    this.previewVideo = null;
 
     if (this.playlistPanel) {
       this.playlistPanel.destroy();

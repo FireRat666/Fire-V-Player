@@ -756,12 +756,13 @@ var FirePlaylistPanel = class {
     await this.div(tabs, { flexGrow: 1 });
     // Page buttons: first, back 5, back 1, forward 1, forward 5, last. With a scroll view they
     // move the window of rows (see LIST_WINDOW), and Now goes back to the playing video.
-    const pageBtn = { backgroundColor: GREY, paddingLeft: '12px', paddingRight: '12px', fontSize: '24px', minWidth: '48px' };
-    this.nowBtn = this.karaoke ? null : await this.button(tabs, '◉ Now', () => this.showCurrent(), pageBtn);
+    // Narrow, so the row fits beside the tabs with a long playlist's label (101-120 / 322).
+    const pageBtn = { backgroundColor: GREY, paddingLeft: '6px', paddingRight: '6px', marginLeft: '2px', marginRight: '2px', fontSize: '24px', minWidth: '44px' };
+    this.nowBtn = this.karaoke ? null : await this.button(tabs, '◉ Now', () => this.showCurrent(), Object.assign({}, pageBtn, { fontSize: '20px', paddingLeft: '10px', paddingRight: '10px' }));
     this.firstPageBtn = await this.button(tabs, '⇤', () => this.changePage(-Infinity), pageBtn);
     this.back5Btn = await this.button(tabs, '«', () => this.changePage(-PAGE_JUMP), pageBtn);
     this.prevPageBtn = await this.button(tabs, '‹', () => this.changePage(-1), pageBtn);
-    this.pageLabel = await this.label(tabs, '1 / 1', { fontSize: '18px', width: '130px', textAlign: 'center' });
+    this.pageLabel = await this.label(tabs, '1 / 1', { fontSize: '17px', width: '116px', textAlign: 'center', flexShrink: 0 });
     this.nextPageBtn = await this.button(tabs, '›', () => this.changePage(1), pageBtn);
     this.fwd5Btn = await this.button(tabs, '»', () => this.changePage(PAGE_JUMP), pageBtn);
     this.lastPageBtn = await this.button(tabs, '⇥', () => this.changePage(Infinity), pageBtn);

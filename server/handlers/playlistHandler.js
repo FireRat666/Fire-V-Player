@@ -109,16 +109,26 @@ async function addToPlaylist(app, ws, v, skipUpdate, isYoutubeWebsite) {
   }
 }
 
-/** Puts a video at the end of the playlist and tells everyone (unless `skipUpdate`). */
+/**
+ * Puts a video at the end of the playlist and tells everyone (unless `skipUpdate`). The first video
+ * of an empty playlist is sent as a track change, so the screens start playing it.
+ */
 function appendVideo(app, instanceId, video, skipUpdate) {
   const player = app.videoPlayers[instanceId];
-  if (!player.playlist.length) {
+  const wasEmpty = !player.playlist.length;
+  if (wasEmpty) {
     player.currentTrack = 0;
     player.currentTime = 0;
     player.lastStartTime = new Date().getTime() / 1000;
   }
   player.playlist.push(video);
-  if (!skipUpdate) {
+  if (skipUpdate) return;
+  if (wasEmpty) {
+    player.sockets.forEach(socket => app.send(socket, Commands.TRACK_CHANGED, {
+      newTrackIndex: player.currentTrack, track: video, paused: player.paused,
+      newLastStartTime: player.lastStartTime, playlist: player.playlist
+    }));
+  } else {
     player.sockets.forEach(socket => app.send(socket, Commands.ITEM_APPENDED, { video }));
   }
 }
@@ -179,8 +189,13 @@ async function suggestVideo(app, ws, v, isYoutubeWebsite) {
     app.send(ws, Commands.ERROR, { message: "This video is already waiting for the host." });
     return;
   }
-  // Checked again: the lookup above can take a while.
-  if (!player.locked || player.isKaraoke || player.host.id === ws.u.id) {
+  // Checked again: the lookup above can take a while. Switched to karaoke meanwhile, the playlist
+  // is put aside and songs go through the singer queue, so it isn't added either way.
+  if (player.isKaraoke) {
+    app.send(ws, Commands.ERROR, { message: 'The player switched to karaoke. Search for the song again to join the queue.' });
+    return;
+  }
+  if (!player.locked || player.host.id === ws.u.id) {
     appendVideo(app, ws.i, app._createVideoObject(resolvedV, ws.u, 'scraper', isYoutubeWebsite));
     await app.savePlayerState(ws.i);
     return;
@@ -226,14 +241,21 @@ async function rejectVideo(app, ws, link) {
 
 /**
  * Adds every waiting video to the playlist, for when the host unlocks the player (anyone can add
- * then). Returns whether any were waiting.
+ * then). In karaoke the playlist is put aside (savedPlaylist), so they go to the end of that, for
+ * when the room goes back to playlist mode. Returns whether any were waiting.
  */
 function approveAllVideos(app, instanceId) {
   const player = app.videoPlayers[instanceId];
   if (!player || !Array.isArray(player.waiting) || !player.waiting.length) return false;
   const waiting = player.waiting;
   player.waiting = [];
-  waiting.forEach(w => { if (!app._isDuplicateVideo(player, w.video.link)) appendVideo(app, instanceId, w.video); });
+  if (player.isKaraoke) {
+    if (!player.savedPlaylist || !Array.isArray(player.savedPlaylist.playlist)) player.savedPlaylist = { playlist: [], currentTrack: 0 };
+    const saved = player.savedPlaylist.playlist;
+    waiting.forEach(w => { if (!app._isDuplicateVideo({ playlist: saved }, w.video.link)) saved.push(w.video); });
+  } else {
+    waiting.forEach(w => { if (!app._isDuplicateVideo(player, w.video.link)) appendVideo(app, instanceId, w.video); });
+  }
   broadcastWaiting(app, instanceId);
   return true;
 }

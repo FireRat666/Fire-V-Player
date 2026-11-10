@@ -209,14 +209,30 @@ async function suggestVideo(app, ws, v, isYoutubeWebsite) {
   await app.savePlayerState(ws.i);
 }
 
-/** The host approves a waiting video: it goes to the end of the playlist. */
+/**
+ * Puts an approved waiting video at the end of the playlist, unless it's in it already. In karaoke
+ * the playlist is put aside (savedPlaylist), so it goes to the end of that, for when the room goes
+ * back to playlist mode.
+ */
+function addApproved(app, instanceId, video) {
+  const player = app.videoPlayers[instanceId];
+  if (player.isKaraoke) {
+    if (!player.savedPlaylist || !Array.isArray(player.savedPlaylist.playlist)) player.savedPlaylist = { playlist: [], currentTrack: 0 };
+    const saved = player.savedPlaylist.playlist;
+    if (!app._isDuplicateVideo({ playlist: saved }, video.link)) saved.push(video);
+  } else if (!app._isDuplicateVideo(player, video.link)) {
+    appendVideo(app, instanceId, video);
+  }
+}
+
+/** The host approves a waiting video: it goes to the end of the playlist (see addApproved). */
 async function approveVideo(app, ws, link) {
   app.onlyIfHost(ws, async () => {
     const player = app.videoPlayers[ws.i];
     const k = Array.isArray(player.waiting) ? player.waiting.findIndex(w => w.video.link === link) : -1;
     if (k < 0) return;
     const [w] = player.waiting.splice(k, 1);
-    if (!app._isDuplicateVideo(player, w.video.link)) appendVideo(app, ws.i, w.video);
+    addApproved(app, ws.i, w.video);
     broadcastWaiting(app, ws.i);
     await app.savePlayerState(ws.i);
   });
@@ -240,23 +256,16 @@ async function rejectVideo(app, ws, link) {
 }
 
 /**
- * Adds every waiting video to the playlist, for when the host unlocks the player (anyone can add
- * then). In karaoke the playlist is put aside (savedPlaylist), so they go to the end of that, for
- * when the room goes back to playlist mode. Returns whether any were waiting. It doesn't save the
- * player's state: the caller does (toggleLock saves after it).
+ * Adds every waiting video to the playlist (see addApproved), for when the host unlocks the player
+ * (anyone can add then). Returns whether any were waiting. It doesn't save the player's state: the
+ * caller does (toggleLock saves after it).
  */
 function approveAllVideos(app, instanceId) {
   const player = app.videoPlayers[instanceId];
   if (!player || !Array.isArray(player.waiting) || !player.waiting.length) return false;
   const waiting = player.waiting;
   player.waiting = [];
-  if (player.isKaraoke) {
-    if (!player.savedPlaylist || !Array.isArray(player.savedPlaylist.playlist)) player.savedPlaylist = { playlist: [], currentTrack: 0 };
-    const saved = player.savedPlaylist.playlist;
-    waiting.forEach(w => { if (!app._isDuplicateVideo({ playlist: saved }, w.video.link)) saved.push(w.video); });
-  } else {
-    waiting.forEach(w => { if (!app._isDuplicateVideo(player, w.video.link)) appendVideo(app, instanceId, w.video); });
-  }
+  waiting.forEach(w => addApproved(app, instanceId, w.video));
   broadcastWaiting(app, instanceId);
   return true;
 }

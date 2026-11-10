@@ -112,7 +112,7 @@ class Traffic {
     const fileBytes = [...this.files.values()].reduce((sum, e) => sum + e.bytes, 0);
     const requests = [...this.files.values()].reduce((sum, e) => sum + e.count, 0);
     const notModified = [...this.files.values()].reduce((sum, e) => sum + e.notModified, 0);
-    if (!raw && !requests && !this.wireOut) {
+    if (!raw && !requests && !this.wireOut && !this.wireIn && !this.connections) {
       this.reset();
       return;
     }

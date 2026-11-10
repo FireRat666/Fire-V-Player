@@ -268,7 +268,7 @@ async function movePlaylistItem(app, ws, { url, index }) {
       } else {
         app.send(ws, Commands.DOES_NOT_EXIST);
       }
-    }, app.videoPlayers[ws.i].locked && !app.videoPlayers[ws.i].canVote);
+    }); // the host's, even under Everyone (anyone may add, only the host changes the playlist)
   }
 }
 
@@ -296,7 +296,7 @@ async function removePlaylistItem(app, ws, index) {
         app.send(socket, Commands.ITEM_REMOVED, { index: index, newCurrentTrack: player.currentTrack });
       });
       await app.savePlayerState(ws.i);
-    }, app.videoPlayers[ws.i].locked && !app.videoPlayers[ws.i].canVote);
+    }); // the host's, even under Everyone (anyone may add, only the host changes the playlist)
   }
 }
 
@@ -557,7 +557,7 @@ async function clearPlaylist(app, ws, skipUpdate) {
         });
       }
       await app.savePlayerState(ws.i);
-    }, app.videoPlayers[ws.i].locked);
+    }); // the host's, even under Everyone
   }
 }
 
@@ -637,7 +637,9 @@ async function addAndPlay(app, ws, v) {
         app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, playlist: player.playlist });
       });
       await app.savePlayerState(ws.i);
-    }, app.videoPlayers[ws.i].locked, true); // karaoke turns are checked above
+      // Karaoke turns are checked above, so karaoke goes by the lock; in playlist mode it's the
+      // host's, even under Everyone.
+    }, app.videoPlayers[ws.i].isKaraoke ? app.videoPlayers[ws.i].locked : true, true);
   }
 }
 
@@ -673,7 +675,7 @@ async function addAndPlayNext(app, ws, v) {
         app.send(socket, Commands.ITEM_INSERTED, { video: newVideo, index: nextIndex });
       });
       await app.savePlayerState(ws.i);
-    }, app.videoPlayers[ws.i].locked);
+    }); // the host's, even under Everyone
   }
 }
 

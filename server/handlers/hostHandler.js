@@ -221,7 +221,7 @@ async function stop(app, ws) {
     await internalStop(app, ws.i);
     return;
   }
-  app.onlyIfHost(ws, async () => internalStop(app, ws.i), player.locked);
+  app.onlyIfHost(ws, async () => internalStop(app, ws.i));
 }
 
 /**
@@ -262,7 +262,7 @@ async function setVideoTrack(app, ws, data) {
     } else {
       app.send(ws, Commands.OUT_OF_BOUNDS);
     }
-  }, player.locked && !player.canVote);
+  }); // the host's, even under Everyone (or with voting on)
 }
 
 /**
@@ -303,7 +303,7 @@ async function setVideoTime(app, ws, time) {
       });
     });
     await app.savePlayerState(ws.i);
-  }, player.locked);
+  }); // the host's, even under Everyone
 }
 
 /**

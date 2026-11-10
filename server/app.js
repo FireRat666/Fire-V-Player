@@ -931,8 +931,10 @@ class App {
   onlyIfHost(ws, callback, locked, inKaraoke = false) {
     if (ws.u && ws.u.id && ws.i) {
       const player = this.videoPlayers[ws.i];
-      // Unlocked, anyone may use the playlist's controls. In karaoke they stay the host's (unless
-      // the caller says otherwise), so nobody can stop, seek, restart or remove someone's song.
+      // Unlocked, anyone may do what the caller opens this way (adding videos, saved lists).
+      // Playback and playlist changes don't pass a lock, so they stay the host's. In karaoke an
+      // unlocked action stays the host's too unless the caller says otherwise, so nobody can stop,
+      // seek, restart or remove someone's song.
       const open = locked === false && (!player || !player.isKaraoke || inKaraoke);
       if (player && (player.host.id === ws.u.id || open)) {
         callback();

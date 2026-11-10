@@ -35,4 +35,4 @@ It features a persistent state using a PostgreSQL database, making it suitable f
 
 ## License
 
-This project is licensed under the MIT License. See LICENSE.md for details.
+This project is licensed under the GNU General Public License v3.0 or later (GPL-3.0-or-later). See [LICENSE.md](LICENSE.md) for details.

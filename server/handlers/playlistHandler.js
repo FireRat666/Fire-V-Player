@@ -195,7 +195,7 @@ async function suggestVideo(app, ws, v, isYoutubeWebsite) {
     app.send(ws, Commands.ERROR, { message: 'The player switched to karaoke. Search for the song again to join the queue.' });
     return;
   }
-  if (!player.locked || player.host.id === ws.u.id) {
+  if (!player.locked || (player.host && player.host.id === ws.u.id)) {
     appendVideo(app, ws.i, app._createVideoObject(resolvedV, ws.u, 'scraper', isYoutubeWebsite));
     await app.savePlayerState(ws.i);
     return;
@@ -242,7 +242,8 @@ async function rejectVideo(app, ws, link) {
 /**
  * Adds every waiting video to the playlist, for when the host unlocks the player (anyone can add
  * then). In karaoke the playlist is put aside (savedPlaylist), so they go to the end of that, for
- * when the room goes back to playlist mode. Returns whether any were waiting.
+ * when the room goes back to playlist mode. Returns whether any were waiting. It doesn't save the
+ * player's state: the caller does (toggleLock saves after it).
  */
 function approveAllVideos(app, instanceId) {
   const player = app.videoPlayers[instanceId];

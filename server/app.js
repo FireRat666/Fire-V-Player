@@ -937,7 +937,17 @@ class App {
       // seek, restart or remove someone's song.
       const open = locked === false && (!player || !player.isKaraoke || inKaraoke);
       if (player && (player.host.id === ws.u.id || open)) {
-        callback();
+        // The callbacks are async and nothing waits for them, so an error in one is caught and
+        // logged here: an unhandled rejection would stop the whole server, not just this action.
+        const failed = (err) => {
+          console.error(`[ERROR] Action by ${App.who(ws.u)} in ${ws.i} failed:`, err);
+          try { this.send(ws, Commands.ERROR, { message: "That didn't work. Try again." }); } catch (e) { /* socket gone */ }
+        };
+        try {
+          Promise.resolve(callback()).catch(failed);
+        } catch (err) {
+          failed(err);
+        }
       } else {
         this.send(ws, Commands.ERROR);
       }

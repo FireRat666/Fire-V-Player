@@ -1477,7 +1477,7 @@ var Core = class {
     const scene = this.banterScene();
     if (!scene || this.watchingMode) return;
     this.watchingMode = true;
-    scene.On('space-state-changed', e => {
+    this.onSpaceStateChanged = e => {
       const d = e && e.detail;
       const changes = Array.isArray(d) ? d : (d && Array.isArray(d.changes) ? d.changes : []);
       const admin = changes.find(c => c && c.property === ADMIN_STATE_KEY);
@@ -1493,8 +1493,8 @@ var Core = class {
       // Only a change known to be to the protected value (which only admins can write) switches
       // the room for everyone. Anything less certain changes this player only.
       this.switchMode(override || this.defaultMode, isProtected);
-    });
-    scene.On('space-state-error', e => {
+    };
+    this.onSpaceStateError = e => {
       const d = (e && e.detail) || {};
       if (d.key === ADMIN_STATE_KEY || d.path === ADMIN_STATE_KEY) {
         console.warn('[Core] Could not take control as a space admin:', d.code, d.message);
@@ -1504,7 +1504,9 @@ var Core = class {
       if (d.key !== MODE_STATE_KEY && d.path !== MODE_STATE_KEY) return;
       console.warn('[Core] Could not save the mode:', d.code, d.message);
       this.modeWriteRefused(d.code);
-    });
+    };
+    scene.On('space-state-changed', this.onSpaceStateChanged);
+    scene.On('space-state-error', this.onSpaceStateError);
   }
 
   // Saves the mode for everyone in the space ('karaoke', 'playlist', or null for the snippet's).
@@ -2790,6 +2792,8 @@ var Core = class {
     this.blockedTimer = null;
     clearTimeout(this.adminWriteTimer);
     this.adminWriteTimer = null;
+    clearTimeout(this.modeWriteTimer);
+    this.modeWriteTimer = null;
     this.removeJoinLeaveButton();
     this.previewVideo = null;
 
@@ -2834,7 +2838,10 @@ var Core = class {
       if (this.onHandUserJoined) scene.Off('user-joined', this.onHandUserJoined);
       if (this.onHeadUserLeft) scene.Off('user-left', this.onHeadUserLeft);
       if (this.onHeadUserJoined) scene.Off('user-joined', this.onHeadUserJoined);
+      if (this.onSpaceStateChanged) scene.Off('space-state-changed', this.onSpaceStateChanged);
+      if (this.onSpaceStateError) scene.Off('space-state-error', this.onSpaceStateError);
     }
+    this.onSpaceStateChanged = this.onSpaceStateError = null;
     this.onPoseUpdate = this.onHeadPose = this.onHandUserLeft = this.onHandUserJoined = this.onHeadUserLeft = this.onHeadUserJoined = null;
     this.watchingHandUser = false;
     console.log("Removed the world's objects.");

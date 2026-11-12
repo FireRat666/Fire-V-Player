@@ -110,7 +110,7 @@ In a Creator SDK world (`Assets/WebRoot/index.html`), add the player as a snippe
   spatial="true"
   spatial-min-distance="5"
   spatial-max-distance="40"
-  audio="auto"
+  audio-3d="true"
   audio-position=""
   controls-follow-screen="false"
   button-position="0 0.83 2"
@@ -397,32 +397,31 @@ All parameters are optional unless marked as **(Required)**.
 | `position` | The `x y z` position of the player screen in the 3D scene. | `0 0 0` |
 | `rotation` | The `x y z` rotation of the player screen. | `0 0 0` |
 | `scale` | The `x y z` scale of the player screen. | `1 1 1` |
-| `spatial` | Set to `true` to make the volume fade as you move away from the screen. Turned off, the volume is the same wherever you stand. It works with every `audio` setting. Each viewer can pick their own with the panel's **◔ Fade** button (in ☰), which their device remembers. | `true` |
+| `spatial` | Set to `true` to make the volume fade as you move away from the screen. Turned off, the volume is the same wherever you stand. It works with both `audio-3d` settings. Each viewer can pick their own with the panel's **◔ Fade** button (in ☰), which their device remembers. | `true` |
 | `spatial-min-distance` | The distance at which the sound starts to fade (with `spatial` on). | `5` |
 | `spatial-max-distance` | How far past `spatial-min-distance` the sound reaches zero. | `40` |
-| `audio` | Where the sound is heard from: `auto`, `2d` or `3d`. See [2D and 3D sound](#2d-and-3d-sound). Each viewer can pick their own with the panel's **♫ Sound** button (in ☰), which their device remembers. | `auto` |
+| `audio-3d` | `true`: 3D sound from the direction of the screen (or the audio positions). `false`: 2D sound, the same in both ears. See [2D and 3D sound](#2d-and-3d-sound). Each viewer can pick their own with the panel's **♫ Sound** button (in ☰), which their device remembers. | `true` |
 | `audio-position` | The `x y z` position the sound comes from, in the same terms as `position`. Empty: the screen. | *(empty)* |
 | `audio-position-left`, `audio-position-right` | Separate `x y z` positions for the left and right speakers of a **video file**, for stereo across a room. Links play through one speaker, which uses `audio-position`. | *(empty)* |
 | `mip-maps` | The number of mip-map levels for the browser texture, in older Banter clients. The Creator SDK ignores it. | `1` |
 
 #### 2D and 3D sound
 
-| `audio` | What you hear |
+| `audio-3d` | What you hear |
 |---|---|
-| `auto` | As the SDK plays it: links from the screen's direction, video files all round you. |
-| `2d` | The same in both ears. |
-| `3d` | From the direction of the screen (or the audio positions). |
+| `true` | 3D sound from the direction of the screen (or the audio positions). |
+| `false` | 2D sound, the same in both ears. |
 
-Whether the sound gets quieter with distance is the separate `spatial` setting, which works with all three: full volume within `spatial-min-distance`, silent `spatial-max-distance` further on.
+Whether the sound gets quieter with distance is the separate `spatial` setting, which works with both: full volume within `spatial-min-distance`, silent `spatial-max-distance` further on.
 
-`2d`, `3d` and the audio positions set the Unity Audio Sources the sound plays through, on PC and on Quest:
+`audio-3d` and the audio positions set the Unity Audio Sources the sound plays through, on PC and on Quest:
 
-- **Links (YouTube and so on)** play through the screen browser's speakers. The space-page screen (`space-screen`) has no speakers a page can set, so while `audio` is `2d` or `3d`, or an audio position is set, the screen is a browser of its own instead.
+- **Links (YouTube and so on)** play through the screen browser's speakers. The space-page screen (`space-screen`) has no speakers a page can set, so while `audio-3d` is `false` (2D), or an audio position is set, the screen is a browser of its own instead.
 - **Video files** play through the world's video player, which has a speaker for each channel.
 
-> **Left and right are for video files only.** `audio-position-left` and `audio-position-right` place a stereo **video file's** two sides, which have a speaker each. A browser (YouTube, Twitch and every other link) plays both sides through **one** speaker that neither a page nor a kit can split or copy in the app as it is (its content check refuses graphs that touch the browser's sound emitter). That speaker goes to `audio-position`, or stays at the screen. In `3d` it fades with distance from there when `spatial` is on, and doesn't fade when `spatial` is off.
+> **Left and right are for video files only.** `audio-position-left` and `audio-position-right` place a stereo **video file's** two sides, which have a speaker each. A browser (YouTube, Twitch and every other link) plays both sides through **one** speaker that neither a page nor a kit can split or copy in the app as it is (its content check refuses graphs that touch the browser's sound emitter). That speaker goes to `audio-position`, or stays at the screen. With `audio-3d` on it fades with distance from there when `spatial` is on, and doesn't fade when `spatial` is off.
 
-> **This needs an app with the SDK's typed API (`BS.Unity`).** The page sets the speakers through it. In an app without it, `2d`, `3d` and the audio positions do nothing (`spatial` still fades the volume), and the player says so in the console and when a viewer picks a sound in the panel.
+> **This needs an app with the SDK's typed API (`BS.Unity`).** The page sets the speakers through it. In an app without it, `audio-3d="false"` (2D) and the audio positions do nothing (`spatial` still fades the volume), and the player says so in the console and when a viewer picks a sound in the panel.
 
 ### UI & Control Parameters
 

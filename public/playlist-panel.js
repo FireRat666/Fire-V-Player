@@ -1134,10 +1134,9 @@ var FirePlaylistPanel = class {
       this.core.setScreenResolution(next || null);
       this.render();
     }, { backgroundColor: '#00838f', width: '330px' });
-    // Steps this viewer's sound through the snippet's setting, 2D and 3D (Core's audioMode).
+    // Switches this viewer's sound between 2D and 3D (Core's audioMode).
     this.audioBtn = await this.button(mineRow2, '♫', () => {
-      const now = this.core.viewerAudio;
-      this.core.setAudioMode(!now ? '2d' : now === '2d' ? '3d' : null);
+      this.core.setAudioMode(this.core.audioMode() === '3d' ? '2d' : '3d');
       this.render();
     }, { backgroundColor: '#4527a0', width: '330px' });
     // Turns this viewer's distance fade on or off (Core's fadeOn).

@@ -2721,6 +2721,13 @@ var Core = class {
         // Merge new data into the existing player state.
         // This is crucial because the in-world script shares this state object with the UI.
         this.player = Object.assign(this.player || {}, json.data.video);
+        // Joining while a karaoke song counts down to its start (a time below zero): when it
+        // ends, as a track change sets it, so the world's video player waits too.
+        if (json.data.type === 'initial-sync') {
+          const video = json.data.video || {};
+          const countdown = -Number(video.currentTime);
+          this.countdownUntil = countdown > 0 && video.paused !== true ? performance.now() + countdown * 1000 : 0;
+        }
         // The server's build (see server/version.js), shown in the panel. Older servers don't send it.
         if (typeof json.data.version === 'string') this.serverVersion = json.data.version;
         break;

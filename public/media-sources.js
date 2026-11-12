@@ -129,7 +129,7 @@ var MediaSources = (() => {
     // A screen shared through screen.sdq.st (a mediasoup server): its watch link
     // (screen.sdq.st:8443/?room=<room>), or its publish link, which names the same room. The
     // player joins the room as a watcher itself, so the publish page is never opened.
-    if (host === 'screen.sdq.st') {
+    if (host === 'screen.sdq.st' && u.protocol === 'https:') {
       const room = (u.searchParams.get('room') || '').trim();
       return room ? { type: 'sdq', room: room.slice(0, 100), origin: u.origin } : null;
     }

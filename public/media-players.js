@@ -944,7 +944,7 @@ class SdqSource extends BaseMediaSource {
   async connect() {
     if (this.destroyed) return;
     this.leave();
-    const run = this.run = { consumers: {}, busy: {} };
+    const run = this.run = { consumers: {}, busy: {}, closed: {} };
     const stale = () => this.destroyed || this.run !== run;
     try {
       await Promise.all([loadMediaScript(`${this.origin}/js/mediasoup-client.min.js`), loadMediaScript(`${this.origin}/socket.io/socket.io.js`)]);
@@ -974,17 +974,26 @@ class SdqSource extends BaseMediaSource {
       const consume = async kind => {
         if (stale() || run.busy[kind] || run.consumers[kind]) return;
         run.busy[kind] = true;
+        run.closed[kind] = false; // set if the sharing stops while this is under way
+        let consumer = null;
+        const drop = () => {
+          try { if (consumer) consumer.close(); } catch (e) {}
+          if (consumer && run.consumers[kind] === consumer) { delete run.consumers[kind]; this.showTracks(run); }
+        };
         try {
           const data = await request('consume', { rtpCapabilities: device.rtpCapabilities, kind }).catch(() => null);
           if (stale() || !data || !data.producerId) return;
-          const consumer = await transport.consume({ id: data.id, producerId: data.producerId, kind: data.kind, rtpParameters: data.rtpParameters });
-          if (stale()) { consumer.close(); return; }
+          consumer = await transport.consume({ id: data.id, producerId: data.producerId, kind: data.kind, rtpParameters: data.rtpParameters });
+          // Stopped while it was being taken: there's nothing to play, and the next start asks again.
+          if (stale() || run.closed[kind]) { drop(); return; }
           run.consumers[kind] = consumer;
           console.log(`[Screen share] ${this.room}: ${kind} started`);
           this.showTracks(run);
           // The server holds video back until it's asked for (sound comes straight away).
           if (kind === 'video') await request('resume', { kind });
         } catch (e) {
+          // Not left half taken (video the server never started sending), so it's asked for again.
+          drop();
           console.log(`[Screen share] ${this.room}: could not take the ${kind}:`, e && e.message || e);
         } finally {
           run.busy[kind] = false;
@@ -993,6 +1002,7 @@ class SdqSource extends BaseMediaSource {
       socket.on('newProducer', m => { if (m && m.kind) consume(m.kind); });
       socket.on('producerClosed', m => {
         const kind = m && m.kind;
+        if (kind && run.busy[kind]) run.closed[kind] = true;
         if (!kind || !run.consumers[kind]) return;
         try { run.consumers[kind].close(); } catch (e) {}
         delete run.consumers[kind];
@@ -1000,6 +1010,7 @@ class SdqSource extends BaseMediaSource {
         this.showTracks(run);
       });
       this.ready = true;
+      this.saidWaiting = false;
       this.showTracks(run);
       await consume('video');
       await consume('audio');
@@ -1022,9 +1033,12 @@ class SdqSource extends BaseMediaSource {
   /** Leaves the room and joins again in a few seconds. */
   retry(run, why) {
     if (this.destroyed || this.run !== run) return;
-    console.log(`[Screen share] ${this.room}: ${why}, joining again in 5s`);
+    // The server has no room until someone shares into it, so that's waiting, not a fault.
+    const waiting = /room does not exist/i.test(String(why));
+    if (!waiting || !this.saidWaiting) console.log(`[Screen share] ${this.room}: ${waiting ? 'nobody is sharing yet, checking every 5s' : why + ', joining again in 5s'}`);
+    this.saidWaiting = waiting;
     this.leave();
-    this.showNote(`Connecting to ${this.room}...`);
+    this.showNote(waiting ? `Waiting for ${this.room} to start sharing...` : `Connecting to ${this.room}...`);
     this.retryTimer = setTimeout(() => this.connect(), 5000);
   }
 

@@ -1137,6 +1137,8 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       if (!Array.isArray(this.playerData.playlist)) this.playerData.playlist = [];
       this.playerData.currentTrack = data.newTrackIndex;
       this.playerData.lastStartTime = data.newLastStartTime;
+      // The new track's own time, so a preview that ends while it's paused starts it there.
+      this.playerData.currentTime = Number(data.newCurrentTime) || 0;
       if (typeof data.paused === 'boolean') this.playerData.paused = data.paused;
 
       const index = data.newTrackIndex;
@@ -1340,7 +1342,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       try { this.player.setPlaybackRate(1.0); } catch (e) {}
       const d = this.playerData;
       if (d && Array.isArray(d.playlist) && d.playlist.length > 0 && d.playlist[d.currentTrack]) {
-        const start = d.paused ? (Number(d.currentTime) || 0) : Math.max(0, this.worldTime());
+        const start = d.paused ? Math.max(0, Number(d.currentTime) || 0) : Math.max(0, this.worldTime());
         this.playVidya(d.currentTrack, start, true);
         this.initialSyncComplete = true;
         if (!d.paused) {

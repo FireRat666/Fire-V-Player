@@ -91,7 +91,7 @@ var FireNativeScreen = (() => {
       await core.addComponent(go, core.bsComponent('Plane', { width: w, height: h }, 'BanterPlane', [w, h]));
       await core.addComponent(go, core.bsComponent('Material', { shaderName: 'Unlit/Diffuse' }, 'BanterMaterial', ['Unlit/Diffuse']));
       if (this.destroyed) return;
-      const settings = { url: this.link, volume: this.unityVolume(), loop: false, playOnAwake: !this.wantPaused && !this.holding(), skipOnDrop: true, waitForFirstFrame: true };
+      const settings = { url: this.link, volume: this.unityVolume(), loop: false, playOnAwake: !this.wantPaused && !this.held(), skipOnDrop: true, waitForFirstFrame: true };
       const vp = await core.addComponent(go, core.bsComponent('VideoPlayer', settings,
         'BanterVideoPlayer', [settings.url, settings.volume, settings.loop, settings.playOnAwake, settings.skipOnDrop, settings.waitForFirstFrame]));
       if (this.destroyed) return;
@@ -256,6 +256,8 @@ var FireNativeScreen = (() => {
 
     /** True while a karaoke song is counting down to its start: the file waits, paused, at 0:00. */
     holding() { return performance.now() < this.holdUntil; }
+    /** The same, for the room's track only: a viewer's own preview of the same file plays through it. */
+    held() { return this.holding() && !this.isPreview(); }
 
     /** Starts a hold from a track change the core has just had, if it's counting down. */
     holdFromCore() {
@@ -312,7 +314,7 @@ var FireNativeScreen = (() => {
       if (!vp || !this.prepared) return;
       const now = performance.now();
       if (now - this.lastToggleAt < TOGGLE_COOLDOWN_MS) return;
-      const paused = this.wantPaused || this.holding(); // a countdown keeps it paused too
+      const paused = this.wantPaused || this.held(); // a countdown keeps the room's track paused too
       if (this.playing() === !paused) return;
       // At the end, playing again would start the file over. The server moves on instead.
       const d = this.duration();

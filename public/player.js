@@ -24,7 +24,17 @@ const SYNC_INTERVAL_SLOW = 4000;   // Sync every 4s when well-synced.
 /** @constant {number} Drift threshold in seconds above which a hard seek is executed */
 const LARGE_DRIFT_THRESHOLD = 0.5; // Above 500ms, do a hard seek. This should be rare.
 /** @constant {number} Drift threshold in seconds below which playback is considered in sync */
-const SMALL_DRIFT_THRESHOLD = 0.04; // Below 40ms, we are considered perfectly in-sync.
+const SMALL_DRIFT_THRESHOLD = 0.15; // Below 150ms, we are considered in-sync (network jitter alone reaches tens of ms).
+/** @constant {number} Drift in seconds at which a speed correction that has started stops */
+const SETTLED_DRIFT_THRESHOLD = 0.05; // Stops well inside the band, so it doesn't start again straight away.
+/** @constant {number} A sync answer that took longer than this (ms) to come back is too unsure to act on */
+const MAX_SYNC_ROUND_TRIP_MS = 400;
+/** @constant {number} Readings in a row over LARGE_DRIFT_THRESHOLD before a hard seek */
+const LARGE_DRIFT_READINGS = 2;
+/** @constant {number} Drift in seconds a new track is corrected for once it plays (see syncAfterLoad) */
+const START_SYNC_THRESHOLD = 0.3;
+/** @constant {number} How many times a new track is checked: a seek loads again, which can leave it behind again */
+const START_SYNC_PASSES = 3;
 /** @constant {number} Proportional gain multiplier for subtle playback rate adjustments */
 const PROPORTIONAL_GAIN = 0.15;     // How aggressively to correct small drifts.
 /** @constant {number} Maximum allowed playback rate deviation (+/- 5%) */
@@ -359,8 +369,22 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         'iv_load_policy': 3,
         'origin': window.location.origin,
         'start': Number(start) || 0,
-        'vq': 'hd1080'
+        'vq': this.youTubeQuality()
       };
+    }
+
+    /**
+     * The YouTube quality to ask for: the smallest that fills this page, whose height is the
+     * screen's resolution (720 for 1280 x 720, up to 2160). Asking for more than the screen
+     * shows only makes the device decode more, which a Quest in a busy world can't keep up with.
+     * YouTube still drops lower by itself when the connection can't carry it.
+     */
+    youTubeQuality() {
+      const height = Math.round((window.innerHeight || 720) * (window.devicePixelRatio || 1));
+      const levels = [[360, 'medium'], [480, 'large'], [720, 'hd720'], [1080, 'hd1080'], [1440, 'hd1440'], [2160, 'hd2160']];
+      // A little over a level still gets that level (900 high asks for 1080p, 740 for 720p).
+      const level = levels.find(([h]) => height <= h * 1.05) || levels[levels.length - 1];
+      return level[1];
     }
 
     onYouTubeState(event) {
@@ -553,6 +577,8 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       const start = !d.paused && Number.isFinite(live) ? Math.max(0, live) : d.currentTime;
       this.playVidya(d.currentTrack, start, true);
       this.initialSyncComplete = true;
+      // Joining takes time to load too, so it catches up once it plays.
+      if (!d.paused) this.syncAfterLoad();
       // This is the first sync, so we should start with a fast interval.
       if (this.autoSync) {
         this.syncIntervalMs = SYNC_INTERVAL_FAST;
@@ -669,6 +695,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         if (this.resumeSyncPending) {
           this.resumeSyncPending = false;
           this.isResumingFromPassthrough = false;
+          this.startSyncPasses = 0;
         }
         const amount = this.core.isKaraoke ? SkipJumpTimeKaraoke : SkipJumpTimePlaylist;
         const forward = json.path === Commands.SKIP_FORWARD;
@@ -842,6 +869,9 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
           // Calculate latency on-the-fly from the echoed timestamp
           const roundTripTime = Date.now() - json.data.clientTimestamp;
           const latency = roundTripTime / 2 / 1000; // latency in seconds
+          // A track counting down to its start has nothing to sync to yet, unless this screen
+          // asked after loading (below).
+          if (Number(json.data.currentTime) < 0 && !(this.isResumingFromPassthrough && this.startSyncPasses)) break;
 
           const serverTime = json.data.currentTime + latency;
           const localTime = this.player.getCurrentTime();
@@ -871,6 +901,27 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
               this.player.pauseVideo();
               break;
             }
+            // A track that has just loaded (see syncAfterLoad) only moves if it's really out, and
+            // is looked at again afterwards, as the seek itself takes time to load.
+            const passes = this.startSyncPasses || 0;
+            this.startSyncPasses = 0;
+            if (passes) {
+              if (!Number.isFinite(timediff)) { this.syncAfterLoad(passes); break; } // not the answer to our question
+              // Still counting down to the start (see holdStart, which syncs when it ends).
+              if (serverTime < 0) { if (!this.holdTimer) this.syncAfterLoad(passes); break; }
+              if (Math.abs(timediff) > START_SYNC_THRESHOLD) {
+                console.log(`[PLAYER] The new track is ${timediff.toFixed(2)}s behind the world after loading, catching up.`);
+                this.core.showToast(`Catching up: ${timediff > 0 ? '+' : '-'}${this.durationText(Math.abs(timediff))}`);
+                this.player.seekTo(serverTime);
+                this.player.playVideo();
+                if (passes > 1) this.syncAfterLoad(passes - 1);
+              }
+              if (this.autoSync) {
+                this.syncIntervalMs = SYNC_INTERVAL_FAST;
+                this.scheduleNextSync();
+              }
+              break;
+            }
             this.core.showToast(`Resyncing after pause...`);
             this.player.seekTo(serverTime);
             // Explicitly call playVideo() after seeking, as seekTo() can sometimes
@@ -894,7 +945,21 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
               this.player.playVideo();
             }
 
-            if (Math.abs(timediff) > LARGE_DRIFT_THRESHOLD) {
+            // A changed speed and a seek are both heard in music, so neither is done on a reading
+            // that may be wrong: an answer that came back late (a busy device or a slow network
+            // makes the drift look bigger than it is) is skipped, and a seek waits for a second
+            // large reading in a row.
+            const correcting = this.player.getPlaybackRate() !== 1.0;
+            const late = roundTripTime > MAX_SYNC_ROUND_TRIP_MS;
+            const large = !late && Math.abs(timediff) > LARGE_DRIFT_THRESHOLD;
+            this.largeDriftReadings = large ? (this.largeDriftReadings || 0) + 1 : 0;
+            if (late) {
+              this.syncIntervalMs = SYNC_INTERVAL_NORMAL;
+            } else if (large && this.largeDriftReadings < LARGE_DRIFT_READINGS) {
+              // Checked again very soon, before anything is changed.
+              this.syncIntervalMs = SYNC_INTERVAL_FAST;
+            } else if (large) {
+              this.largeDriftReadings = 0;
               // Large drift, a hard seek is necessary for a quick correction.
               const direction = timediff > 0 ? 'FORWARDS +' : 'BACKWARDS -';
               const amount = Math.abs(Math.round(timediff * 100) / 100);
@@ -903,7 +968,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
               this.player.setPlaybackRate(1.0); // Ensure rate is normal after a seek.
               // High drift, so we should check again very soon.
               this.syncIntervalMs = SYNC_INTERVAL_FAST;
-            } else if (Math.abs(timediff) > SMALL_DRIFT_THRESHOLD) {
+            } else if (Math.abs(timediff) > (correcting ? SETTLED_DRIFT_THRESHOLD : SMALL_DRIFT_THRESHOLD)) {
               // Small drift, adjust playback speed for a smooth, unnoticeable correction.
               // The adjustment is proportional to the drift. A positive drift means we are
               // behind, so we need to speed up (newRate > 1.0).
@@ -916,7 +981,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
               this.syncIntervalMs = SYNC_INTERVAL_NORMAL;
             } else {
               // We are in sync, ensure playback rate is normal.
-              if (this.player.getPlaybackRate() !== 1.0) {
+              if (correcting) {
                 this.player.setPlaybackRate(1.0);
               }
               // Low drift, we can afford to check less frequently.
@@ -1064,14 +1129,156 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       this.initialSyncComplete = true; // A track change is a definitive sync.
       if (this.previewVideo) return;
 
-      // The server provides the definitive start time.
-      this.playVidya(index, data.newCurrentTime || 0, true, undefined, data.track);
+      // The server provides the definitive start time. A time below zero is a countdown (karaoke
+      // songs): the track loads now and starts when it reaches zero, on every screen together.
+      const at = Number(data.newCurrentTime) || 0;
+      this.playVidya(index, Math.max(0, at), true, undefined, data.track);
+      clearInterval(this.holdTimer);
+      this.holdTimer = null;
+      this.hideCountdown();
+      // Everyone gets the track at the same moment, but each device takes its own time to load
+      // it, so without this a slow one stays that far behind for the whole song (heard most in
+      // karaoke, where nobody uses Auto Sync).
+      if (this.playerData.paused) return;
+      if (at < 0) this.holdStart(-at);
+      else this.syncAfterLoad();
 
       // When a track changes, sync fast so the new song starts off in sync.
       if (this.autoSync) {
         this.syncIntervalMs = SYNC_INTERVAL_FAST;
         this.scheduleNextSync();
       }
+    }
+
+    /**
+     * Holds a track that has just been loaded at its start for `seconds`, then plays it. The
+     * time is used to load it, so it starts at once when the wait ends. YouTube plays a track as
+     * soon as it has loaded whatever it's told while loading, so it's paused again as often as
+     * it starts.
+     * @param {number} seconds
+     */
+    holdStart(seconds) {
+      clearTimeout(this.resumeSyncTimer);
+      const until = Date.now() + seconds * 1000;
+      console.log(`[PLAYER] Holding the new track for ${seconds.toFixed(1)}s so everyone starts together.`);
+      let shown = 0;
+      const video = this.currentVideo || {};
+      this.showCountdown(null, video.user && video.user.name, video.title);
+      try { this.player.pauseVideo(); } catch (e) {}
+      clearInterval(this.holdTimer);
+      this.holdTimer = setInterval(() => {
+        const paused = this.playerData && this.playerData.paused;
+        if (Date.now() >= until || this.previewVideo || paused) {
+          clearInterval(this.holdTimer);
+          this.holdTimer = null;
+          this.hideCountdown();
+          if (this.previewVideo || paused) return;
+          let state;
+          try { state = this.player.getPlayerState(); } catch (e) {}
+          console.log(`[PLAYER] Countdown over, playing (the player's state was ${state}).`);
+          try { this.player.playVideo(); } catch (e) {}
+          this.syncAfterLoad();
+          return;
+        }
+        // A new number each second, over the whole screen.
+        const left = Math.ceil((until - Date.now()) / 1000);
+        if (left !== shown) { shown = left; this.showCountdown(left); }
+        try {
+          if (this.player.getPlayerState() === YT.PlayerState.PLAYING) {
+            this.player.pauseVideo();
+            if (this.player.getCurrentTime() > 0.2) this.player.seekTo(0);
+          }
+        } catch (e) {}
+      }, 150);
+    }
+
+    /**
+     * The countdown over the whole screen: who is singing and what, and a number that pops in
+     * each second inside a ring that drains. `number` null only builds it (before the first).
+     * @param {number|null} number
+     * @param {string} [singer]
+     * @param {string} [title]
+     */
+    showCountdown(number, singer, title) {
+      let el = this.countdownEl;
+      if (!el) {
+        if (!document.getElementById('fvp-countdown-style')) {
+          const style = document.createElement('style');
+          style.id = 'fvp-countdown-style';
+          style.textContent = `
+            #fvp-countdown { position: fixed; inset: 0; z-index: 99999; display: flex; flex-direction: column;
+              align-items: center; justify-content: center; color: #fff; font-family: 'Roboto', sans-serif;
+              background: radial-gradient(circle at center, rgba(74,20,140,0.92) 0%, rgba(10,10,25,0.97) 70%);
+              opacity: 1; transition: opacity 0.25s ease-out; pointer-events: none; text-align: center; }
+            #fvp-countdown.out { opacity: 0; }
+            #fvp-countdown .who { font-size: 6vh; font-weight: 700; letter-spacing: 0.04em; color: #ffd54f; text-shadow: 0 0 2vh rgba(255,213,79,0.6); max-width: 90vw; }
+            #fvp-countdown .what { font-size: 3.6vh; margin-top: 1vh; opacity: 0.85; max-width: 80vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+            #fvp-countdown .ring { position: relative; width: 44vh; height: 44vh; margin-top: 4vh; display: flex; align-items: center; justify-content: center; }
+            #fvp-countdown svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+            #fvp-countdown circle { fill: none; stroke-width: 6; }
+            #fvp-countdown .track { stroke: rgba(255,255,255,0.15); }
+            #fvp-countdown .sweep { stroke: #00e5ff; stroke-linecap: round; stroke-dasharray: 283; }
+            #fvp-countdown .sweep.run { animation: fvp-sweep 1s linear; }
+            #fvp-countdown .num { font-size: 30vh; font-weight: 900; line-height: 1; text-shadow: 0 0 4vh rgba(0,229,255,0.9), 0 0 10vh rgba(213,0,249,0.7); }
+            #fvp-countdown .num.pop { animation: fvp-pop 1s cubic-bezier(.2,1.6,.4,1); }
+            #fvp-countdown .ready { font-size: 4vh; margin-top: 3vh; letter-spacing: 0.3em; text-transform: uppercase; opacity: 0.8; }
+            @keyframes fvp-pop { 0% { transform: scale(2.4); opacity: 0; } 25% { transform: scale(1); opacity: 1; } 80% { transform: scale(1); opacity: 1; } 100% { transform: scale(0.7); opacity: 0.2; } }
+            @keyframes fvp-sweep { from { stroke-dashoffset: 0; } to { stroke-dashoffset: 283; } }`;
+          document.head.appendChild(style);
+        }
+        el = this.countdownEl = document.createElement('div');
+        el.id = 'fvp-countdown';
+        el.innerHTML = '<div class="who"></div><div class="what"></div><div class="ring">'
+          + '<svg viewBox="0 0 100 100"><circle class="track" cx="50" cy="50" r="45"></circle><circle class="sweep" cx="50" cy="50" r="45"></circle></svg>'
+          + '<div class="num"></div></div><div class="ready">Get ready</div>';
+        document.body.appendChild(el);
+      }
+      clearTimeout(this.countdownHideTimer);
+      el.classList.remove('out');
+      if (singer !== undefined) el.querySelector('.who').textContent = singer ? `Now singing: ${singer}` : '';
+      if (title !== undefined) el.querySelector('.what').textContent = title || '';
+      if (number == null) return;
+      const num = el.querySelector('.num'), sweep = el.querySelector('.sweep');
+      num.textContent = String(number);
+      // Removing and adding the class again restarts the animations for each number.
+      num.classList.remove('pop'); sweep.classList.remove('run');
+      void num.offsetWidth;
+      num.classList.add('pop'); sweep.classList.add('run');
+    }
+
+    /** Fades the countdown out and removes it. */
+    hideCountdown() {
+      const el = this.countdownEl;
+      if (!el) return;
+      this.countdownEl = null;
+      el.classList.add('out');
+      this.countdownHideTimer = setTimeout(() => el.remove(), 300);
+    }
+
+    /**
+     * Puts a track that has just been loaded where the world is, once it plays: it asks the
+     * server for the time and seeks there if this screen is more than START_SYNC_THRESHOLD out
+     * (see SYNC_TIME). It waits for the track to play first, as YouTube drops a seek made while
+     * it's still loading, which would leave it at 0:00. Works with Auto Sync off.
+     * @param {number} [passes] - Checks left, this one included.
+     */
+    syncAfterLoad(passes = START_SYNC_PASSES) {
+      clearTimeout(this.resumeSyncTimer);
+      let tries = 0;
+      const resync = () => {
+        if (this.previewVideo || !this.player || (this.playerData && this.playerData.paused)) return;
+        let state;
+        try { state = this.player.getPlayerState(); } catch (e) {}
+        if (state !== YT.PlayerState.PLAYING && ++tries < 30) {
+          this.resumeSyncTimer = setTimeout(resync, 500);
+          return;
+        }
+        this.startSyncPasses = passes;
+        this.resumeSyncPending = true; // a skip before the answer cancels it
+        this.isResumingFromPassthrough = true;
+        this.core.sendMessage({ path: Commands.REQUEST_SYNC, data: { clientTimestamp: Date.now() } });
+      };
+      this.resumeSyncTimer = setTimeout(resync, 500);
     }
 
     /**
@@ -1115,22 +1322,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         this.playVidya(d.currentTrack, start, true);
         this.initialSyncComplete = true;
         if (!d.paused) {
-          // One sync to correct for the load time, once the track plays: YouTube drops a seek
-          // made while it's still loading, which would leave it at 0:00.
-          let tries = 0;
-          const resync = () => {
-            if (this.previewVideo) return;
-            let state;
-            try { state = this.player.getPlayerState(); } catch (e) {}
-            if (state !== YT.PlayerState.PLAYING && ++tries < 20) {
-              this.resumeSyncTimer = setTimeout(resync, 500);
-              return;
-            }
-            this.resumeSyncPending = true;
-            this.isResumingFromPassthrough = true;
-            this.core.sendMessage({ path: Commands.REQUEST_SYNC, data: { clientTimestamp: Date.now() } });
-          };
-          this.resumeSyncTimer = setTimeout(resync, 500);
+          this.syncAfterLoad();
         }
         if (this.autoSync) {
           this.syncIntervalMs = SYNC_INTERVAL_FAST;

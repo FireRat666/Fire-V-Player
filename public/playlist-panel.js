@@ -83,6 +83,14 @@ var PROGRESS_WIDTH = 820;
 // downloaded for as long as the client runs (UIElementBridge's texture cache) and never checks one
 // is still there, so after a rejoin a cached link can show nothing and never download again.
 var THUMB_VISIT = Date.now().toString(36);
+// Symbols drawn as pictures (public/assets/icons, served from the assets host) when a button's or label's text starts with
+// one (see setIconText): pause, cross, crown (the host), menu, fade, hand.
+var ICON_FILES = { '\u275A\u275A': 'pause', '\u2715': 'close', '\u265B': 'host', '\u2630': 'menu', '\u25D4': 'fade', '\u261A': 'hand' };
+var ICON_TINTS = { '#80deea': '-80deea', '#ffd54f': '-ffd54f' };
+var ICON_START = /^(\u275A\u275A|[\u2715\u265B\u2630\u25D4\u261A])\s?([\s\S]*)$/;
+// What the panel shows for those symbols in the middle of a sentence, where a picture can't go:
+// pause bars, cross, crown (the host), menu, fade, pointing hand.
+var PLAIN_SYMBOLS = { '\u275A': '|', '\u2715': '\u00D7', '\u265B': '\u25C9', '\u2630': '=', '\u25D4': '~', '\u261A': '\u25C0' };
 var FirePlaylistPanel = class {
   constructor(core) {
     this.core = core;
@@ -128,6 +136,7 @@ var FirePlaylistPanel = class {
     this.failed = false;
     this.clockSkew = 0;
     this.cache = new Map();
+    this.iconParts = new Map(); // elements whose text starts with a picture icon (see setIconText)
     this.renderTimer = null;
     this.tickTimer = null;
     this.statusTimer = null;
@@ -214,9 +223,55 @@ var FirePlaylistPanel = class {
     c[key] = value;
     return true;
   }
+  // The UI font on a Quest has fewer symbols than on PC, and draws an empty box for one it
+  // lacks. These are the ones seen missing there, with a symbol or letter it has. PC shows the
+  // same, so the panel looks alike everywhere and what's tested on one holds on the other.
+  plainSymbols(text) {
+    return text.replace(/[\u275A\u2715\u265B\u2630\u25D4\u261A]/g, ch => PLAIN_SYMBOLS[ch]);
+  }
   setText(el, text) {
     text = text == null ? '' : String(text);
+    // Text that starts with one of the picture icons (see ICON_FILES), or an element that has
+    // shown one before, is drawn as a picture and a label inside the element.
+    const m = ICON_START.exec(text);
+    if (m || this.iconParts.has(el)) return this.setIconText(el, m ? ICON_FILES[m[1]] : null, m ? m[2] : text);
+    text = this.plainSymbols(text);
     if (this._changed(el, 'text', text)) el.text = text;
+  }
+  // The picture icons: the UI font on a Quest lacks these symbols, and pictures look the same
+  // on every device. The element's own text is emptied, and it gets a picture and a label as
+  // children (as iconButton's do), made once and then only changed. `file` null shows text only
+  // (the pause button's play symbol, say).
+  setIconText(el, file, rest) {
+    let part = this.iconParts.get(el);
+    if (!part) {
+      part = { el };
+      this.iconParts.set(el, part);
+      if (this._changed(el, 'text', '')) el.text = '';
+      el.SetStyles(Object.assign({ display: 'flex', flexDirection: 'row', alignItems: 'center' }, el.fvpButton ? { justifyContent: 'center' } : {}));
+      const size = `${Math.round((parseFloat(el.fvpFontSize) || 20) * 1.3)}px`;
+      part.building = (async () => {
+        part.img = await this.div(el, { width: size, height: size, flexShrink: 0 });
+        part.txt = await this.label(el, '', { fontSize: el.fvpFontSize || '20px', color: el.fvpColor || '#ffffff', whiteSpace: 'nowrap', flexShrink: 1, overflow: 'hidden', textOverflow: 'ellipsis' });
+        part.building = null;
+        this.applyIconText(part);
+      })().catch(e => console.warn('[PlaylistPanel] Could not make an icon:', e));
+    }
+    part.file = file;
+    part.rest = this.plainSymbols(rest || '');
+    if (!part.building) this.applyIconText(part);
+  }
+  applyIconText(part) {
+    // The pictures are white; the two other text colours that carry one have their own copies.
+    // The address changes each visit, as the thumbnails' do: the app keeps pictures by address,
+    // and one kept from an earlier visit to the space shows as an empty box.
+    const tint = ICON_TINTS[String(part.el.fvpColor || '').toLowerCase()] || '';
+    const url = part.file ? `url("${this.core.assetUrl(`icons/${part.file}${tint}.png`)}?fvp=${THUMB_VISIT}")` : 'none';
+    if (this._changed(part.img, 'backgroundImage', url)) part.img.SetStyles({ backgroundImage: url });
+    this.display(part.img, !!part.file);
+    this.display(part.txt, !!part.rest);
+    this.setStyle(part.txt, 'marginLeft', part.file && part.rest ? '8px' : '0px');
+    if (this._changed(part.txt, 'text', part.rest)) part.txt.text = part.rest;
   }
   display(el, on) {
     const v = on ? 'flex' : 'none';
@@ -390,6 +445,8 @@ var FirePlaylistPanel = class {
   async label(parent, text, styles) {
     const el = await this.ready(this.ui.CreateLabel(undefined, parent));
     el.SetStyles(Object.assign({ color: '#ffffff', fontSize: '20px', backgroundColor: 'rgba(0,0,0,0)' }, styles || {}));
+    el.fvpFontSize = (styles && styles.fontSize) || '20px'; // for a picture icon (see setIconText)
+    el.fvpColor = (styles && styles.color) || '#ffffff';
     this.setText(el, text);
     return el;
   }
@@ -402,6 +459,9 @@ var FirePlaylistPanel = class {
       marginLeft: '4px', marginRight: '4px', marginTop: '4px', marginBottom: '4px',
       borderRadius: '10px', borderWidth: '0px', backgroundImage: 'none'
     }, styles || {}));
+    el.fvpButton = true; // for a picture icon (see setIconText)
+    el.fvpFontSize = (styles && styles.fontSize) || '20px';
+    el.fvpColor = (styles && styles.color) || '#ffffff';
     this.setText(el, text);
     // Guard against a click arriving twice from one press.
     let last = 0;
@@ -424,7 +484,7 @@ var FirePlaylistPanel = class {
     return btn;
   }
 
-  // The UI font has symbols (▶ ◀◀ ✓ ✕ ♛ ...) but no colour emoji, so a padlock and a speaker are
+  // The UI font has symbols (▶ ◀◀ ✓ ...; fewer on Quest, see plainSymbols) but no colour emoji, so a padlock and a speaker are
   // drawn from boxes. A padlock: the shackle (a round-topped border) over the body; open lifts the
   // shackle to the right.
   async drawLock(parent, open, color = '#ffffff') {
@@ -908,13 +968,13 @@ var FirePlaylistPanel = class {
       ['▶ Sing', 'When it is your turn and no song is playing, press it on your name to start.'],
       ['☎ Phone', 'Shows a code. Send a link from your phone into your search, no typing in VR.'],
       ['♛ Host', 'Runs the karaoke. Press the host name at the top to see who can start songs, or to take over.'],
-      ['☚ Hand', 'Your hand controls: move them in ☰. The orange button folds them away to one button.']
+      ['☚ Hand', 'Your hand controls: move them in More (the green button). The orange button folds them away to one button.']
     ] : [
       ['+ Search & Add', 'Search YouTube, Internet Archive, Tubi, NASA+ or ESO (the button beside the box picks), or paste a link.'],
       ['☎ Phone', 'Shows a code. Send a link from your phone into your search, no typing in VR.'],
       ['☰ Lists', 'Saved playlists for this room. + All puts a whole list on the end.'],
       ['♛ Host', 'Runs the player for everyone. Press the host name at the top to see who else can control it, or to take over.'],
-      ['☚ Hand', 'Your hand controls: move them in ☰. The orange button folds them away to one button.']
+      ['☚ Hand', 'Your hand controls: move them in More (the green button). The orange button folds them away to one button.']
     ];
     for (const [name, text] of tips) {
       const tip = await row(howCol, { alignItems: 'flex-start', marginTop: '8px' });
@@ -951,7 +1011,9 @@ var FirePlaylistPanel = class {
       ['♛', 'The host, who runs the player'],
       ['☰', 'More: settings and host controls'],
       ['CC', 'Captions on your screen'],
-      ['▣', 'Your screen\'s sharpness (resolution)']
+      ['▣', 'Your screen\'s sharpness (resolution)'],
+      ['♫', 'Your sound: all round you (2D) or from the screen (3D)'],
+      ['◔', 'Your sound gets quieter as you walk away, or not']
     ];
     let legendRow = null;
     for (let k = 0; k < legend.length; k++) {
@@ -969,7 +1031,7 @@ var FirePlaylistPanel = class {
     // Who controls the player: the three choices in ☰ (see controlLevel).
     const controlBox = await infoBox();
     await heading(controlBox, 'Who controls the player');
-    await colText(controlBox, 'The host (♛) picks one of these in ☰. The padlock at the top shows which is on.', { color: '#bbbbbb' });
+    await colText(controlBox, 'The host picks one of these in More (the green button). The padlock at the top shows which is on.', { color: '#bbbbbb' });
     for (const [level, open, color, name] of this.controlLevels()) {
       const line = await row(controlBox, { marginTop: '8px', alignItems: 'center' });
       const chip = await this.div(line, {
@@ -1070,6 +1132,17 @@ var FirePlaylistPanel = class {
       this.core.setScreenResolution(next || null);
       this.render();
     }, { backgroundColor: '#00838f', width: '330px' });
+    // Steps this viewer's sound through the snippet's setting, 2D and 3D (Core's audioMode).
+    this.audioBtn = await this.button(mineRow2, '♫', () => {
+      const now = this.core.viewerAudio;
+      this.core.setAudioMode(!now ? '2d' : now === '2d' ? '3d' : null);
+      this.render();
+    }, { backgroundColor: '#4527a0', width: '330px' });
+    // Turns this viewer's distance fade on or off (Core's fadeOn).
+    this.fadeBtn = await this.button(mineRow2, '◔', () => {
+      this.core.setFade(this.core.fadeOn() ? 'off' : 'on');
+      this.render();
+    }, { backgroundColor: '#4527a0', width: '330px' });
     // Steps the hand controls through their places (Core's HAND_PLACES), when the snippet has them.
     if (this.core.params['hand-controls'] === 'true') {
       this.handBtn = await this.button(mineRow2, '☚', () => {
@@ -1342,8 +1415,12 @@ var FirePlaylistPanel = class {
     if (!head || !head.position) return null;
     const p = head.position;
     let yaw = null;
+    // Toward the hand only when the head comes from pose-update, whose facing can't be trusted.
+    // The head marker's own facing is what the player sees, and it's in the same space as its
+    // position; the hand's pose comes another way, and aiming at it put the panel to one side
+    // (desktop players' hands don't follow their view) or off where the play space had moved.
     const hand = this.core.handPose;
-    if (fromHand && hand && hand.position) {
+    if (fromHand && head.source !== 'marker' && hand && hand.position) {
       const dx = hand.position.x - p.x, dz = hand.position.z - p.z;
       if (Math.hypot(dx, dz) > 0.05) yaw = Math.atan2(dx, dz);
     }
@@ -1424,12 +1501,13 @@ var FirePlaylistPanel = class {
     const root = this.root, mover = this.mover;
     if (!root || !mover) return;
     if (where === 'front') {
+      await this.core.freshHeadPose(); // where the player looks now, not at the last report
       const pose = this.frontPose(fromHand);
       if (!pose) return;
       this.frontYaw = pose.yaw;
       const f = n => Number(n).toFixed(2);
       const head = this.core.headPose();
-      console.log(`[PlaylistPanel] In front: head (${head.source}) ${f(head.position.x)} ${f(head.position.y)} ${f(head.position.z)}, facing ${Math.round(pose.yaw)} degrees${fromHand ? ' (toward the left hand)' : ''}.`);
+      console.log(`[PlaylistPanel] In front: head (${head.source}) ${f(head.position.x)} ${f(head.position.y)} ${f(head.position.z)}, facing ${Math.round(pose.yaw)} degrees${fromHand && head.source !== 'marker' ? ' (toward the hand)' : ''}.`);
       if (this.core.params['screen-debug'] === 'true') {
         this.setStatus(`Head (${head.source}) ${f(head.position.x)} ${f(head.position.y)} ${f(head.position.z)}, facing ${Math.round(pose.yaw)}°`, 15000);
       }
@@ -2424,6 +2502,8 @@ var FirePlaylistPanel = class {
     this.setOnOff(this.captionsBtn, this.core.captions !== false, 'CC');
     const [resW, resH] = this.core.screenPageSize();
     if (this.handBtn) this.setText(this.handBtn, `☚ ${this.core.handPlaceLabel()}`);
+    if (this.audioBtn) this.setText(this.audioBtn, `♫ Sound: ${this.core.audioModeLabel()}`);
+    if (this.fadeBtn) this.setText(this.fadeBtn, `◔ Fade: ${this.core.fadeLabel()}`);
     this.setText(this.resolutionBtn, `▣ ${resW} × ${resH}${this.core.viewerResolution ? '' : ' (default)'}`);
 
     // Space admins only, but shown to everyone
@@ -2556,7 +2636,7 @@ var FirePlaylistPanel = class {
 
     let empty = '';
     if (!items.length) {
-      if (onLists) empty = "No saved lists. Paste a YouTube playlist or a list of links into + Search & Add (or ☰ > + Add by link) and choose ★ Save for Everyone or ☆ Save for Me.";
+      if (onLists) empty = "No saved lists. Paste a YouTube playlist or a list of links into + Search & Add (or More > + Add by link) and choose ★ Save for Everyone or ☆ Save for Me.";
       else if (onSearch) empty = this.karaoke ? 'Search for a song above, or paste a link.' : 'Search YouTube above, or paste a YouTube, Twitch, Vimeo or video link.';
       else if (this.karaoke) empty = host ? 'No singers yet. Use Search to pick a song and join the queue.' : 'No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first (press ♛ at the top).';
       else empty = 'The playlist is empty. Use Search to add videos.';

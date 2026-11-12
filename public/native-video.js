@@ -335,6 +335,12 @@ var FireNativeScreen = (() => {
       const latency = Math.max(0, Date.now() - Number(data.clientTimestamp || Date.now())) / 2000;
       const serverTime = Number(data.currentTime) + (this.wantPaused ? 0 : latency);
       if (!Number.isFinite(serverTime)) return;
+      // A karaoke song counting down to its start: asked again when it has started.
+      if (serverTime < 0) {
+        clearTimeout(this.countdownTimer);
+        this.countdownTimer = setTimeout(() => this.requestSync(hard), -serverTime * 1000 + 250);
+        return;
+      }
       const d = this.duration();
       if (d && serverTime >= d - 0.5) return; // about to end; the server moves on
       // Ended with no known length: the server keeps counting until someone skips, so only a

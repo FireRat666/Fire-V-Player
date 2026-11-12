@@ -22,6 +22,11 @@ var SCREEN_MAX_RESOLUTION = 3840;
 var SCREEN_RESOLUTIONS = [1280, 1600, 1920, 2560, 3840];
 var SCREEN_STANDALONE_MAX_RESOLUTION = 2560;
 var RESOLUTION_PREF_KEY = 'fire-v-player-resolution';
+// Each viewer's own choice of sound (2d or 3d) over the snippet's `audio`, remembered on their device.
+var AUDIO_PREF_KEY = 'fire-v-player-audio';
+var FADE_PREF_KEY = 'fire-v-player-fade';
+// How often the screen's speakers are looked at again (the SDK makes new ones as videos start).
+var AUDIO_CHECK_MS = 1500;
 // Where each viewer keeps their hand controls (see HAND_PLACES), remembered on their device.
 var HAND_PLACE_PREF_KEY = 'fire-v-player-hand-place';
 // Whether each viewer has folded their hand controls away to just the show/hide button.
@@ -368,7 +373,7 @@ var Core = class {
   }
   // The browser page's address, with the mode, captions, mute and volume as they are now.
   browserUrl() {
-    const volume = this.params.spatial === 'true' ? this.tempVolume : this.params.volume;
+    const volume = this.fadesVolume() && Number.isFinite(Number(this.tempVolume)) ? this.tempVolume : this.params.volume;
     return String(this.initialUrl || '')
       .replace(/([?&]mode=)[^&]*/, `$1${this.getMode()}`)
       .replace(/([?&]captions=)[^&]*/, `$1${this.captions !== false}`)
@@ -390,6 +395,7 @@ var Core = class {
       if (this.nativeScreen) this.nativeScreen.destroy();
       console.log('[Core] A file is playing, so the world\'s video player takes the browser\'s place.');
       this.nativeScreen = new FireNativeScreen(this, link);
+      this.audioBusyUntil = Date.now() + 20000; // its speakers appear as it starts (see applyAudio)
       this.syncSecondScreens();
       return;
     }
@@ -399,9 +405,12 @@ var Core = class {
       this.nativeScreen = null;
     }
     // The space page when this player has it, unless the track needs clicking.
-    const surface = this.spaceSurface && !this.needsClickableScreen(link) ? this.spaceSurface : null;
+    // Nor for 2D or 3D sound: the space page's speakers aren't the world's, so the page can't set them.
+    const surface = this.spaceSurface && !this.needsClickableScreen(link) && !this.wantsRealAudio() ? this.spaceSurface : null;
     if (this.browser && (this.browser.surface || null) !== surface) {
-      console.log(surface ? '[Core] Back to the space-page screen.' : '[Core] This needs clicking, so the screen is a browser for now.');
+      console.log(surface ? '[Core] Back to the space-page screen.'
+        : this.wantsRealAudio() ? '[Core] 2D or 3D sound needs a browser\'s speakers, so the screen is a browser.'
+        : '[Core] This needs clicking, so the screen is a browser for now.');
       this.removeBrowser();
     }
     if (!this.browser) this.createBrowser(this.browserUrl(), surface);
@@ -473,9 +482,11 @@ var Core = class {
     // Clicks on the page, except for a blacklisted person (see setBlocked).
     this.setScreenInteraction(!this.blocked);
     // The sound plays from the screen at the same volume everywhere (the SDK's Flat fade); the
-    // `spatial` setting does its own fade. A BS Browser has no 2D sound: on PC it's always heard
-    // from the screen's direction, and on Quest the page plays its own sound, which isn't placed.
+    // `spatial` setting does its own fade. On PC it's heard from the screen's direction unless
+    // the `audio` setting says otherwise (see applyAudio); on Quest the page plays its own sound,
+    // which isn't placed.
     if ('rolloffMode' in component || this.modernSdk()) component.rolloffMode = 0;
+    this.applyAudio(true);
     // A size picked meanwhile in the panel.
     if (this.screenPageSize()[0] !== w) this.applyScreenResolution();
     // The address may have changed while the screen was being made.
@@ -896,9 +907,16 @@ var Core = class {
     return Math.max(SCREEN_MIN_RESOLUTION, Math.min(SCREEN_MAX_RESOLUTION, w));
   }
   defaultResolution() { return this.clampResolution(this.params.resolution) || 1600; }
-  // A standalone headset (Quest, Pico) or phone: its browser says Android (or Quest, Pico, Mobile).
+  // A standalone headset (Quest, Pico) or phone. The app's browser on a Quest gives a Windows
+  // user agent, so the platform is looked at too: "Linux aarch64" there, with Android as the
+  // user agent data's platform.
   isStandaloneDevice() {
-    try { return /Android|Quest|OculusBrowser|Pico|Mobile/i.test(navigator.userAgent || ''); } catch (e) { return false; }
+    try {
+      const data = navigator.userAgentData;
+      return /Android|Quest|OculusBrowser|Pico|Mobile/i.test(navigator.userAgent || '')
+        || /Android|aarch64|arm/i.test(navigator.platform || '')
+        || !!(data && /Android/i.test(data.platform || ''));
+    } catch (e) { return false; }
   }
   // The highest resolution a viewer can pick for themselves on this device (the snippet's own
   // `resolution` still goes up to SCREEN_MAX_RESOLUTION for everyone).
@@ -1072,7 +1090,7 @@ var Core = class {
   }
   // The volume this viewer hears: the setting, faded by their distance while `spatial` is on.
   heardVolume() {
-    const fade = this.params.spatial === 'true' && Number.isFinite(this.spatialFade) ? this.spatialFade : 1;
+    const fade = this.fadesVolume() && Number.isFinite(this.spatialFade) ? this.spatialFade : 1;
     return Math.round(this.params.volume * fade);
   }
   // Sends the screen the volume this viewer hears. The buttons go through here, so with `spatial`
@@ -1813,11 +1831,31 @@ var Core = class {
     if (m && m.position) return Object.assign({ source: 'marker' }, m);
     return this.lastHead ? Object.assign({ source: 'pose-update' }, this.lastHead) : null;
   }
+  // The head's pose read from Unity at this moment, where the app's typed API (BS.Unity) allows:
+  // the marker's reports can be a moment old, and a panel opened on a stale pose opens where the
+  // player was looking, not where they look now. Falls back to headPose().
+  async freshHeadPose() {
+    const marker = this.headMarker;
+    const U = typeof BS !== 'undefined' && BS.Unity;
+    try {
+      if (marker && U && U.Transform && typeof marker.GetComponentAsync === 'function') {
+        if (this.headTransformOf !== marker) {
+          this.headTransform = await marker.GetComponentAsync(U.Transform);
+          this.headTransformOf = marker;
+        }
+        const t = this.headTransform;
+        if (t) {
+          const [position, rotation] = await Promise.all([t.GetPosition(), t.GetRotation()]);
+          if (position && rotation && this.headMarker === marker) this.headMarkerPose = { position, rotation };
+        }
+      }
+    } catch (e) {}
+    return this.headPose();
+  }
   setupSpatial() {
     const scene = this.banterScene();
-    if (!scene || this.params.spatial !== 'true' || this.onPoseUpdate) return;
-    const p = this.vec3(this.params.position, [0, 0, 0]);
-    this.spatialScreen = { x: p[0], y: p[1], z: -p[2] }; // in Unity's axes, like the head
+    if (!scene || this.onPoseUpdate) return;
+    this.loadAudioPref();
     this.spatialSentAt = Date.now();
     this.onPoseUpdate = e => {
       // The head marker when it reports (pose-update's values don't match the world on Quest, see
@@ -1827,29 +1865,269 @@ var Core = class {
       this.updateSpatialVolume(head && head.position);
     };
     scene.On('pose-update', this.onPoseUpdate);
+    if ((this.audioMode() !== 'auto' || this.hasAudioPosition()) && !this.canSetSpeakers()) {
+      console.warn(`[Core] audio="${this.audioMode()}" and the audio positions need the SDK's typed API (BS.Unity), which this app doesn't have: 2d, 3d and the positions do nothing here.`);
+    }
+    // Looks at the speakers often for a while after the screen or the choice changes (the SDK
+    // makes them as the sound starts), then only now and then: each look is a search of the
+    // screen's children in Unity, which a Quest in a heavy world shouldn't do every second.
+    this.audioTimer = setInterval(() => {
+      this.audioTick = (this.audioTick || 0) + 1;
+      if (Date.now() < (this.audioBusyUntil || 0) || this.audioTick % 6 === 0) this.applyAudio(false);
+    }, AUDIO_CHECK_MS);
   }
   // Fades the volume for the head at `position` (world space), at most every 500 ms, and sends it
-  // only when the volume heard changes.
-  updateSpatialVolume(position) {
-    if (!position || !this.spatialScreen || this.blocked) return;
-    const now = Date.now();
-    if (now - this.spatialSentAt <= 500) return;
-    this.spatialSentAt = now;
-    const screen = this.spatialScreen;
-    const minDistance = Number(this.params["spatial-min-distance"]);
-    const maxDistance = Number(this.params["spatial-max-distance"]);
-    const a = position.x - screen.x;
-    const b = position.y - screen.y;
-    const c = position.z - screen.z;
-    const distance = Math.sqrt(a * a + b * b + c * c);
-    this.spatialFade = Math.max(0, Math.min(1, (maxDistance - (distance - minDistance)) / maxDistance));
+  // only when the volume heard changes. `now` skips the wait (the sound setting just changed).
+  updateSpatialVolume(position, now) {
+    if (position) this.spatialHead = position;
+    position = position || this.spatialHead;
+    if (this.blocked) return;
+    const at = Date.now();
+    if (!now && at - this.spatialSentAt <= 500) return;
+    this.spatialSentAt = at;
+    if (this.fadesVolume() && position) {
+      const from = this.audioWorldPosition();
+      const minDistance = Number(this.params["spatial-min-distance"]);
+      const maxDistance = Number(this.params["spatial-max-distance"]);
+      const a = position.x - from.x;
+      const b = position.y - from.y;
+      const c = position.z - from.z;
+      const distance = Math.sqrt(a * a + b * b + c * c);
+      const fade = Math.max(0, Math.min(1, (maxDistance - (distance - minDistance)) / maxDistance));
+      this.spatialFade = Number.isFinite(fade) ? fade : 1;
+    } else {
+      this.spatialFade = 1;
+    }
     const roundedVolume = this.heardVolume();
-    if(this.tempVolume != roundedVolume) {
+    // Nothing to send before the first fade: the screen starts at the volume setting.
+    if(this.tempVolume != roundedVolume && (this.tempVolume !== undefined || this.fadesVolume())) {
       // Rejected while there's no screen yet, which is fine: the next pose tries again.
       Promise.resolve(this.sendBrowserMessage({path: Commands.SET_VOLUME, data: roundedVolume, type: 'spatial'}))
         .catch(() => {});
     }
     this.tempVolume = roundedVolume;
+  }
+
+  // ---------------------------------------------------------------- 2D or 3D sound
+  // The `audio` setting, or the viewer's own choice in the panel:
+  //   auto  as before: the SDK's own sound (from the screen's direction on PC, all round you on
+  //         Quest).
+  //   2d    the same in both ears.
+  //   3d    from where the screen is (or `audio-position`).
+  // Whether it gets quieter with distance is the separate `spatial` setting (see fadeOn), between
+  // spatial-min-distance and spatial-max-distance past it, for all three.
+  // 2d and 3d are real where the sound plays through Unity Audio Sources the page can reach with
+  // the SDK's typed API (BS.Unity): a BS Browser's speakers on PC, and the world's video player
+  // on PC and Quest. Elsewhere (a BS Browser on Quest, whose page plays its own sound, and the
+  // space-page screen) the sound stays as the SDK plays it.
+  audioMode() {
+    const mode = String(this.viewerAudio || this.params.audio || 'auto').trim().toLowerCase();
+    return mode === '2d' || mode === '3d' ? mode : 'auto';
+  }
+  // Where the sound comes from, in Unity's axes: `audio-position`, else the screen. A speaker
+  // that plays both sides (a browser's) goes here; it can't be split between the left and right
+  // places, which are for speakers that play one side each (the video player's).
+  audioWorldPosition() {
+    const p = this.vec3(this.params['audio-position'], null) || this.vec3(this.params.position, [0, 0, 0]);
+    return { x: p[0], y: p[1], z: -p[2] };
+  }
+  // `audio-position-left` or `audio-position-right` in Unity's axes, or null.
+  audioSidePosition(side) {
+    const p = this.vec3(this.params['audio-position-' + side], null);
+    return p ? { x: p[0], y: p[1], z: -p[2] } : null;
+  }
+  hasAudioPosition() {
+    return !!(this.vec3(this.params['audio-position'], null) || this.audioSidePosition('left') || this.audioSidePosition('right'));
+  }
+  // Whether this app lets a page set speakers at all: the SDK's typed API (BS.Unity).
+  canSetSpeakers() {
+    const U = typeof BS !== 'undefined' && BS.Unity;
+    return !!(U && U.AudioSource);
+  }
+  // Whether the sound chosen needs speakers the page can set (see applyAudio).
+  wantsRealAudio() {
+    return this.canSetSpeakers() && (this.audioMode() !== 'auto' || this.hasAudioPosition());
+  }
+  // Whether the sound gets quieter with distance: the `spatial` setting, or the viewer's own
+  // choice in the panel. It's separate from 2D or 3D, so either can fade or not.
+  fadeOn() {
+    return this.viewerFade ? this.viewerFade === 'on' : this.params.spatial === 'true';
+  }
+  // Whether this page fades the volume by distance itself. Real 3D sound is faded by Unity.
+  fadesVolume() {
+    return this.fadeOn() && !(this.audioMode() === '3d' && this.realAudio);
+  }
+  loadAudioPref() {
+    try {
+      const saved = localStorage.getItem(AUDIO_PREF_KEY);
+      if (saved === '2d' || saved === '3d') this.viewerAudio = saved;
+      const fade = localStorage.getItem(FADE_PREF_KEY);
+      if (fade === 'on' || fade === 'off') this.viewerFade = fade;
+    } catch (e) {}
+    return this.audioMode();
+  }
+  // 'on' or 'off'. The snippet's own `spatial` setting isn't kept as the viewer's choice, so a
+  // viewer who agrees with it follows the space if its setting changes.
+  setFade(fade) {
+    if (this.blocked) return;
+    const space = this.params.spatial === 'true' ? 'on' : 'off';
+    this.viewerFade = (fade === 'on' || fade === 'off') && fade !== space ? fade : null;
+    try {
+      if (this.viewerFade) localStorage.setItem(FADE_PREF_KEY, this.viewerFade);
+      else localStorage.removeItem(FADE_PREF_KEY);
+    } catch (e) {}
+    this.applyAudio(true).then(() => this.showToast(`Distance fade: ${this.fadeOn() ? 'on' : 'off'}${this.viewerFade ? '' : ' (the space\'s setting)'}`, 4000));
+  }
+  fadeLabel() {
+    return (this.fadeOn() ? 'On' : 'Off') + (this.viewerFade ? '' : ' (default)');
+  }
+  // The distances real 3D sound fades between; with the fade off, too far away to matter.
+  audioFadeRange() {
+    if (!this.fadeOn()) return [100000, 100001];
+    const min = Math.max(0.01, Number(this.params['spatial-min-distance']) || 0.01);
+    return [min, min + Math.max(0.01, Number(this.params['spatial-max-distance']) || 0.01)];
+  }
+  // '2d', '3d', or null to go back to the snippet's setting.
+  setAudioMode(mode) {
+    if (this.blocked) return;
+    this.viewerAudio = mode === '2d' || mode === '3d' ? mode : null;
+    try {
+      if (this.viewerAudio) localStorage.setItem(AUDIO_PREF_KEY, this.viewerAudio);
+      else localStorage.removeItem(AUDIO_PREF_KEY);
+    } catch (e) {}
+    this.updateScreen(); // the space-page screen can't do 2D or 3D, a browser can
+    this.applyAudio(true).then(() => {
+      const now = this.audioMode();
+      if (now === 'auto') return this.showToast('Sound: the space\'s setting', 4000);
+      // Say so when this app can't do it, so nobody thinks they're hearing what they chose.
+      if (!this.canSetSpeakers()) {
+        return this.showToast(`This app can't change where sound comes from yet, so ${now.toUpperCase()} does nothing here.`, 7000);
+      }
+      this.showToast(`Sound: ${now.toUpperCase()}`, 4000);
+    });
+  }
+  audioModeLabel() {
+    const mode = this.audioMode();
+    return (mode === 'auto' ? 'Default' : mode.toUpperCase()) + (this.viewerAudio ? '' : ' (default)');
+  }
+  // The object whose children are the speakers of whatever is playing, or null when there are
+  // none the page can reach (the space-page screen, or no SDK with BS.Unity).
+  audioScreenObject() {
+    const U = typeof BS !== 'undefined' && BS.Unity;
+    if (!U || !U.AudioSource) return null;
+    const go = this.nativeScreen ? this.nativeScreen.go : this.browser && !this.browser.surface ? this.browser.go : null;
+    return go && typeof go.GetComponentsInChildrenAsync === 'function' ? go : null;
+  }
+  // Sets the screen's speakers to the sound chosen. The SDK makes new speakers whenever a video
+  // or the page's sound starts, so this runs every few seconds: it sets them again when their
+  // number, the screen or the choice has changed (`force`: now), and every fifth look anyway.
+  async applyAudio(force) {
+    if (force) this.audioBusyUntil = Date.now() + 20000;
+    if (this.destroyed || this.audioApplying) { if (force) this.audioAgain = true; return; }
+    this.audioApplying = true;
+    try {
+      const mode = this.audioMode();
+      const browser = this.browser;
+      // A BS Browser's own fade, which its speakers get as the SDK makes them.
+      if (browser && browser.component && !browser.surface && ('rolloffMode' in browser.component || this.modernSdk())) {
+        const linear = mode === '3d' && this.fadeOn();
+        const [min, max] = this.audioFadeRange();
+        const fade = linear ? `2|${min}|${max}` : '0';
+        if (browser.audioFade !== fade) {
+          browser.audioFade = fade;
+          browser.component.rolloffMode = linear ? 2 : 0; // the SDK's Linear and Flat
+          if (linear) { browser.component.maxDistance = max; browser.component.minDistance = min; }
+        }
+      }
+      const go = this.audioScreenObject();
+      const moved = this.hasAudioPosition();
+      let real = false;
+      // Back on auto, speakers this page changed go back to how the SDK makes them, once.
+      if (go && (mode !== 'auto' || moved || this.audioRestore === go)) {
+        let sources = [];
+        try { sources = (await go.GetComponentsInChildrenAsync(BS.Unity.AudioSource)) || []; } catch (e) { sources = []; }
+        const p = this.params;
+        const key = `${mode}|${this.fadeOn()}|${moved ? [p['audio-position'], p['audio-position-left'], p['audio-position-right']].join('/') : ''}|${sources.length}`;
+        this.audioLooks = (this.audioLooks || 0) + 1;
+        if (sources.length && (force || this.audioTouched !== go || this.audioKey !== key || this.audioLooks % 5 === 0)) {
+          const places = await this.speakerPlaces(go, sources.length);
+          const set = await Promise.all(sources.map((source, i) => this.setSpeaker(source, mode, moved, places[i])));
+          this.audioSides = set.map(r => r.label);
+          if (this.audioTouched !== go || this.audioKey !== key) console.log(`[Core] Sound: ${mode}${moved ? ', placed' : ''}, on ${sources.length} speaker(s): ${(this.audioSides || []).join(', ')}.`);
+          this.audioTouched = go;
+          this.audioKey = key;
+          this.audioRestore = mode !== 'auto' ? go : null;
+        }
+        real = sources.length > 0 && mode !== 'auto';
+      }
+      // Unity fades real 3D sound, so this page's own fade stops (and starts again without it).
+      if (real !== !!this.realAudio || force) {
+        this.realAudio = real;
+        this.updateSpatialVolume(null, true);
+      }
+    } catch (e) {
+      console.warn('[Core] Could not set the sound:', e);
+    } finally {
+      this.audioApplying = false;
+      if (this.audioAgain) { this.audioAgain = false; this.applyAudio(true); }
+    }
+  }
+  // One Unity Audio Source: 2D or 3D, how it fades, and where it is.
+  async setSpeaker(source, mode, moved, place) {
+    try {
+      // On auto (after a viewer's 2d or 3d): as the SDK makes them, 3D for a BS Browser's and 2D
+      // for the video player's.
+      if (mode !== 'auto' || this.audioRestore) {
+        await source.SetSpatialBlend(mode === '3d' ? 1 : mode === '2d' ? 0 : this.nativeScreen ? 0 : 1);
+        if (mode === '3d' && this.nativeScreen) {
+          // A BS Browser sets its speakers' fade itself (see applyAudio); the video player's get it here.
+          const [min, max] = this.audioFadeRange();
+          const modes = BS.Unity.AudioRolloffMode;
+          await source.SetRolloffMode(modes && modes.Linear !== undefined ? modes.Linear : 1);
+          // Unity keeps the minimum at or below the maximum, so the minimum goes down first.
+          await source.SetMinDistance(0.01);
+          await source.SetMaxDistance(max);
+          await source.SetMinDistance(min);
+        }
+      }
+      // The left and right speakers (the SDK names them: "Video Sound FrontLeft"...) go to their
+      // own places when they have one; a speaker that plays both sides goes between them.
+      const name = String(place ? place.name : typeof source.GetName === 'function' ? await source.GetName() : '');
+      const side = /left/i.test(name) ? 'left' : /right/i.test(name) ? 'right' : 'both';
+      if (moved) {
+        const at = (side !== 'both' && this.audioSidePosition(side)) || this.audioWorldPosition();
+        const transform = place ? place.transform : await this.speakerTransform(source);
+        if (transform) await transform.SetPosition(new BS.Vector3(at.x, at.y, at.z));
+        else if (!this.audioWarned) { this.audioWarned = true; console.warn('[Core] This app gives no way to move a speaker.'); }
+      }
+      return { side, label: `${name || 'speaker'} (${side})` };
+    } catch (e) {
+      if (!this.audioWarned) { this.audioWarned = true; console.warn('[Core] Could not set a speaker:', e); }
+      return { side: 'failed', label: 'failed' };
+    }
+  }
+  // The speakers' Transforms and names under the screen object, in the speakers' order: the SDK
+  // names them ("OraSpeaker" for a browser's, "Video Sound FrontLeft"... for the video player's).
+  // Empty when they can't be matched to the `count` speakers found.
+  async speakerPlaces(go, count) {
+    try {
+      const all = (await go.GetComponentsInChildrenAsync(BS.Unity.Transform)) || [];
+      const named = await Promise.all(all.map(async transform => ({ transform, name: String(typeof transform.GetName === 'function' ? await transform.GetName() : '') })));
+      const speakers = named.filter(p => /speaker|sound/i.test(p.name) && typeof p.transform.SetPosition === 'function');
+      return speakers.length === count ? speakers : [];
+    } catch (e) {
+      return [];
+    }
+  }
+  // A speaker's Transform from the speaker itself, where the app's typed API gives it.
+  async speakerTransform(source) {
+    const call = async (o, name) => (o && typeof o[name] === 'function' ? await o[name]() : null);
+    let t = await call(source, 'GetTransform');
+    if (!t) {
+      const go = await call(source, 'GetGameObject');
+      t = (await call(go, 'GetTransform')) || (go && typeof go.GetComponentAsync === 'function' && BS.Unity.Transform ? await go.GetComponentAsync(BS.Unity.Transform) : null);
+    }
+    return t && typeof t.SetPosition === 'function' ? t : null;
   }
 
   // ---------------------------------------------------------------- hand controls
@@ -2074,7 +2352,7 @@ var Core = class {
   // back to face them (Unity axes). Waits a few seconds for the head to report, as just after
   // joining it may not have yet.
   async handFrontPose() {
-    let head = this.headPose();
+    let head = await this.freshHeadPose();
     for (let k = 0; k < 10 && !(head && head.position && head.rotation); k++) {
       await new Promise(resolve => setTimeout(resolve, 500));
       head = this.headPose();
@@ -2203,6 +2481,11 @@ var Core = class {
     this.setOrDefault("geometry", "false");
     this.setOrDefault("spatial-min-distance", '5');
     this.setOrDefault("spatial-max-distance", '40');
+    // auto, 2d or 3d (see audioMode), and where the sound comes from ("x y z", empty: the screen).
+    this.setOrDefault("audio", 'auto');
+    this.setOrDefault("audio-position", '');
+    this.setOrDefault("audio-position-left", '');
+    this.setOrDefault("audio-position-right", '');
     this.setOrDefault("youtube", "https://www.youtube.com/watch?v=GiwStUzx8fg");
     this.setOrDefault("start", '0');
     // In-world playlist panel (new SDK), in the same A-Frame units as "position"/"rotation".
@@ -2785,6 +3068,7 @@ var Core = class {
     console.log("Cleaning up Fire-V-Player instance...");
     // Builds still running (buttons, screen, hand controls) stop when they see this.
     this.destroyed = true;
+    clearInterval(this.audioTimer);
     clearTimeout(this.handRejoinTimer);
     clearTimeout(this.headRejoinTimer);
     clearInterval(this.blockedTimer);

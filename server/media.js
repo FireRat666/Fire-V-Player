@@ -143,6 +143,12 @@ async function resolveMediaLink(link) {
     return { title: `VDO.Ninja: ${media.name}`, thumbnail: '', duration: 0, link };
   }
 
+  // A shared screen on screen.sdq.st: added whether or not anyone is sharing yet, as the player
+  // waits in the room and shows the screen when it starts.
+  if (media.type === 'sdq') {
+    return { title: `Screen share: ${media.room}`, thumbnail: '', duration: 0, link };
+  }
+
   // A file or stream: the player page learns its length when it loads. A VRCDN rtspt:// link is
   // kept as its .live.ts address, which browsers can play.
   const url = media.url || link;

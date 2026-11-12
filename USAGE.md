@@ -382,7 +382,7 @@ All parameters are optional unless marked as **(Required)**.
 | `youtube` | The URL of a single YouTube video to use as the default "silent" video when nothing is playing. | A silent visual video |
 | `volume` | The initial volume, from `0` to `100`. | `40` |
 | `mute` | Whether the player should start muted. | `false` |
-| `untrusted-links` | Whether links from any site (video files, `.m3u8` and `.mpd` streams, VRCDN, VDO.Ninja) can be played, as well as YouTube, Twitch, Vimeo, Tubi, NASA+, the Internet Archive, the Library of Congress and ESO. Off by default, as those links aren't moderated. Each viewer's own world must allow them for them to play on their screen. See [Links from other sites](#links-from-other-sites). | `false` |
+| `untrusted-links` | Whether links from any site (video files, `.m3u8` and `.mpd` streams, VRCDN, VDO.Ninja, screen.sdq.st screen shares) can be played, as well as YouTube, Twitch, Vimeo, Tubi, NASA+, the Internet Archive, the Library of Congress and ESO. Off by default, as those links aren't moderated. Each viewer's own world must allow them for them to play on their screen. See [Links from other sites](#links-from-other-sites). | `false` |
 | `captions` | Whether closed captions start on. Each viewer can turn them on or off in the panel's More view, and their choice is remembered on their device. | `true` |
 | `resolution` | The width in pixels of the screen's page, which is 16:9 (`1600` is 1600 x 900). Higher is sharper, and YouTube and Twitch lay out as for a bigger window, but each frame costs more to draw, especially on Quest. The screen stays the same size in the world whatever the resolution. Each viewer can pick another for their own screen in the panel's More view. From 640 to 3840. | `1600` |
 | `space-screen` | Altspace (SideQuest Creator SDK) only. `auto`: the screen draws the space page's own browser, with the player page laid over that page, so no second browser is opened. It's used when the client can resize the space page (its `SetWorldBrowserSize` call or the `!swbs!` command) and the page really takes the size within 5 seconds; otherwise, and for a second player in the same space (only one can have the space page), the screen is a browser as before. The space page goes back to its own size when the player is removed. This screen can't be clicked, so Twitch links, which need clicks to start playing, always get a browser screen instead. `false`: always open a browser for the screen. Banter is unaffected. | `auto` |
@@ -493,6 +493,7 @@ window.videoPlayerCore.setAbsoluteVolume(50);
 ```javascript
 // Increases volume by 10%
 window.videoPlayerCore.setVolumeIncrement(10);
+| Screen share (screen.sdq.st) | `https://screen.sdq.st:8443/?room=<room>`, or the room's publish link | The room's shared screen, played by the player itself, so volume, mute and pause work; there's no seek. It can be added before anyone is sharing: the screen says it's waiting and shows the share when it starts, and joins again if the connection drops. Needs `untrusted-links`. |
 
 // Decreases volume by 15%
 window.videoPlayerCore.setVolumeIncrement(-15);

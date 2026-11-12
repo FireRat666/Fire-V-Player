@@ -2889,7 +2889,7 @@ var FirePlaylistPanel = class {
     if (m.drive) return 'Google Drive';
     if (/dropbox/i.test(String(link))) return 'Dropbox';
     if (/archive\.org/i.test(String(link))) return 'archive.org';
-    return ({ youtube: 'YouTube', twitch: 'Twitch', twitchclip: 'Twitch clip', vimeo: 'Vimeo', vdoninja: 'VDO.Ninja', hls: 'Stream', mpegts: 'Stream', file: 'File' })[m.type] || '';
+    return ({ youtube: 'YouTube', twitch: 'Twitch', twitchclip: 'Twitch clip', vimeo: 'Vimeo', vdoninja: 'VDO.Ninja', sdq: 'Screen share', hls: 'Stream', mpegts: 'Stream', file: 'File' })[m.type] || '';
   }
 };
 window.FirePlaylistPanel = FirePlaylistPanel;

@@ -94,7 +94,7 @@ function loadMediaScript(name) {
   if (!mediaScriptLoads[name]) {
     mediaScriptLoads[name] = new Promise((resolve, reject) => {
       const s = document.createElement('script');
-      s.src = MEDIA_SCRIPTS[name];
+      s.src = MEDIA_SCRIPTS[name] || name; // a name not in the list is the script's own address
       s.onload = resolve;
       s.onerror = () => { delete mediaScriptLoads[name]; reject(new Error(`Could not load the ${name} player.`)); };
       document.head.appendChild(s);
@@ -897,6 +897,187 @@ class VdoNinjaSource extends BaseMediaSource {
 }
 
 /**
+ * Player adapter for a screen shared through screen.sdq.st, a mediasoup (WebRTC) server. It joins
+ * the room as a watcher, as that site's own watch page does, with the site's copies of
+ * mediasoup-client and socket.io, and plays what is shared in a video element of its own, so the
+ * volume and mute work. It stays in the room while nobody is sharing and shows the screen when
+ * someone starts, and joins again if the connection drops.
+ * @class SdqSource
+ * @extends {BaseMediaSource}
+ */
+class SdqSource extends BaseMediaSource {
+  /**
+   * @param {Object} opts - Source configuration options.
+   * @param {Object} media - What MediaSources.detect found: { type: 'sdq', room, origin }.
+   */
+  constructor(opts, media) {
+    super(opts);
+    this.live = true;
+    this.room = media.room;
+    this.origin = media.origin;
+    this.startedAt = performance.now();
+    const box = this.box = document.createElement('div');
+    Object.assign(box.style, { position: 'relative', width: '100%', height: '100%', background: '#000' });
+    const el = this.el = document.createElement('video');
+    el.playsInline = true;
+    el.autoplay = true;
+    Object.assign(el.style, { width: '100%', height: '100%', objectFit: 'contain', background: '#000' });
+    const note = this.note = document.createElement('div');
+    Object.assign(note.style, { position: 'absolute', inset: '0', display: 'flex', alignItems: 'center', justifyContent: 'center',
+      textAlign: 'center', padding: '0 10%', boxSizing: 'border-box', color: '#ddd', background: '#000', font: '4vw sans-serif' });
+    box.appendChild(el);
+    box.appendChild(note);
+    opts.container.appendChild(box);
+    this.setVolume(opts.volume);
+    this.setMuted(opts.muted);
+    this.showNote(`Connecting to ${this.room}...`);
+    this.connect();
+  }
+
+  /** Shows a message over the video, or the video when `text` is empty. */
+  showNote(text) {
+    this.note.textContent = text || '';
+    this.note.style.display = text ? 'flex' : 'none';
+  }
+
+  /** Joins the room and plays whatever is shared in it, now or later. */
+  async connect() {
+    if (this.destroyed) return;
+    this.leave();
+    const run = this.run = { consumers: {}, busy: {} };
+    const stale = () => this.destroyed || this.run !== run;
+    try {
+      await Promise.all([loadMediaScript(`${this.origin}/js/mediasoup-client.min.js`), loadMediaScript(`${this.origin}/socket.io/socket.io.js`)]);
+      if (stale()) return;
+      if (!window.io || !window.mediasoupClient) throw new Error('the site\'s player did not load');
+      const socket = run.socket = window.io(this.origin, { reconnection: false });
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('no answer from the server')), 15000);
+        socket.on('message', m => { if (m && m.type === 'welcome') { clearTimeout(timer); resolve(); } });
+        ['connect_error', 'error'].forEach(name => socket.on(name, e => { clearTimeout(timer); reject(e instanceof Error ? e : new Error(String(e))); }));
+      });
+      if (stale()) return;
+      socket.on('disconnect', () => this.retry(run, 'the connection dropped'));
+      const request = (type, data) => new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`${type} got no answer`)), 15000);
+        socket.emit(type, data, (err, answer) => { clearTimeout(timer); err ? reject(err instanceof Error ? err : new Error(String(err))) : resolve(answer); });
+      });
+      await request('connectRoom', { room: this.room });
+      const device = new window.mediasoupClient.Device();
+      await device.load({ routerRtpCapabilities: await request('getRouterRtpCapabilities', {}) });
+      const transport = run.transport = device.createRecvTransport(await request('createConsumerTransport', {}));
+      if (stale()) return this.leave(run);
+      transport.on('connect', ({ dtlsParameters }, done, fail) => { request('connectConsumerTransport', { dtlsParameters }).then(done, fail); });
+      transport.on('connectionstatechange', state => { if (state === 'failed' || state === 'disconnected') this.retry(run, `the stream's connection ${state}`); });
+      // Takes the room's video or sound if someone is sharing it. The server answers without a
+      // producer (or with an error) while nobody is.
+      const consume = async kind => {
+        if (stale() || run.busy[kind] || run.consumers[kind]) return;
+        run.busy[kind] = true;
+        try {
+          const data = await request('consume', { rtpCapabilities: device.rtpCapabilities, kind }).catch(() => null);
+          if (stale() || !data || !data.producerId) return;
+          const consumer = await transport.consume({ id: data.id, producerId: data.producerId, kind: data.kind, rtpParameters: data.rtpParameters });
+          if (stale()) { consumer.close(); return; }
+          run.consumers[kind] = consumer;
+          console.log(`[Screen share] ${this.room}: ${kind} started`);
+          this.showTracks(run);
+          // The server holds video back until it's asked for (sound comes straight away).
+          if (kind === 'video') await request('resume', { kind });
+        } catch (e) {
+          console.log(`[Screen share] ${this.room}: could not take the ${kind}:`, e && e.message || e);
+        } finally {
+          run.busy[kind] = false;
+        }
+      };
+      socket.on('newProducer', m => { if (m && m.kind) consume(m.kind); });
+      socket.on('producerClosed', m => {
+        const kind = m && m.kind;
+        if (!kind || !run.consumers[kind]) return;
+        try { run.consumers[kind].close(); } catch (e) {}
+        delete run.consumers[kind];
+        console.log(`[Screen share] ${this.room}: ${kind} stopped`);
+        this.showTracks(run);
+      });
+      this.ready = true;
+      this.showTracks(run);
+      await consume('video');
+      await consume('audio');
+      // In case the server's word that sharing has started doesn't arrive.
+      run.poll = setInterval(() => { consume('video'); consume('audio'); }, 10000);
+    } catch (e) {
+      this.retry(run, e && e.message || String(e));
+    }
+  }
+
+  /** Plays the tracks this run has, or says the room is waiting when it has no picture. */
+  showTracks(run) {
+    if (this.destroyed || this.run !== run) return;
+    const tracks = Object.values(run.consumers).map(c => c.track).filter(Boolean);
+    this.el.srcObject = tracks.length ? new MediaStream(tracks) : null;
+    this.showNote(run.consumers.video ? '' : `Waiting for ${this.room} to start sharing...`);
+    if (tracks.length && !this.wantPaused) this.tryPlay();
+  }
+
+  /** Leaves the room and joins again in a few seconds. */
+  retry(run, why) {
+    if (this.destroyed || this.run !== run) return;
+    console.log(`[Screen share] ${this.room}: ${why}, joining again in 5s`);
+    this.leave();
+    this.showNote(`Connecting to ${this.room}...`);
+    this.retryTimer = setTimeout(() => this.connect(), 5000);
+  }
+
+  /** Closes this run's (or the current run's) connection. */
+  leave(run = this.run) {
+    clearTimeout(this.retryTimer);
+    if (!run) return;
+    if (this.run === run) { this.run = null; this.el.srcObject = null; }
+    clearInterval(run.poll);
+    Object.values(run.consumers).forEach(c => { try { c.close(); } catch (e) {} });
+    run.consumers = {};
+    try { if (run.transport) run.transport.close(); } catch (e) {}
+    try { if (run.socket) run.socket.close(); } catch (e) {}
+  }
+
+  /** Plays, muted if the browser won't start it with sound (see VideoElementSource.tryPlay). */
+  tryPlay() {
+    const p = this.el.play();
+    if (p && p.catch) p.catch(err => {
+      if (this.destroyed || !err || err.name !== 'NotAllowedError' || this.el.muted) return;
+      this.el.muted = true;
+      this.el.play().catch(() => {});
+      this.autoMuted = true;
+      if (!this.unmuteOnClick) {
+        this.unmuteOnClick = () => {
+          if (this.autoMuted && !this.destroyed) { this.autoMuted = false; this.el.muted = !!this.wantMuted; }
+        };
+        document.addEventListener('pointerdown', this.unmuteOnClick, true);
+        document.addEventListener('click', this.unmuteOnClick, true);
+      }
+      this.opts.requestClick();
+    });
+  }
+
+  play() { this.wantPaused = false; if (this.el.srcObject) this.tryPlay(); }
+  pause() { this.wantPaused = true; this.el.pause(); }
+  seek() {}
+  time() { return (performance.now() - this.startedAt) / 1000; }
+  state() { return this.wantPaused ? MEDIA_STATE.PAUSED : this.ready ? MEDIA_STATE.PLAYING : MEDIA_STATE.BUFFERING; }
+  setVolume(v) { this.el.volume = Math.max(0, Math.min(1, Number(v) / 100)); }
+  setMuted(m) { this.wantMuted = !!m; if (!this.autoMuted) this.el.muted = !!m; }
+  destroy() {
+    this.destroyed = true;
+    if (this.unmuteOnClick) {
+      document.removeEventListener('pointerdown', this.unmuteOnClick, true);
+      document.removeEventListener('click', this.unmuteOnClick, true);
+    }
+    this.leave();
+    this.box.remove();
+  }
+}
+
+/**
  * Player adapter for Vimeo videos using the Vimeo SDK.
  * @class VimeoSource
  * @extends {BaseMediaSource}
@@ -1072,6 +1253,7 @@ class MediaSwitch {
     else if (media.type === 'twitchclip') this.source = new TwitchClipSource(opts, media);
     else if (media.type === 'vimeo') this.source = new VimeoSource(opts, media);
     else if (media.type === 'vdoninja') this.source = new VdoNinjaSource(opts, media);
+    else if (media.type === 'sdq') this.source = new SdqSource(opts, media);
     else this.source = new VideoElementSource(opts, media);
   }
 

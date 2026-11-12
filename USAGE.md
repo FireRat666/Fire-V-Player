@@ -23,7 +23,7 @@ To show the video on more surfaces, give any object a **BS Material** and name t
 In the world, the player shows whatever its own screen draws on it:
 - **YouTube and most links:** the space page.
 - **Twitch:** the player's own browser.
-- **Video files on the world's video player:** there's no picture the page can share, so second screens go black. The player makes the world's video player under the scene's `Fire-V-Player World Video` object when it has one, so a Unity graph that knows that object can share its picture.
+- **Video files on the world's video player:** second screens show the video's own picture, at its own size, from its first frame on. The player makes the world's video player under the scene's `Fire-V-Player World Video` object when it has one.
 
 While the player loads, second screens show a "Fire-V-Player loading" picture. Before the player starts, Unity draws a Texture of `Fire-V-Player` as plain white, so for a screen marked by its name, put the picture's link in **Texture** instead to show it from the moment the world loads: `https://firer.at/files/fvp/SecondScreenLoading.png`.
 
@@ -228,7 +228,7 @@ A YouTube playlist can be its ID or any link with `list=` in it, including a vid
 playlists="PLZWiw-xxQ4SPDmADhvme7-pU2bx3s7nKX, https://www.youtube.com/watch?v=jfKfPfyJRdk, https://stream.vrcdn.live/live/vrcdn.live.ts"
 ```
 
-Each shows its name and how many videos it has. **▼ Open** lists its videos under it, each with **+ Add** (and, for the host, **▶ Now** and **▶| Next**, or **▶** when it's already in the playlist). **+ All** adds every video to the end of the playlist, skipping ones already in it, and **⇄ Replace** (host) makes the list the playlist. Adding follows the usual rules: anyone can add while control is on **Everyone**, otherwise only the host (see [Who controls the player](#who-controls-the-player)).
+Each shows its name and how many videos it has. **▼ Open** lists its videos under it, each with **+ Add** (and, for the host, **▶ Now** and **▶| Next**, or **▶** when it's already in the playlist). **+ All** adds every video to the end of the playlist, skipping ones already in it, and **⇄ Replace** (host) makes the list the playlist. Adding follows the usual rules (see [Who controls the player](#who-controls-the-player)): while control is on **Everyone**, anyone can use **+ Add** and **+ All**. Otherwise **+ Add** from anyone but the host waits for the host to approve it, and **+ All** is the host's only.
 
 Lists can also be saved from inside the world. Pasting a YouTube playlist or a list of links into **+ Search & Add** or **☰ > + Add by link** asks what to do with it: **⇄ Replace Playlist** (host), **+ Add All to End**, **★ Save for Everyone**, **☆ Save for Me**, or **+ Just This Video** for a video link inside a playlist.
 
@@ -317,6 +317,7 @@ These only work with `untrusted-links="true"` in the snippet, as they can come f
 | DASH stream | `https://.../manifest.mpd` | Like an HLS stream, played with dash.js. Protected (DRM) streams can't play, and some codecs (HEVC, MPEG-H audio) may not play in the client's browser. |
 | VRCDN stream | `https://stream.vrcdn.live/live/NAME.live.ts` or `rtspt://stream.vrcdn.live/live/NAME` | Plays in the browser for everyone, PC and Quest. The PC `rtspt://` link is turned into the `.live.ts` one, since browsers and the world's video player can't play RTSP. Plays until someone skips. VRCDN's always-on test stream is `https://stream.vrcdn.live/live/vrcdn.live.ts`. |
 | VDO.Ninja | `https://vdo.ninja/?view=<stream id>`, or `?room=<room>&scene` for a whole room | Shown as VDO.Ninja's own page and plays until someone skips. Volume and mute work; there's no pause or seek. Its video controls (picture-in-picture, fullscreen) are hidden, as fullscreen would blank the screen. Links that would join a room or send video (`?push=`, `?room=` without `scene`) aren't accepted. |
+| Screen share (screen.sdq.st) | `https://screen.sdq.st:8443/?room=<room>`, or the room's publish link | The room's shared screen, played by the player itself, so volume, mute and pause work; there's no seek. It can be added before anyone is sharing: the screen says it's waiting and shows the share when it starts, and joins again if the connection drops. Needs `untrusted-links`. |
 
 Without it, the server won't add them, and a player whose world doesn't allow them shows a notice instead of playing one. If a browser won't start a file with sound, it starts muted and the sound comes on at the first click on the screen.
 
@@ -493,7 +494,6 @@ window.videoPlayerCore.setAbsoluteVolume(50);
 ```javascript
 // Increases volume by 10%
 window.videoPlayerCore.setVolumeIncrement(10);
-| Screen share (screen.sdq.st) | `https://screen.sdq.st:8443/?room=<room>`, or the room's publish link | The room's shared screen, played by the player itself, so volume, mute and pause work; there's no seek. It can be added before anyone is sharing: the screen says it's waiting and shows the share when it starts, and joins again if the connection drops. Needs `untrusted-links`. |
 
 // Decreases volume by 15%
 window.videoPlayerCore.setVolumeIncrement(-15);

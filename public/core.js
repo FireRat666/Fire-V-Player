@@ -769,13 +769,16 @@ var Core = class {
   // A world can show the screen on more surfaces: any object in its Unity scene with a BS Material
   // whose Texture is "Fire-V-Player" (the Unity menu Fire-V-Player > Second Screen makes one).
   // Their material follows whichever texture the screen draws: the space
-  // page's, or the BS Browser's, whose reference is only known once it exists. The world's video
-  // player (files) has no texture to share, so they go black while it plays. (The Unity video kit's
-  // walls and screens still show it: the player is made under "Fire-V-Player World Video", see
-  // native-video.js.)
+  // page's, the BS Browser's (whose reference is only known once it exists), or the world's video
+  // player's while it plays a file, from its first frame. Until then, and on a client whose video
+  // player shares no texture, they go black. (The Unity video kit's walls and screens take the
+  // picture from a second screen.)
 
   // The texture reference the screen draws now, or null when there isn't one to share.
   secondScreenTexture() {
+    // A file on the world's video player: the SDK shares its picture under this name (see
+    // native-video.js's textureId), at the video's own size, so nothing is copied.
+    if (this.nativeScreen) return this.destroyed ? null : this.nativeScreen.textureId();
     const browser = this.browser;
     if (this.destroyed || !browser || browser.removed) return null;
     if (browser.surface) return browser.go ? SPACE_BROWSER_TEXTURE : null;
@@ -867,8 +870,8 @@ var Core = class {
     }
     let texture = this.secondScreenTexture();
     // Until the screen has a texture to share, a picture saying the player is loading (instead of
-    // the white Unity draws for the "Fire-V-Player" marker). While the world's video player plays
-    // a file there's nothing to share, so they go black.
+    // the white Unity draws for the "Fire-V-Player" marker). A file on the world's video player
+    // has none until its first frame, so they go black until then.
     if (!texture && !this.nativeScreen && !this.destroyed) texture = this.secondScreenLoadingUrl();
     screens.forEach(material => {
       if (material.__fvpShowing === texture) return;
@@ -2850,6 +2853,11 @@ var Core = class {
         break;
       case Commands.LOCK_STATE_CHANGED:
         if (this.player) this.player.locked = json.data.locked;
+        break;
+      // This viewer's Auto Sync choice, as their screen page reports it: kept for the world's
+      // video player, which takes the page's place while a file plays (see native-video.js).
+      case Commands.AUTO_SYNC_STATE_CHANGED:
+        if (json.data && typeof json.data.enabled === 'boolean') this.autoSync = json.data.enabled;
         break;
       case Commands.CAN_TAKE_OVER_STATE_CHANGED:
         if (this.player) this.player.canTakeOver = json.data.canTakeOver;

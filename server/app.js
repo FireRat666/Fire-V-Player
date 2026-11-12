@@ -461,6 +461,9 @@ class App {
       case Commands.TOGGLE_CAN_TAKE_OVER:
         await hostHandler.toggleCanTakeOver(this, ws, msg.data);
         break;
+      case Commands.SET_CONTROL:
+        await hostHandler.setControl(this, ws, msg.data);
+        break;
       case Commands.TAKE_OVER:
         await hostHandler.takeOver(this, ws);
         break;

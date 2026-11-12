@@ -570,8 +570,9 @@ var FirePlaylistPanel = class {
     }
     const locked = level === 'host';
     const takeOver = level === 'takeover';
-    if (!!p.locked !== locked) this.send(Commands.TOGGLE_LOCK, locked);
-    if (!!p.canTakeOver !== takeOver) this.send(Commands.TOGGLE_CAN_TAKE_OVER, takeOver);
+    // One message for both, so the server changes them together or (refused) not at all; it
+    // answers everyone with what they are now.
+    if (!!p.locked !== locked || !!p.canTakeOver !== takeOver) this.send(Commands.SET_CONTROL, { locked, canTakeOver: takeOver });
     this.setStatus(this.controlText(level), 6000);
   }
 
@@ -1114,6 +1115,7 @@ var FirePlaylistPanel = class {
     await this.button(mineRow, '▶▶', () => this.sendMine(Commands.LOCAL_SKIP_FORWARD, Commands.SKIP_FORWARD), { fontSize: '24px' });
     this.autoSyncBtn = await this.button(mineRow, 'Auto Sync', () => {
       this.autoSync = !this.autoSync;
+      this.core.autoSync = this.autoSync; // kept for a video file, which plays without the screen page
       this.sendMine(Commands.AUTO_SYNC, Commands.AUTO_SYNC, this.autoSync);
       this.render();
     });

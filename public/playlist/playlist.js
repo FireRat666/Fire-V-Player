@@ -155,6 +155,13 @@ var Playlist = class {
         this.savedListsButton.style.display = this.getLists().length ? 'block' : 'none';
         if (this.listsOverlay.style.display !== 'none') this.showLists();
         break;
+      // Playlist mode: videos added while the player is locked, waiting for the host.
+      case Commands.WAITING_VIDEOS:
+        if (this.core.player && json.data && Array.isArray(json.data.waiting)) {
+          this.core.player.waiting = json.data.waiting;
+          this.updatePlaylist(this.core.player);
+        }
+        break;
       case Commands.PLAYLIST_UPDATED:
         if (this.core.player) {
           this.core.player.playlist = json.data.playlist;
@@ -575,7 +582,40 @@ var Playlist = class {
         currentTimeInner.className = "currentTime";
       }
     })
-  }  
+    this.renderWaiting(player, isMe);
+  }
+  // The videos waiting for the host (added while the player is locked), after the playlist: the
+  // host approves each with its own button, and the host or whoever added it can drop it.
+  renderWaiting(player, isMe) {
+    const waiting = Array.isArray(player.waiting) ? player.waiting : [];
+    waiting.forEach(w => {
+      const v = w && w.v;
+      if (!v || !v.link) return;
+      const mine = !!w.id && w.id === window.user.id;
+      const row = this.core.makeAndAddElement('div', { background: '#6b5a2a', display: 'flex', alignItems: 'stretch' }, this.videoPlaylistContainer);
+      const thumbnail = this.core.makeAndAddElement('img', { height: '80px', width: '142px', flexShrink: '0' }, row);
+      if (v.thumbnail) thumbnail.src = v.thumbnail;
+      const info = this.core.makeAndAddElement('div', { flexGrow: '1', paddingLeft: '10px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minWidth: '0' }, row);
+      const text = this.core.makeAndAddElement('div', null, info);
+      const title = this.core.makeAndAddElement('div', { padding: '4px 0px 0px 0px', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }, text);
+      title.textContent = String(v.title || 'A video');
+      const by = this.core.makeAndAddElement('div', { padding: '0px 0px 0px 10px', fontSize: '0.8rem', color: '#cfcfcf', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }, text);
+      by.textContent = `Waiting for the host to approve it. Added by: ${w.name || 'Unknown'}`;
+      const buttons = this.core.makeAndAddElement('div', { padding: '0 5px 0px 1px' }, info);
+      if (isMe) {
+        const approve = this.core.makeAndAddElement('div', null, buttons);
+        approve.className = 'button slim green';
+        approve.innerText = 'Approve';
+        approve.addEventListener('click', () => this.core.sendMessage({ path: Commands.APPROVE_VIDEO, data: v.link }));
+      }
+      if (isMe || mine) {
+        const reject = this.core.makeAndAddElement('div', null, buttons);
+        reject.className = 'button slim red';
+        reject.innerText = isMe ? 'Reject' : 'Withdraw';
+        reject.addEventListener('click', () => this.core.sendMessage({ path: Commands.REJECT_VIDEO, data: v.link }));
+      }
+    });
+  }
   // ---- Saved lists: the snippet's playlist and playlists settings, and lists opened with Browse.
   // Each opens to show its videos, which can be added one at a time or all at once.
 

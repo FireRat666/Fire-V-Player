@@ -21,6 +21,7 @@ var Commands = {
   VOTING_STATE_CHANGED: 'voting-state-changed',
   TOGGLE_LOCK: 'toggle-lock',
   TOGGLE_CAN_TAKE_OVER: 'toggle-can-take-over',
+  SET_CONTROL: 'set-control', // UI -> server: { locked, canTakeOver }, the lock and Take Over changed together or not at all
   ADD_TO_PLAYLIST: 'add-to-playlist',
   MOVE_PLAYLIST_ITEM: 'move-playlist-item',
   REMOVE_PLAYLIST_ITEM: 'remove-playlist-item',

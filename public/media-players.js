@@ -920,7 +920,7 @@ class SdqSource extends BaseMediaSource {
     Object.assign(box.style, { position: 'relative', width: '100%', height: '100%', background: '#000' });
     const el = this.el = document.createElement('video');
     el.playsInline = true;
-    el.autoplay = true;
+    // No autoplay: new tracks only play through tryPlay, so a paused screen stays paused.
     Object.assign(el.style, { width: '100%', height: '100%', objectFit: 'contain', background: '#000' });
     const note = this.note = document.createElement('div');
     Object.assign(note.style, { position: 'absolute', inset: '0', display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -1014,6 +1014,7 @@ class SdqSource extends BaseMediaSource {
       this.showTracks(run);
       await consume('video');
       await consume('audio');
+      if (stale()) return; // left meanwhile: nothing would stop a poll started now
       // In case the server's word that sharing has started doesn't arrive.
       run.poll = setInterval(() => { consume('video'); consume('audio'); }, 10000);
     } catch (e) {
@@ -1044,9 +1045,9 @@ class SdqSource extends BaseMediaSource {
 
   /** Closes this run's (or the current run's) connection. */
   leave(run = this.run) {
-    clearTimeout(this.retryTimer);
     if (!run) return;
-    if (this.run === run) { this.run = null; this.el.srcObject = null; }
+    // Only the current run's leaving cancels a retry: an old run's must not stop a newer one's.
+    if (this.run === run) { clearTimeout(this.retryTimer); this.run = null; this.el.srcObject = null; }
     clearInterval(run.poll);
     Object.values(run.consumers).forEach(c => { try { c.close(); } catch (e) {} });
     run.consumers = {};
@@ -1086,6 +1087,7 @@ class SdqSource extends BaseMediaSource {
       document.removeEventListener('pointerdown', this.unmuteOnClick, true);
       document.removeEventListener('click', this.unmuteOnClick, true);
     }
+    clearTimeout(this.retryTimer); // a retry waiting with no run to leave
     this.leave();
     this.box.remove();
   }

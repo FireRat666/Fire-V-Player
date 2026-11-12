@@ -1342,12 +1342,14 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       try { this.player.setPlaybackRate(1.0); } catch (e) {}
       const d = this.playerData;
       if (d && Array.isArray(d.playlist) && d.playlist.length > 0 && d.playlist[d.currentTrack]) {
-        const start = d.paused ? Math.max(0, Number(d.currentTime) || 0) : Math.max(0, this.worldTime());
+        // During a karaoke countdown it waits at 0:00 for what's left of it, as when joining.
+        const live = (Date.now() / 1000) - (this.clockSkew || 0) - Number(d.lastStartTime);
+        const counting = !d.paused && live < 0 && live > -30;
+        const start = d.paused ? Math.max(0, Number(d.currentTime) || 0) : counting ? 0 : Math.max(0, this.worldTime());
         this.playVidya(d.currentTrack, start, true);
         this.initialSyncComplete = true;
-        if (!d.paused) {
-          this.syncAfterLoad();
-        }
+        if (counting) this.holdStart(-live);
+        else if (!d.paused) this.syncAfterLoad();
         if (this.autoSync) {
           this.syncIntervalMs = SYNC_INTERVAL_FAST;
           this.scheduleNextSync();

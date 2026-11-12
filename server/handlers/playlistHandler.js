@@ -104,6 +104,7 @@ async function addToPlaylist(app, ws, v, skipUpdate, isYoutubeWebsite) {
         return;
       }
       appendVideo(app, ws.i, app._createVideoObject(resolvedV, ws.u, 'scraper', isYoutubeWebsite), skipUpdate);
+      dropWaiting(app, ws.i, resolvedV.link);
       await app.savePlayerState(ws.i);
     }, player.locked);
   }
@@ -138,6 +139,24 @@ function waitingFor(player) {
   return (Array.isArray(player.waiting) ? player.waiting : []).map(w => ({
     v: w.video, id: w.user && w.user.id, name: w.user && w.user.name, p: w.timestamp
   }));
+}
+
+/** The place of a waiting video that is the same video as `link` (see app._isDuplicateVideo), or -1. */
+function waitingIndex(app, player, link) {
+  if (!Array.isArray(player.waiting)) return -1;
+  return player.waiting.findIndex(w => w.video && app._isDuplicateVideo({ playlist: [w.video] }, link));
+}
+
+/**
+ * Takes a video off the waiting list once it's in the playlist another way (the host added or
+ * played it themselves), so it isn't both in the playlist and waiting. The caller saves the state.
+ */
+function dropWaiting(app, instanceId, link) {
+  const player = app.videoPlayers[instanceId];
+  const k = player ? waitingIndex(app, player, link) : -1;
+  if (k < 0) return;
+  player.waiting.splice(k, 1);
+  broadcastWaiting(app, instanceId);
 }
 
 function broadcastWaiting(app, instanceId) {
@@ -185,7 +204,8 @@ async function suggestVideo(app, ws, v, isYoutubeWebsite) {
     app.send(ws, Commands.ERROR, { message: "This video is already in the playlist." });
     return;
   }
-  if (player.waiting.some(w => w.video.link === resolvedV.link)) {
+  // The same video however its link is written (a watch link and a youtu.be one), as for the playlist.
+  if (waitingIndex(app, player, resolvedV.link) >= 0) {
     app.send(ws, Commands.ERROR, { message: "This video is already waiting for the host." });
     return;
   }
@@ -202,10 +222,12 @@ async function suggestVideo(app, ws, v, isYoutubeWebsite) {
   }
   if (full()) return;
   const user = { id: ws.u.id, name: ws.u.name };
-  player.waiting.push({ video: app._createVideoObject(resolvedV, user, 'scraper', isYoutubeWebsite), user, timestamp: Date.now() });
-  console.log(`${ws.u.name} asked to add "${resolvedV.title}" in ${ws.i}; it waits for the host.`);
+  // A title that isn't text (a client can send anything) is no title, here and in what follows.
+  const title = typeof resolvedV.title === 'string' ? resolvedV.title : '';
+  player.waiting.push({ video: app._createVideoObject({ ...resolvedV, title }, user, 'scraper', isYoutubeWebsite), user, timestamp: Date.now() });
+  console.log(`${ws.u.name} asked to add "${title}" in ${ws.i}; it waits for the host.`);
   broadcastWaiting(app, ws.i);
-  app.send(ws, Commands.ERROR, { message: `"${resolvedV.title || 'The video'}" waits for the host to approve it.` });
+  app.send(ws, Commands.ERROR, { message: `"${title || 'The video'}" waits for the host to approve it.` });
   await app.savePlayerState(ws.i);
 }
 
@@ -664,6 +686,7 @@ async function addAndPlay(app, ws, v) {
       player.currentTime = 0;
       player.lastStartTime = new Date().getTime() / 1000;
       app.resetBrowserIfNeedBe(player, newIndex);
+      dropWaiting(app, ws.i, newVideo.link);
       app.updateVotes(ws.i);
       player.sockets.forEach(socket => {
         app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, playlist: player.playlist });
@@ -706,6 +729,7 @@ async function addAndPlayNext(app, ws, v) {
       player.sockets.forEach(socket => {
         app.send(socket, Commands.ITEM_INSERTED, { video: newVideo, index: nextIndex });
       });
+      dropWaiting(app, ws.i, newVideo.link);
       await app.savePlayerState(ws.i);
     }); // the host's, even under Everyone
   }

@@ -2053,12 +2053,14 @@ var Core = class {
           const places = await this.speakerPlaces(go, sources.length);
           const set = await Promise.all(sources.map((source, i) => this.setSpeaker(source, mode, moved, places[i])));
           this.audioSides = set.map(r => r.label);
+          this.audioSet = set.some(r => r.side !== 'failed'); // at least one speaker took it
           if (this.audioTouched !== go || this.audioKey !== key) console.log(`[Core] Sound: ${mode}${moved ? ', placed' : ''}, on ${sources.length} speaker(s): ${(this.audioSides || []).join(', ')}.`);
           this.audioTouched = go;
           this.audioKey = key;
           this.audioRestore = mode !== 'auto' ? go : null;
         }
-        real = sources.length > 0 && mode !== 'auto';
+        // Only speakers that took the setting count: if every one failed, the page keeps fading.
+        real = sources.length > 0 && mode !== 'auto' && this.audioTouched === go && !!this.audioSet;
       }
       // Unity fades real 3D sound, so this page's own fade stops (and starts again without it).
       if (real !== !!this.realAudio || force) {
@@ -2812,6 +2814,10 @@ var Core = class {
           this.player.currentTrack = json.data.newTrackIndex;
           this.player.lastStartTime = json.data.newLastStartTime;
           this.player.currentTime = json.data.newCurrentTime || 0;
+          // A time below zero is a countdown to the start (karaoke songs). When it ends, on this
+          // device's own clock, for the world's video player (see native-video.js).
+          const countdown = -Number(json.data.newCurrentTime);
+          this.countdownUntil = countdown > 0 && json.data.paused !== true ? performance.now() + countdown * 1000 : 0;
           // The server resumes playback when the track changes (skip, set track, auto-advance).
           this.player.paused = typeof json.data.paused === 'boolean' ? json.data.paused : false;
           this.fixTrackMismatch(this.player, json.data);

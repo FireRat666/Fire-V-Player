@@ -577,8 +577,10 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       const start = !d.paused && Number.isFinite(live) ? Math.max(0, live) : d.currentTime;
       this.playVidya(d.currentTrack, start, true);
       this.initialSyncComplete = true;
-      // Joining takes time to load too, so it catches up once it plays.
-      if (!d.paused) this.syncAfterLoad();
+      // Joining takes time to load too, so it catches up once it plays. During a karaoke
+      // countdown it waits at 0:00 for what's left of it instead.
+      if (!d.paused && live < 0 && live > -30) this.holdStart(-live);
+      else if (!d.paused) this.syncAfterLoad();
       // This is the first sync, so we should start with a fast interval.
       if (this.autoSync) {
         this.syncIntervalMs = SYNC_INTERVAL_FAST;
@@ -781,6 +783,11 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         break;
       case Commands.TRACK_CHANGED:
         // This is the new authoritative command for changing tracks.
+        // A countdown (a time below zero) says what the server's clock reads now, so one applied
+        // later (below, or after a preview) still ends when the server's does.
+        if (json.data && Number(json.data.newCurrentTime) < 0 && json.data.paused !== true && Number.isFinite(Number(json.data.newLastStartTime))) {
+          this.clockSkew = (Date.now() / 1000) - (Number(json.data.newLastStartTime) + Number(json.data.newCurrentTime));
+        }
         if (this.playerData && this.readyToPlay) { // Player is ready, apply immediately.
           this.applyTrackChange(json.data);
         } else {
@@ -908,7 +915,14 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
             if (passes) {
               if (!Number.isFinite(timediff)) { this.syncAfterLoad(passes); break; } // not the answer to our question
               // Still counting down to the start (see holdStart, which syncs when it ends).
-              if (serverTime < 0) { if (!this.holdTimer) this.syncAfterLoad(passes); break; }
+              // A screen not holding yet (it joined during the countdown) waits at 0:00 for what's left.
+              if (serverTime < 0) {
+                if (!this.holdTimer) {
+                  try { this.player.pauseVideo(); this.player.seekTo(0); } catch (e) {}
+                  this.holdStart(-serverTime);
+                }
+                break;
+              }
               if (Math.abs(timediff) > START_SYNC_THRESHOLD) {
                 console.log(`[PLAYER] The new track is ${timediff.toFixed(2)}s behind the world after loading, catching up.`);
                 this.core.showToast(`Catching up: ${timediff > 0 ? '+' : '-'}${this.durationText(Math.abs(timediff))}`);
@@ -954,6 +968,8 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
             const large = !late && Math.abs(timediff) > LARGE_DRIFT_THRESHOLD;
             this.largeDriftReadings = large ? (this.largeDriftReadings || 0) + 1 : 0;
             if (late) {
+              // A speed set on an earlier reading isn't left running on one that can't be trusted.
+              if (correcting) this.player.setPlaybackRate(1.0);
               this.syncIntervalMs = SYNC_INTERVAL_NORMAL;
             } else if (large && this.largeDriftReadings < LARGE_DRIFT_READINGS) {
               // Checked again very soon, before anything is changed.
@@ -1131,7 +1147,13 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
 
       // The server provides the definitive start time. A time below zero is a countdown (karaoke
       // songs): the track loads now and starts when it reaches zero, on every screen together.
-      const at = Number(data.newCurrentTime) || 0;
+      // A countdown is measured from when the server starts the track, not from the time in the
+      // message, which is out of date when this runs later (the player wasn't ready, or a preview
+      // was playing): what's left is waited, and a track that has started plays where it is.
+      let at = Number(data.newCurrentTime) || 0;
+      if (at < 0 && Number.isFinite(this.clockSkew) && Number.isFinite(Number(data.newLastStartTime))) {
+        at = Math.max(at, (Date.now() / 1000) - this.clockSkew - Number(data.newLastStartTime));
+      }
       this.playVidya(index, Math.max(0, at), true, undefined, data.track);
       clearInterval(this.holdTimer);
       this.holdTimer = null;

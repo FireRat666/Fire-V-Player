@@ -57,6 +57,8 @@ var FireNativeScreen = (() => {
       this.lastToggleAt = -Infinity;
       this.pendingSync = null;
       this.hostSyncPending = false; // a host seek or track change waiting for its sync (resync)
+      this.holdUntil = 0;     // held at its start until then (performance.now()): a karaoke countdown
+      this.holdFromCore();
       this.ready = this.create().catch(e => {
         console.error('[NativeScreen] Could not set up the video player.', e);
         this.core.showToast("Couldn't start the world's video player.", 6000);
@@ -89,7 +91,7 @@ var FireNativeScreen = (() => {
       await core.addComponent(go, core.bsComponent('Plane', { width: w, height: h }, 'BanterPlane', [w, h]));
       await core.addComponent(go, core.bsComponent('Material', { shaderName: 'Unlit/Diffuse' }, 'BanterMaterial', ['Unlit/Diffuse']));
       if (this.destroyed) return;
-      const settings = { url: this.link, volume: this.unityVolume(), loop: false, playOnAwake: !this.wantPaused, skipOnDrop: true, waitForFirstFrame: true };
+      const settings = { url: this.link, volume: this.unityVolume(), loop: false, playOnAwake: !this.wantPaused && !this.holding(), skipOnDrop: true, waitForFirstFrame: true };
       const vp = await core.addComponent(go, core.bsComponent('VideoPlayer', settings,
         'BanterVideoPlayer', [settings.url, settings.volume, settings.loop, settings.playOnAwake, settings.skipOnDrop, settings.waitForFirstFrame]));
       if (this.destroyed) return;
@@ -252,6 +254,46 @@ var FireNativeScreen = (() => {
       return p && Array.isArray(p.playlist) ? p.playlist[p.currentTrack] : null;
     }
 
+    /** True while a karaoke song is counting down to its start: the file waits, paused, at 0:00. */
+    holding() { return performance.now() < this.holdUntil; }
+
+    /** Starts a hold from a track change the core has just had, if it's counting down. */
+    holdFromCore() {
+      if (this.isPreview()) return;
+      const left = (Number(this.core.countdownUntil) || 0) - performance.now();
+      if (left > 0) this.setHold(left / 1000);
+      else this.clearHold();
+    }
+
+    /**
+     * Holds the file at its start for `seconds`, then plays it and checks where the world is.
+     * @param {number} seconds
+     */
+    setHold(seconds) {
+      this.holdUntil = performance.now() + seconds * 1000;
+      clearTimeout(this.countdownTimer);
+      this.countdownTimer = setTimeout(() => {
+        this.clearHold();
+        this.lastToggleAt = -Infinity;
+        this.applyPaused();
+        // Once it has had a moment to start. Not a forced jump, which would be heard on every
+        // screen as the song starts.
+        this.countdownTimer = setTimeout(() => this.requestSync(false), 1000);
+      }, seconds * 1000);
+      if (this.prepared && this.localTime() > 0.2) this.seek(0);
+      this.lastToggleAt = -Infinity;
+      this.applyPaused();
+    }
+
+    /** Ends a hold, so the next applyPaused may play. @returns {boolean} whether there was one. */
+    clearHold() {
+      const was = this.holding();
+      this.holdUntil = 0;
+      clearTimeout(this.countdownTimer);
+      if (was) this.lastToggleAt = -Infinity;
+      return was;
+    }
+
     /** Computes Unity normalized volume (0.0 to 1.0). @returns {number} */
     unityVolume() {
       return this.muted ? 0 : Math.max(0, Math.min(1, Number(this.volume) / 100 || 0));
@@ -270,10 +312,11 @@ var FireNativeScreen = (() => {
       if (!vp || !this.prepared) return;
       const now = performance.now();
       if (now - this.lastToggleAt < TOGGLE_COOLDOWN_MS) return;
-      if (this.playing() === !this.wantPaused) return;
+      const paused = this.wantPaused || this.holding(); // a countdown keeps it paused too
+      if (this.playing() === !paused) return;
       // At the end, playing again would start the file over. The server moves on instead.
       const d = this.duration();
-      if (!this.wantPaused && (this.endedAt != null || (d && this.localTime() >= d - 0.5))) return;
+      if (!paused && (this.endedAt != null || (d && this.localTime() >= d - 0.5))) return;
       this.lastToggleAt = now;
       this.seenPlaying = false; // wait for Unity to say it's playing again
       vp.PlayToggle();
@@ -317,6 +360,7 @@ var FireNativeScreen = (() => {
       this.autoSync = true;
       if (this.core.player) this.wantPaused = !!this.core.player.paused;
       this.hostSyncPending = true;
+      this.holdFromCore();
       this.requestSync(true);
     }
 
@@ -328,19 +372,20 @@ var FireNativeScreen = (() => {
       if (!data || !this.prepared || this.isPreview()) return;
       const p = this.core.player;
       if (p && typeof data.currentTrack === 'number' && data.currentTrack !== p.currentTrack) return; // stale
-      const hard = this.pendingSync && this.pendingSync.hard;
+      let hard = this.pendingSync && this.pendingSync.hard;
       this.pendingSync = null;
       this.resumeSyncPending = false;
       this.hostSyncPending = false;
       const latency = Math.max(0, Date.now() - Number(data.clientTimestamp || Date.now())) / 2000;
       const serverTime = Number(data.currentTime) + (this.wantPaused ? 0 : latency);
       if (!Number.isFinite(serverTime)) return;
-      // A karaoke song counting down to its start: asked again when it has started.
+      // A karaoke song counting down to its start: it waits at 0:00, paused, until then.
       if (serverTime < 0) {
-        clearTimeout(this.countdownTimer);
-        this.countdownTimer = setTimeout(() => this.requestSync(hard), -serverTime * 1000 + 250);
+        if (!this.wantPaused) this.setHold(-serverTime);
         return;
       }
+      // Held, but the world has started: play, and go to where it is.
+      if (this.clearHold()) { hard = true; this.applyPaused(); }
       const d = this.duration();
       if (d && serverTime >= d - 0.5) return; // about to end; the server moves on
       // Ended with no known length: the server keeps counting until someone skips, so only a
@@ -399,6 +444,7 @@ var FireNativeScreen = (() => {
           if (this.isPreview()) break;
           const data = msg.data || {};
           this.wantPaused = !!data.paused;
+          this.clearHold(); // the sync after a resume starts it again if the song is still counting down
           if (!this.wantPaused && Number.isFinite(Number(data.currentTime))) this.seek(Number(data.currentTime));
           this.lastToggleAt = -Infinity;
           this.applyPaused();
@@ -431,6 +477,7 @@ var FireNativeScreen = (() => {
       clearInterval(this.pollTimer);
       clearInterval(this.syncTimer);
       clearTimeout(this.resumeSyncTimer);
+      clearTimeout(this.countdownTimer);
       // Destroying the object destroys the video player with it.
       if (this.go) this.core.destroyObject(this.go);
       this.go = null;

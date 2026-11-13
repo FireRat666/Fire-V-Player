@@ -800,10 +800,25 @@ class App {
     if (!player || !data || typeof data.link !== 'string' || !(seconds > 0 && seconds < 24 * 3600)) return;
     if (this.getYoutubeId(data.link)) return; // YouTube lengths come from YouTube itself
     let changed = false;
+    const current = player.playlist[player.currentTrack];
+    const currentWasUnknown = !!current && current.link === data.link && !current.duration;
     player.playlist.forEach(v => {
       if (v.link === data.link && !v.duration) { v.duration = Math.round(seconds * 1000); changed = true; }
     });
     if (!changed) return;
+    // The track's time ran on while its length wasn't known (in an empty room, say), so it may be
+    // far past its end. It ended at its length, not then: the next track starts from its beginning,
+    // instead of the ticker spending the extra time on a run of tracks, each skipped seconds in as
+    // its own length comes in.
+    if (currentWasUnknown) {
+      const length = current.duration / 1000;
+      const now = new Date().getTime() / 1000;
+      const elapsed = player.paused ? player.currentTime : now - player.lastStartTime;
+      if (elapsed > length) {
+        player.currentTime = length;
+        if (!player.paused) player.lastStartTime = now - length;
+      }
+    }
     player.sockets.forEach(socket => {
       this.send(socket, Commands.PLAYLIST_UPDATED, { playlist: player.playlist, currentTrack: player.currentTrack });
     });

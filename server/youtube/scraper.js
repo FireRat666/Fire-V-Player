@@ -8,6 +8,35 @@ const Util = require('./util.js');
 const { getInnertube } = require('./youtubeiService.js');
 
 /**
+ * A video's title, channel and thumbnail from YouTube's public oEmbed page, which answers when
+ * youtubei.js is refused. It has no length: 0, as for a live stream. A private or missing video
+ * gets an error there, so null.
+ *
+ * @param {string} videoId - YouTube video id.
+ * @returns {Promise<VideoLookup|null>}
+ */
+async function oembedVideo(videoId) {
+  const link = `https://www.youtube.com/watch?v=${videoId}`;
+  try {
+    const res = await fetch(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(link)}`, { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) return null;
+    const info = await res.json();
+    if (!info || !info.title) return null;
+    const channelId = /\/channel\/([\w-]+)/.exec(info.author_url || '');
+    return {
+      title: String(info.title),
+      link,
+      thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+      duration: 0,
+      id: videoId,
+      channel: { name: info.author_name || 'Unknown Channel', id: channelId ? channelId[1] : '' }
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
  * @typedef {Object} ScrapedVideo
  * @property {string} id - 11-character YouTube video ID.
  * @property {string} title - Video title.
@@ -211,7 +240,22 @@ class Scraper {
       }
 
       const yt = await getInnertube();
-      const videoInfo = await yt.getInfo(videoId);
+      let videoInfo;
+      try {
+        videoInfo = await yt.getInfo(videoId);
+      } catch (err) {
+        // getInfo also asks /next (related videos, the owner), which YouTube refuses on its own when
+        // it takes the server for a bot. /player alone has what's needed, and oEmbed the rest.
+        console.warn(`[YT] getInfo failed for ${videoId} (${err.message}); trying the player request alone.`);
+        try {
+          videoInfo = await yt.getBasicInfo(videoId);
+        } catch (err2) {
+          console.warn(`[YT] getBasicInfo failed for ${videoId} (${err2.message}); trying oEmbed.`);
+          const fromOembed = await oembedVideo(videoId);
+          if (fromOembed) return fromOembed;
+          throw err;
+        }
+      }
       const details = videoInfo.basic_info || {};
 
       // Extract thumbnail

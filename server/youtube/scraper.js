@@ -8,6 +8,15 @@ const Util = require('./util.js');
 const { getInnertube } = require('./youtubeiService.js');
 
 /**
+ * Until when (ms) YouTube is taken to be refusing youtubei.js's /next and /player requests, as it
+ * does a server it takes for a bot (a 403 or 429). Meanwhile lookups skip what it would refuse:
+ * each try costs seconds, and the 20 s youtubei.js startup the first time.
+ */
+const refused = { next: 0, player: 0 };
+const REFUSED_PAUSE_MS = 10 * 60 * 1000;
+const isRefusal = err => /status code (403|429)\b/.test(String(err && err.message));
+
+/**
  * A video's title, channel and thumbnail from YouTube's public oEmbed page, which answers when
  * youtubei.js is refused. It has no length: 0, as for a live stream. A private or missing video
  * gets an error there, so null.
@@ -239,17 +248,29 @@ class Scraper {
         throw new Error("Invalid YouTube URL");
       }
 
+      // YouTube refusing the player request too: oEmbed alone, without waiting on youtubei.js.
+      if (Date.now() < refused.player) {
+        const fromOembed = await oembedVideo(videoId);
+        if (fromOembed) return fromOembed;
+        throw new Error('not found by oEmbed, and YouTube is refusing the player request');
+      }
       const yt = await getInnertube();
       let videoInfo;
       try {
-        videoInfo = await yt.getInfo(videoId);
-      } catch (err) {
         // getInfo also asks /next (related videos, the owner), which YouTube refuses on its own when
         // it takes the server for a bot. /player alone has what's needed, and oEmbed the rest.
-        console.warn(`[YT] getInfo failed for ${videoId} (${err.message}); trying the player request alone.`);
+        if (Date.now() < refused.next) videoInfo = await yt.getBasicInfo(videoId);
+        else videoInfo = await yt.getInfo(videoId);
+      } catch (err) {
+        if (isRefusal(err)) refused.next = Date.now() + REFUSED_PAUSE_MS;
+        console.warn(`[YT] Video lookup failed for ${videoId} (${err.message}); trying the player request alone.`);
         try {
           videoInfo = await yt.getBasicInfo(videoId);
         } catch (err2) {
+          if (isRefusal(err2)) {
+            refused.player = Date.now() + REFUSED_PAUSE_MS;
+            console.warn(`[YT] YouTube is refusing the player request; video lookups use oEmbed alone for ${REFUSED_PAUSE_MS / 60000} minutes.`);
+          }
           console.warn(`[YT] getBasicInfo failed for ${videoId} (${err2.message}); trying oEmbed.`);
           const fromOembed = await oembedVideo(videoId);
           if (fromOembed) return fromOembed;
@@ -307,6 +328,7 @@ class Scraper {
 
       return {
         title: title,
+        live: details.is_live === true,
         link: `https://www.youtube.com/watch?v=${videoId}`,
         thumbnail: thumbnail_url,
         duration: duration,

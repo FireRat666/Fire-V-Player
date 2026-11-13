@@ -41,6 +41,9 @@ async function resolveVideoData(app, ws, v) {
   }
   
   if (v && typeof v === 'object') {
+    // Whether it's live comes from YouTube's answer here, never from the one adding it.
+    v = { ...v };
+    delete v.live;
     let link = v.link || v.url;
     // A Drive or Dropbox share link is kept as the address of the file itself (see media.detect).
     const detected = link ? media.detect(link) : null;

@@ -391,6 +391,18 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       if (event.data === YT.PlayerState.PLAYING) {
         this.applyCaptions(); // each new video loads with the player's caption default
         this.startPlaying();
+        // A live video the server couldn't tell was live was loaded at the room's time, deep in
+        // its past: once YouTube says it's live, it goes to the live point, once per load.
+        const video = this.currentVideo;
+        if (video && !video.live && !this.previewVideo && this.liveJumped !== video.link && this.isLiveTrack(video)) {
+          this.liveJumped = video.link;
+          let behind = 0;
+          try { behind = this.yt.getDuration() - this.yt.getCurrentTime(); } catch (e) {}
+          if (behind > 30) {
+            console.log(`[PLAYER] This is a live video, ${Math.round(behind)}s behind its live point; going there.`);
+            this.seekLiveEdge();
+          }
+        }
       } // The aggressive `playVideo()` call on non-playing states has been removed.
         // The auto-sync logic is the robust way to handle unexpected pauses or buffering
         // by correcting the resulting time drift.
@@ -461,7 +473,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         const at = this.worldTime();
         console.log(`[PLAYER] YouTube hasn't moved for ${Math.round(stalled / 1000)}s (at ${t.toFixed(1)}s, state ${state}), loading it again at ${at.toFixed(1)}s.`);
         this.core.showToast("YouTube stopped, reloading the video...");
-        p.loadVideoById(id, at);
+        p.loadVideoById(id, this.startAt(video, at));
         p.playVideo();
       } else if (s.stage === 1 && stalled > STALL_REBUILD_MS) {
         s.stage = 2; s.lastProgress = now;
@@ -474,6 +486,39 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
     }
 
     /** Where the world's playing track is now, in seconds. */
+    /**
+     * Whether a track is streaming live: the server found it so, or YouTube's player says so of
+     * the video it has loaded (a link added while the server couldn't tell). A live video plays
+     * from its live point, not the room's time, and isn't synced: everyone watches it live.
+     * @param {Object} [video] - The track.
+     * @returns {boolean}
+     */
+    isLiveTrack(video) {
+      if (!video) return false;
+      if (video.live) return true;
+      try {
+        const p = this.player;
+        if (!p || (p.isYouTube && !p.isYouTube())) return false;
+        const d = p.getVideoData && p.getVideoData();
+        return !!(d && d.isLive && d.video_id && d.video_id === this.core.getId(video.link));
+      } catch (e) {
+        return false;
+      }
+    }
+
+    /** Where a track starts: `t`, or nothing for a live one, which YouTube then opens at its live point. */
+    startAt(video, t) {
+      return this.isLiveTrack(video) ? undefined : t;
+    }
+
+    /** Puts a live YouTube video at its live point (its length so far). */
+    seekLiveEdge() {
+      try {
+        const end = this.yt && this.yt.getDuration();
+        if (end > 0) this.yt.seekTo(end, true);
+      } catch (e) {}
+    }
+
     worldTime() {
       const d = this.playerData;
       const live = (Date.now() / 1000) - (this.clockSkew || 0) - Number(d.lastStartTime);
@@ -525,8 +570,8 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
             const d = this.playerData;
             const video = this.currentVideo;
             if (!video || !d) return;
-            if (d.paused) yt.cueVideoById(this.core.getId(video.link), Number(d.currentTime) || 0);
-            else yt.loadVideoById(this.core.getId(video.link), this.worldTime());
+            if (d.paused) yt.cueVideoById(this.core.getId(video.link), this.startAt(video, Number(d.currentTime) || 0));
+            else yt.loadVideoById(this.core.getId(video.link), this.startAt(video, this.worldTime()));
             console.log('[PLAYER] The new YouTube player is ready.');
           }
         }
@@ -852,6 +897,12 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
             try { this.player.seekTo(0); } catch (e) {}
             this.holdStart(-Number(currentTime));
             this.core.showToast("Host resumed playback.");
+          } else if (this.isLiveTrack(this.currentVideo)) {
+            // A live video resumes live, not where it was paused.
+            console.log("[PLAYER] Resuming a live video at its live point");
+            this.seekLiveEdge();
+            this.player.playVideo();
+            this.core.showToast("Host resumed playback.");
           } else {
             console.log("[PLAYER] Resuming YouTube at", currentTime);
             // Everyone goes to the point the host resumed at (whatever they skipped to while
@@ -885,8 +936,14 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       case Commands.SYNC_TIME:
         this.currentTime = json.data.currentTime;
         if (this.previewVideo) break;
-        // A live stream (Twitch channel, live .m3u8) has no shared position to keep in sync.
-        if (this.player && this.player.isLive && this.player.isLive()) break;
+        // A live stream (Twitch channel, live .m3u8, live YouTube video) has no shared position
+        // to keep in sync: each screen plays it live.
+        if (this.player && ((this.player.isLive && this.player.isLive()) || this.isLiveTrack(this.currentVideo))) {
+          this.isResumingFromPassthrough = false;
+          this.resumeSyncPending = false;
+          this.startSyncPasses = 0;
+          break;
+        }
         if(this.player && this.readyToPlay) {
           // Calculate latency on-the-fly from the echoed timestamp
           const roundTripTime = Date.now() - json.data.clientTimestamp;
@@ -1394,8 +1451,10 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
           return;
         }
         if(this.lastUrl !== video.link || force) {
-          if (this.player.loadMedia) this.player.loadMedia(video.link, currentTime);
-          else this.player.loadVideoById(this.core.getId(video.link), currentTime);
+          const start = this.startAt(video, currentTime);
+          this.liveJumped = null; // see onYouTubeState
+          if (this.player.loadMedia) this.player.loadMedia(video.link, start);
+          else this.player.loadVideoById(this.core.getId(video.link), start);
           if (this.playerData.paused) {
             this.player.pauseVideo();
           } else {

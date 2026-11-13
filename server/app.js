@@ -638,7 +638,9 @@ class App {
       link: videoData.link,
       votes: 0,
       user: userObject,
-      is_youtube_website: isYoutubeWebsite
+      is_youtube_website: isYoutubeWebsite,
+      // Streaming now: the screens play it from the live point, not the room's time (see player.js).
+      ...(videoData.live === true ? { live: true } : {})
     };
   }
 

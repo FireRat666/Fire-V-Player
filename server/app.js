@@ -848,7 +848,8 @@ class App {
   async setLivePosition(ws, data) {
     const player = this.videoPlayers[ws.i];
     const position = data && Number(data.position);
-    if (!player || !data || typeof data.link !== 'string' || !(position > 0 && position < 30 * 24 * 3600)) return;
+    // A 24/7 stream can be months in: YouTube put one at 86 days. 10 years only keeps out nonsense.
+    if (!player || !data || typeof data.link !== 'string' || !(position > 0 && position < 10 * 365 * 24 * 3600)) return;
     const track = player.playlist[player.currentTrack];
     if (!track || track.link !== data.link || !this.getYoutubeId(track.link) || track.duration || track.liveStart) return;
     const now = new Date().getTime() / 1000;

@@ -2877,14 +2877,15 @@ var FirePlaylistPanel = class {
   fillListItemRow(slot, entry, host, canAdd, inPlaylist) {
     const v = entry.item;
     const added = inPlaylist && inPlaylist.has(v.link);
+    const waits = !added && !!this.waitingLinks && this.waitingLinks.has(v.link);
     this.setStyle(slot.row, 'backgroundColor', entry.index % 2 === 0 ? '#2a2a33' : '#31313c');
     this.setText(slot.title, `    ${entry.index + 1}. ${v.title || 'Untitled'}`);
     const dur = v.duration ? this.timeCode(v.duration / 1000) : '';
-    this.setText(slot.sub, [added ? 'In the playlist' : '', this.sourceName(v.link), dur].filter(Boolean).join('  -  '));
+    this.setText(slot.sub, [added ? 'In the playlist' : waits ? 'Waiting for the host' : '', this.sourceName(v.link), dur].filter(Boolean).join('  -  '));
     this.setThumb(slot, v.thumbnail, v.link);
 
     const defs = [];
-    if ((canAdd || this.addWaits()) && !added) defs.push({ text: '+ Add', fn: () => this.addVideo(v) });
+    if ((canAdd || this.addWaits()) && !added && !waits) defs.push({ text: '+ Add', fn: () => this.addVideo(v) });
     if (host && added) {
       // Already queued: play it where it is.
       defs.push({ text: '▶', color: '#2e7d32', fn: () => {

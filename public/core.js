@@ -2020,8 +2020,8 @@ var Core = class {
     return go && typeof go.GetComponentsInChildrenAsync === 'function' ? go : null;
   }
   // Sets the screen's speakers to the sound chosen. The SDK makes new speakers whenever a video
-  // or the page's sound starts, so this runs every few seconds: it sets them again when their
-  // number, the screen or the choice has changed (`force`: now), and every fifth look anyway.
+  // or the page's sound starts, so this runs every few seconds: it sets them again when they,
+  // the screen or the choice have changed (`force`: now), and every fifth look anyway.
   async applyAudio(force) {
     if (force) this.audioBusyUntil = Date.now() + 20000;
     if (this.destroyed || this.audioApplying) { if (force) this.audioAgain = true; return; }
@@ -2047,7 +2047,11 @@ var Core = class {
         let sources = [];
         try { sources = (await go.GetComponentsInChildrenAsync(BS.Unity.AudioSource)) || []; } catch (e) { sources = []; }
         const p = this.params;
-        const key = `${mode}|${this.fadeOn()}|${moved ? [p['audio-position'], p['audio-position-left'], p['audio-position-right']].join('/') : ''}|${sources.length}`;
+        // The speakers by their handles (a Unity object's id, never reused), so a new set of the same
+        // number is set at once too, not on the fifth look; just the number where there are none.
+        const ids = sources.map(s => s && (s.handle != null ? s.handle : s.unityId));
+        const speakers = ids.every(id => id != null) ? ids.join(',') : sources.length;
+        const key = `${mode}|${this.fadeOn()}|${moved ? [p['audio-position'], p['audio-position-left'], p['audio-position-right']].join('/') : ''}|${speakers}`;
         this.audioLooks = (this.audioLooks || 0) + 1;
         if (sources.length && (force || this.audioTouched !== go || this.audioKey !== key || this.audioLooks % 5 === 0)) {
           const places = await this.speakerPlaces(go, sources.length);

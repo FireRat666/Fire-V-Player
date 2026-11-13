@@ -1631,7 +1631,9 @@ var FirePlaylistPanel = class {
     const player = this.core.player;
     if (!player || !player.playlist || !player.playlist.length) return;
     const len = player.playlist.length;
-    this.send(Commands.SET_TRACK, (player.currentTrack + delta + len) % len);
+    const index = (player.currentTrack + delta + len) % len;
+    // next: with voting on, the server ends the current song instead (see setVideoTrack).
+    this.send(Commands.SET_TRACK, delta > 0 ? { index, next: true } : index);
   }
 
   setTab(tab) {

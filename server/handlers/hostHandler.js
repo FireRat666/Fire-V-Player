@@ -282,6 +282,14 @@ async function setVideoTrack(app, ws, data) {
   }
 
   app.onlyIfHost(ws, async () => {
+    // Next with voting on: the current song is done, as when it ends by itself. It leaves the
+    // playlist and the top-voted song plays. Moving to the next index instead would play the
+    // song after it, and the vote sort puts the skipped one back second, so the next Next
+    // would only bring it back.
+    if (player.canVote && data && typeof data === 'object' && data.next === true) {
+      await skipVotedTrack(app, ws.i);
+      return;
+    }
     if(index < player.playlist.length && index > -1) {
       if(player.canVote) {
         const track = player.playlist[player.currentTrack];
@@ -301,6 +309,40 @@ async function setVideoTrack(app, ws, data) {
       app.send(ws, Commands.OUT_OF_BOUNDS);
     }
   }); // the host's, even under Everyone (or with voting on)
+}
+
+/**
+ * Ends the current song in voting mode: takes it and its votes off the playlist and plays the
+ * top-voted song left, or stops when none is left.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {string} instanceId - Room/instance identifier.
+ * @returns {Promise<void>}
+ */
+async function skipVotedTrack(app, instanceId) {
+  const player = app.videoPlayers[instanceId];
+  if (!player || !player.playlist.length) return;
+  const [finished] = player.playlist.splice(player.currentTrack, 1);
+  player.votes = player.votes.filter(v => v.video !== finished);
+  if (!player.playlist.length) {
+    await internalStop(app, instanceId);
+    return;
+  }
+  // Sorted with the old current song left out of the count, the top-voted song is first.
+  player.currentTrack = 0;
+  player.playlist.forEach(d => {
+    d.votes = player.votes.filter(v => v.video === d && !v.isDown).length
+      - player.votes.filter(v => v.video === d && v.isDown).length;
+  });
+  player.playlist.sort((a, b) => b.votes - a.votes);
+  player.currentTime = 0;
+  player.lastStartTime = new Date().getTime() / 1000;
+  player.paused = false;
+  app.resetBrowserIfNeedBe(player, 0);
+  player.sockets.forEach(socket => {
+    app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: 0, track: player.playlist[0], paused: player.paused, newLastStartTime: player.lastStartTime, playlist: player.playlist });
+  });
+  await app.savePlayerState(instanceId);
 }
 
 /**

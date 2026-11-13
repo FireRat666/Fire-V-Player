@@ -2871,11 +2871,32 @@ var Core = class {
           if (typeof json.data.paused === 'boolean') this.player.paused = json.data.paused;
         }
         break;
+      case Commands.LIVE_POSITION:
+        // A live video's live point is known: the room's time is now the stream's own (see liveEnd).
+        if (this.player && json.data) {
+          this.player.lastStartTime = json.data.newLastStartTime;
+          this.player.currentTime = json.data.newCurrentTime;
+          (this.player.playlist || []).forEach(v => {
+            if (v.link === json.data.link) { v.live = true; v.liveStart = json.data.liveStart; }
+          });
+        }
+        break;
     }
     // A file track needs the world's video player in place of the browser, and back again after.
     try { this.updateScreen(json); } catch (e) { console.error('[Core] Could not switch screens:', e); }
     try { this.updateScreenButtons(); } catch (e) { console.error('[Core] Could not update the screen buttons:', e); }
     this.notifyListeners(json);
+  }
+  /**
+   * Where the current track's live point is, in its own time, when it's a live video whose live
+   * point is known: what the progress bar runs to and seeks can reach. 0 otherwise.
+   * @param {number} serverNow - The server's clock now (seconds), as the caller reckons it.
+   * @returns {number}
+   */
+  liveEnd(serverNow) {
+    const p = this.player;
+    const v = p && p.playlist && p.playlist[p.currentTrack];
+    return v && v.live && v.liveStart ? Math.max(0, serverNow - v.liveStart) : 0;
   }
   // Passes a message to the panel and the other listeners, as if it came from the server.
   notifyListeners(json) {

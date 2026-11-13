@@ -391,8 +391,6 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       if (event.data === YT.PlayerState.PLAYING) {
         this.applyCaptions(); // each new video loads with the player's caption default
         this.startPlaying();
-        // A live video the server couldn't tell was live was loaded at the room's time, deep in
-        // its past: once YouTube says it's live, it goes to the live point, once per load.
         const video = this.currentVideo;
         // A video added without its length (YouTube refused the server's lookup): YouTube's player
         // knows it, and the server takes it from the screen, so the track ends (see setMediaDuration).
@@ -401,14 +399,17 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
           try { length = this.yt.getDuration(); } catch (e) {}
           if (length > 0) this.reportMediaDuration(video.link, length);
         }
+        // A live video the server couldn't tell was live was loaded at the room's time, deep in
+        // its past: once YouTube says it's live, it goes to the live point, once per load, and
+        // reports where that is when it has got there.
         if (video && !video.live && !this.previewVideo && this.liveJumped !== video.link && this.isLiveTrack(video)) {
           this.liveJumped = video.link;
-          let behind = 0;
-          try { behind = this.yt.getDuration() - this.yt.getCurrentTime(); } catch (e) {}
-          if (behind > 30) {
-            console.log(`[PLAYER] This is a live video, ${Math.round(behind)}s behind its live point; going there.`);
-            this.seekLiveEdge();
-          }
+          console.log('[PLAYER] This is a live video; going to its live point.');
+          this.seekLiveEdge();
+          clearTimeout(this.liveReportTimer);
+          this.liveReportTimer = setTimeout(() => this.reportLivePosition(), 3000);
+        } else {
+          this.reportLivePosition();
         }
       } // The aggressive `playVideo()` call on non-playing states has been removed.
         // The auto-sync logic is the robust way to handle unexpected pauses or buffering
@@ -492,11 +493,12 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       }
     }
 
-    /** Where the world's playing track is now, in seconds. */
     /**
      * Whether a track is streaming live: the server found it so, or YouTube's player says so of
-     * the video it has loaded (a link added while the server couldn't tell). A live video plays
-     * from its live point, not the room's time, and isn't synced: everyone watches it live.
+     * the video it has loaded (a link added while the server couldn't tell). Until the server
+     * knows where its live point is (liveStart, see reportLivePosition), a live video plays from
+     * its live point and isn't synced; after, the room's time is the stream's own, and it's synced
+     * like any video.
      * @param {Object} [video] - The track.
      * @returns {boolean}
      */
@@ -513,9 +515,21 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       }
     }
 
-    /** Where a track starts: `t`, or nothing for a live one, which YouTube then opens at its live point. */
+    /** A live video whose live point the server doesn't know yet: played live, not synced. */
+    liveUnsynced(video) {
+      return this.isLiveTrack(video) && !video.liveStart;
+    }
+
+    /**
+     * Where a track starts: `t`, or nothing, which YouTube opens a live video at its live point:
+     * a live video whose live point isn't known yet, or one just made current (t is near 0, the
+     * stream's start; the server moves the room to its live point, see tickAllInstances).
+     */
     startAt(video, t) {
-      return this.isLiveTrack(video) ? undefined : t;
+      if (!this.isLiveTrack(video)) return t;
+      if (video.liveStart && t >= 10) return t;
+      this.livePending = video.link; // at the live point: reportLivePosition can say where that is
+      return undefined;
     }
 
     /** Puts a live YouTube video at its live point (its length so far). */
@@ -523,7 +537,23 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       try {
         const end = this.yt && this.yt.getDuration();
         if (end > 0) this.yt.seekTo(end, true);
+        if (this.currentVideo) this.livePending = this.currentVideo.link;
       } catch (e) {}
+    }
+
+    /**
+     * Tells the server YouTube's position at a live video's live point, from a screen that is
+     * there (it opened the video there, or went there), once per load, until the server knows it.
+     */
+    reportLivePosition() {
+      const video = this.currentVideo;
+      if (!video || this.previewVideo || video.liveStart || this.livePending !== video.link || !this.isLiveTrack(video)) return;
+      let position = 0;
+      try { position = this.yt.getCurrentTime(); } catch (e) {}
+      if (!(position > 0)) return;
+      this.livePending = null;
+      console.log(`[PLAYER] Live point of ${video.link}: ${Math.round(position)}s into the stream.`);
+      this.core.sendMessage({ path: Commands.LIVE_POSITION, data: { link: video.link, position } });
     }
 
     worldTime() {
@@ -847,6 +877,20 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
           this.pendingTrackChange = json.data;
         }
         break;
+      case Commands.LIVE_POSITION:
+        // The live video's live point is known: the room's time is the stream's own from now on,
+        // and this screen is synced to it (it's at the live point already, or goes there).
+        if (this.playerData && json.data) {
+          if (!this.playerData.paused) {
+            this.playerData.lastStartTime = json.data.newLastStartTime;
+            this.playerData.currentTime = json.data.newCurrentTime;
+          }
+          [...(this.playerData.playlist || []), this.currentVideo].forEach(v => {
+            if (v && v.link === json.data.link) { v.live = true; v.liveStart = json.data.liveStart; }
+          });
+          if (this.currentVideo && this.currentVideo.link === json.data.link && !this.previewVideo && !this.playerData.paused) this.syncAfterLoad();
+        }
+        break;
       case Commands.HOST_SEEK:
         // A seek during a countdown ends it, or its timer would pause and rewind the seek.
         if (this.holdTimer) {
@@ -904,8 +948,8 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
             try { this.player.seekTo(0); } catch (e) {}
             this.holdStart(-Number(currentTime));
             this.core.showToast("Host resumed playback.");
-          } else if (this.isLiveTrack(this.currentVideo)) {
-            // A live video resumes live, not where it was paused.
+          } else if (this.liveUnsynced(this.currentVideo)) {
+            // A live video with no known live point resumes live, not where it was paused.
             console.log("[PLAYER] Resuming a live video at its live point");
             this.seekLiveEdge();
             this.player.playVideo();
@@ -945,7 +989,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         if (this.previewVideo) break;
         // A live stream (Twitch channel, live .m3u8, live YouTube video) has no shared position
         // to keep in sync: each screen plays it live.
-        if (this.player && ((this.player.isLive && this.player.isLive()) || this.isLiveTrack(this.currentVideo))) {
+        if (this.player && ((this.player.isLive && this.player.isLive()) || this.liveUnsynced(this.currentVideo))) {
           this.isResumingFromPassthrough = false;
           this.resumeSyncPending = false;
           this.startSyncPasses = 0;

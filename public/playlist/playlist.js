@@ -308,7 +308,9 @@ var Playlist = class {
 
     let updateCount = 0;
     this.uiUpdateInterval = setInterval(() => {
-      let { lastStartTime, duration } = this.core.player;
+      const { lastStartTime } = this.core.player;
+      const duration = this.trackLength();
+      const live = this.core.liveEnd((Date.now() / 1000) - this.clockSkew) > 0;
       if (!(duration > 0)) {
         // No known length (some files): just how far in it is.
         const t = this.core.player.paused ? (this.core.player.currentTime || 0) : ((Date.now() / 1000) - this.clockSkew) - lastStartTime;
@@ -336,9 +338,15 @@ var Playlist = class {
       }
       const currentTimeText = document.querySelector('.currentTimeText');
       if (currentTimeText) {
-        currentTimeText.innerText = `${this.timeCode(calculatedTime)} / ${this.timeCode(duration)}`;
+        currentTimeText.innerText = `${this.timeCode(calculatedTime)} / ${this.timeCode(duration)}${live ? ' LIVE' : ''}`;
       }
     }, 1000); // Update every second
+  }
+
+  // How long the current track is, or for a live video how far its live point is (see core.liveEnd).
+  trackLength() {
+    const p = this.core.player;
+    return this.core.liveEnd((Date.now() / 1000) - this.clockSkew) || (p && p.duration) || 0;
   }
 
   setupCoreScript() {
@@ -1238,8 +1246,9 @@ var Playlist = class {
       this.seekTimeInput.focus();
 
       // Update the slider and input to reflect the current video time
-      if (this.core.player && this.core.player.duration > 0) {
-        const { currentTime, duration } = this.core.player;
+      if (this.core.player && this.trackLength() > 0) {
+        const { currentTime } = this.core.player;
+        const duration = this.trackLength();
         const progressPercent = (currentTime / duration) * 100;
         this.seekSliderProgress.style.width = `${progressPercent}%`;
         this.seekSliderThumb.style.left = `${progressPercent}%`;
@@ -1254,11 +1263,11 @@ var Playlist = class {
 
     // Clicking the slider updates the time input without seeking.
     this.seekSliderContainer.addEventListener('click', (event) => {
-      if (this.core.player && this.core.player.duration > 0) {
+      if (this.core.player && this.trackLength() > 0) {
         const sliderWidth = this.seekSliderContainer.clientWidth;
         const clickPosition = event.offsetX;
         const seekRatio = clickPosition / sliderWidth;
-        const newTime = seekRatio * this.core.player.duration;
+        const newTime = seekRatio * this.trackLength();
         // Update the input field with the new time.
         this.seekTimeInput.value = this.timeCode(newTime);
         // Trigger the input event to update the slider's visual state.
@@ -1291,10 +1300,10 @@ var Playlist = class {
 
     // Update the slider position as the user types in the input box.
     this.seekTimeInput.addEventListener('input', () => {
-      if (this.core.player && this.core.player.duration > 0) {
+      if (this.core.player && this.trackLength() > 0) {
         const timeInSeconds = this.parseTimeToSeconds(this.seekTimeInput.value);
         if (timeInSeconds !== null) {
-          const progressPercent = (timeInSeconds / this.core.player.duration) * 100;
+          const progressPercent = (timeInSeconds / this.trackLength()) * 100;
           const clampedPercent = Math.max(0, Math.min(100, progressPercent));
           this.seekSliderProgress.style.width = `${clampedPercent}%`;
           this.seekSliderThumb.style.left = `${clampedPercent}%`;

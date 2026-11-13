@@ -73,6 +73,9 @@ var Commands = {
   SHOW_REPLACE_PROMPT: 'show-replace-prompt',
   REPLACE_VIDEO: 'replace-video',
   MEDIA_DURATION: 'media-duration', // a player reports the length of a video that came without one
+  // A screen at a live video's live point reports YouTube's position there; the server then
+  // tells everyone where the stream's position 0 was (liveStart, see setLivePosition).
+  LIVE_POSITION: 'live-position',
   ITEM_REPLACED: 'item-replaced',
   ADD_AND_PLAY: 'add-and-play',
   ADD_AND_PLAY_NEXT: 'add-and-play-next',

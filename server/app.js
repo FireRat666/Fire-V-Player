@@ -598,6 +598,9 @@ class App {
       case Commands.MEDIA_DURATION:
         await this.setMediaDuration(ws, msg.data);
         break;
+      case Commands.LIVE_POSITION:
+        await this.setLivePosition(ws, msg.data);
+        break;
     }
   }
   /**
@@ -831,6 +834,42 @@ class App {
     await this.savePlayerState(ws.i);
   }
   /**
+   * Takes a screen's report of where a live video's live point is: YouTube's position in the
+   * stream (seconds), read by a screen that opened it there. The first one sets `liveStart`, the
+   * server time the stream's position was 0, so the live point is always now - liveStart; and
+   * the room's time becomes that position, so seeks, skips and the progress bar are in the
+   * stream's own time, the same on every screen. Later reports are ignored.
+   * A track without a length that a screen finds live (a link oEmbed answered for) becomes live.
+   *
+   * @param {Object} ws - The reporting screen's WebSocket.
+   * @param {{link: string, position: number}} data
+   * @returns {Promise<void>}
+   */
+  async setLivePosition(ws, data) {
+    const player = this.videoPlayers[ws.i];
+    const position = data && Number(data.position);
+    if (!player || !data || typeof data.link !== 'string' || !(position > 0 && position < 30 * 24 * 3600)) return;
+    const track = player.playlist[player.currentTrack];
+    if (!track || track.link !== data.link || !this.getYoutubeId(track.link) || track.duration || track.liveStart) return;
+    const now = new Date().getTime() / 1000;
+    track.live = true;
+    track.liveStart = now - position;
+    player.liveTrack = track; // already at the live point (see tickAllInstances)
+    // The room is where the screens are (live), unless the host has paused it.
+    if (!player.paused) {
+      player.lastStartTime = now - position;
+      player.currentTime = position;
+    }
+    player.sockets.forEach(socket => {
+      this.send(socket, Commands.LIVE_POSITION, {
+        link: track.link, liveStart: track.liveStart, paused: !!player.paused,
+        newLastStartTime: player.lastStartTime, newCurrentTime: player.currentTime
+      });
+    });
+    await this.savePlayerState(ws.i);
+  }
+
+  /**
    * Searches YouTube or the Internet Archive, or looks up a pasted media link.
    * Transmits `SEARCH_RESULTS` back to the requesting WebSocket client.
    *
@@ -993,6 +1032,23 @@ class App {
         
         if (!player.paused) {
           player.currentTime = now - player.lastStartTime;
+        }
+
+        // A live video whose live point is known, just made the current track (Previous, a loop,
+        // a pick from the list), starts at the live point, not at its stream's start.
+        const track = player.playlist[player.currentTrack];
+        if (track !== player.liveTrack) {
+          player.liveTrack = track; // not saved (see _performSave)
+          if (track && track.live && track.liveStart && !player.paused && player.currentTime < 10) {
+            player.lastStartTime = track.liveStart;
+            player.currentTime = now - track.liveStart;
+            player.sockets.forEach(socket => {
+              this.send(socket, Commands.LIVE_POSITION, {
+                link: track.link, liveStart: track.liveStart, paused: false,
+                newLastStartTime: player.lastStartTime, newCurrentTime: player.currentTime
+              });
+            });
+          }
         }
 
         // --- Periodic Time Synchronization ---

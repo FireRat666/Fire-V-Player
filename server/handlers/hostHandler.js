@@ -184,6 +184,16 @@ async function adminTakeOver(app, ws) {
  * @param {boolean} isForward - True to skip forward, false to skip backward.
  * @returns {Promise<void>}
  */
+/**
+ * The latest point the current track can be at, in seconds: its length, or for a live video
+ * whose live point is known, the live point now. 0 when there's no limit.
+ */
+function trackEnd(player, now) {
+  const track = player.playlist[player.currentTrack] || {};
+  if (track.live && track.liveStart) return Math.max(0, now - track.liveStart);
+  return (track.duration || 0) / 1000;
+}
+
 async function hostSkip(app, ws, isForward) {
   app.onlyIfHost(ws, async () => {
     const player = app.videoPlayers[ws.i];
@@ -196,16 +206,22 @@ async function hostSkip(app, ws, isForward) {
     const delta = isForward ? skipAmount : -skipAmount;
     const oldTime = player.paused ? (player.currentTime || 0) : now - player.lastStartTime;
     let newCurrentTime;
+    const end = trackEnd(player, now);
+    const track = player.playlist[player.currentTrack] || {};
     if (player.paused) {
       // Paused stays paused, at the new point (the time is held in currentTime while paused).
-      const trackDuration = ((player.playlist[player.currentTrack] || {}).duration || 0) / 1000;
       newCurrentTime = Math.max(0, (player.currentTime || 0) + delta);
-      if (trackDuration > 0) newCurrentTime = Math.min(newCurrentTime, trackDuration);
+      if (end > 0) newCurrentTime = Math.min(newCurrentTime, end);
       player.lastStartTime = now - newCurrentTime;
     } else {
       // To skip forward in time, we subtract from the start timestamp.
       player.lastStartTime -= delta;
       newCurrentTime = now - player.lastStartTime;
+      // A live video can't go past its live point.
+      if (track.live && end > 0 && newCurrentTime > end) {
+        newCurrentTime = end;
+        player.lastStartTime = now - end;
+      }
     }
     player.currentTime = newCurrentTime; // Keep server state consistent.
 
@@ -364,13 +380,14 @@ async function setVideoTime(app, ws, time) {
   app.onlyIfHost(ws, async () => {
     if (!player.playlist.length) return;
 
-    const trackDuration = (player.playlist[player.currentTrack].duration || 0) / 1000;
-    // Clamp the time to be within the video's duration (when it's known: a file may not have one)
+    const now = new Date().getTime() / 1000;
+    // Clamp the time to be within the video's duration (when it's known: a file may not have
+    // one), or a live video's live point.
+    const trackDuration = trackEnd(player, now);
     const t = Number(time);
     if (!Number.isFinite(t)) return;
     const newTime = Math.max(0, trackDuration > 0 ? Math.min(t, trackDuration) : t);
 
-    const now = new Date().getTime() / 1000;
     const oldTime = player.paused ? (player.currentTime || 0) : now - player.lastStartTime;
     player.lastStartTime = now - newTime;
     player.currentTime = newTime;

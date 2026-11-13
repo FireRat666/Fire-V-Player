@@ -1704,6 +1704,12 @@ var FirePlaylistPanel = class {
     return t.split(':').map(Number).reduce((acc, n) => acc * 60 + n, 0);
   }
 
+  // How long the current track is, or for a live video how far its live point is (see core.liveEnd).
+  trackLength() {
+    const p = this.core.player;
+    return this.core.liveEnd(Date.now() / 1000 - this.clockSkew) || (p && p.duration) || 0;
+  }
+
   currentPlaybackTime() {
     const p = this.core.player;
     if (!p) return 0;
@@ -1723,7 +1729,8 @@ var FirePlaylistPanel = class {
     const p = this.core.player;
     if (!p || !p.playlist || !p.playlist.length) return;
     // A file may have no known length; then only the start limits it.
-    const t = Math.max(0, p.duration > 0 ? Math.min(p.duration, this.currentPlaybackTime() + delta) : this.currentPlaybackTime() + delta);
+    const end = this.trackLength();
+    const t = Math.max(0, end > 0 ? Math.min(end, this.currentPlaybackTime() + delta) : this.currentPlaybackTime() + delta);
     this.send(Commands.SET_TIME, t);
   }
 
@@ -1733,7 +1740,7 @@ var FirePlaylistPanel = class {
     if (typeof el.OnMouseDown !== 'function') return; // an SDK without mouse events
     const canSeek = () => {
       const p = this.core.player;
-      return !this.core.blocked && this.isHost() && !!p && !!p.playlist && p.playlist.length > 0 && p.duration > 0;
+      return !this.core.blocked && this.isHost() && !!p && !!p.playlist && p.playlist.length > 0 && this.trackLength() > 0;
     };
     // The song the drag began on: if another starts meanwhile, the drag is dropped, as its time
     // was for the old song. The play count catches the same song starting again (a restart, a
@@ -1747,11 +1754,11 @@ var FirePlaylistPanel = class {
     const cancel = () => { this.dragSeek = null; this.updateTime(); };
     const at = (e) => {
       const x = e && Number.isFinite(e.clientX) ? e.clientX : 0;
-      const d = this.core.player.duration;
+      const d = this.trackLength();
       return Math.min(Math.max(0, x / PROGRESS_WIDTH) * d, Math.max(0, d - 1)); // the very end would end the song
     };
     const show = (t) => {
-      const d = this.core.player.duration;
+      const d = this.trackLength();
       this.setText(this.timeLabel, `${this.timeCode(t)} / ${this.timeCode(d)}`);
       this.setStyle(this.progInner, 'width', `${Math.round((t / d) * 200) / 2}%`);
     };
@@ -2431,7 +2438,7 @@ var FirePlaylistPanel = class {
       this.setStyle(this.progInner, 'width', '0%');
       return;
     }
-    const duration = p.duration;
+    const duration = this.trackLength();
     if (!(duration > 0)) {
       // No known length (some files): just how far in it is.
       const t = Math.max(0, p.paused ? (p.currentTime || 0) : ((Date.now() / 1000 - this.clockSkew) - (p.lastStartTime || 0)));
@@ -2441,7 +2448,9 @@ var FirePlaylistPanel = class {
     }
     let t = p.paused ? (p.currentTime || 0) : ((Date.now() / 1000 - this.clockSkew) - (p.lastStartTime || 0));
     t = Math.max(0, Math.min(t, duration));
-    this.setText(this.timeLabel, `${this.timeCode(t)} / ${this.timeCode(duration)}`);
+    // A live video's bar runs to its live point, which moves on with it.
+    const live = this.core.liveEnd(Date.now() / 1000 - this.clockSkew) > 0;
+    this.setText(this.timeLabel, `${this.timeCode(t)} / ${this.timeCode(duration)}${live ? ' LIVE' : ''}`);
     const pct = Math.round((t / duration) * 200) / 2; // half-percent steps
     this.setStyle(this.progInner, 'width', `${pct}%`);
   }

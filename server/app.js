@@ -802,12 +802,14 @@ class App {
     const player = this.videoPlayers[ws.i];
     const seconds = data && Number(data.duration);
     if (!player || !data || typeof data.link !== 'string' || !(seconds > 0 && seconds < 24 * 3600)) return;
-    if (this.getYoutubeId(data.link)) return; // YouTube lengths come from YouTube itself
+    // A YouTube video's length normally comes with it from YouTube. One looked up while YouTube
+    // refused the server (oEmbed has no lengths) gets it from the screen, so it ends. A live
+    // video has none, and plays until someone moves on.
     let changed = false;
     const current = player.playlist[player.currentTrack];
-    const currentWasUnknown = !!current && current.link === data.link && !current.duration;
+    const currentWasUnknown = !!current && current.link === data.link && !current.duration && !current.live;
     player.playlist.forEach(v => {
-      if (v.link === data.link && !v.duration) { v.duration = Math.round(seconds * 1000); changed = true; }
+      if (v.link === data.link && !v.duration && !v.live) { v.duration = Math.round(seconds * 1000); changed = true; }
     });
     if (!changed) return;
     // The track's time ran on while its length wasn't known (in an empty room, say), so it may be

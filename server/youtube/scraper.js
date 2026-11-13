@@ -18,8 +18,8 @@ const isRefusal = err => /status code (403|429)\b/.test(String(err && err.messag
 
 /**
  * A video's title, channel and thumbnail from YouTube's public oEmbed page, which answers when
- * youtubei.js is refused. It has no length: 0, as for a live stream. A private or missing video
- * gets an error there, so null.
+ * youtubei.js is refused. It has no length: 0, until the screen playing it reports one (see
+ * setMediaDuration in app.js). A private or missing video gets an error there, so null.
  *
  * @param {string} videoId - YouTube video id.
  * @returns {Promise<VideoLookup|null>}

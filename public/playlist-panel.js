@@ -475,6 +475,20 @@ var FirePlaylistPanel = class {
     return el;
   }
 
+  // A web address shown as text that opens in the viewer's browser when pressed (the client asks
+  // them first). `url` is the address, or a function giving it, for one that changes.
+  async link(parent, text, url, styles) {
+    return this.button(parent, text, () => this.openLink(typeof url === 'function' ? url() : url), Object.assign({
+      backgroundColor: 'rgba(0,0,0,0)', paddingLeft: '6px', paddingRight: '6px', paddingTop: '2px', paddingBottom: '2px',
+      marginLeft: '0px', marginRight: '0px', marginTop: '0px', marginBottom: '0px'
+    }, styles || {}));
+  }
+
+  openLink(url) {
+    if (!url) return;
+    if (!this.core.openPage(url)) this.core.showToast(`Couldn't open it here. Go to ${url.replace(/^https?:\/\//, '')} in your browser.`, 6000);
+  }
+
   // A button with drawn icons (drawLock, drawSpeaker) and text as children, so the icon can be
   // more than the UI font has. `draw` adds the icon to the button. Its text label is btn.label.
   async iconButton(parent, draw, text, onClick, styles) {
@@ -876,7 +890,9 @@ var FirePlaylistPanel = class {
     this.phoneQrBoxes = [];
     const phoneText = await this.div(this.phoneCard, { display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 1 });
     this.phoneScanLabel = await this.label(phoneText, 'Scan this with your phone, or go to', { fontSize: '28px', color: '#e1bee7' });
-    this.phoneUrlLabel = await this.label(phoneText, '', { fontSize: '46px', fontWeight: 'bold', color: '#80deea', marginTop: '4px' });
+    // Opens the page with the code already in, for someone at a computer rather than a phone.
+    this.phoneUrlLabel = await this.link(phoneText, '', () => this.pasteCode && `${this.core.getProtocol()}://${this.core.hostUrl}/p/${this.pasteCode}`,
+      { fontSize: '46px', fontWeight: 'bold', color: '#80deea', marginTop: '4px' });
     await this.label(phoneText, 'and enter this code:', { fontSize: '28px', color: '#e1bee7', marginTop: '8px' });
     this.phoneCodeLabel = await this.label(phoneText, '', {
       fontSize: '96px', fontWeight: 'bold', color: '#ffffff', marginTop: '4px',
@@ -988,7 +1004,7 @@ var FirePlaylistPanel = class {
     const qrSize = (SETUP_GUIDE_QR.length + 2 * QR_MARGIN) * QR_MODULE_PX;
     this.qrEl = await this.div(guideCol, { width: `${qrSize}px`, height: `${qrSize}px`, flexShrink: 0, backgroundColor: '#ffffff', marginTop: '10px' });
     await colText(guideCol, 'Scan with your phone for the setup guide, or go to', { fontSize: '19px', textAlign: 'center', color: '#bbbbbb', marginTop: '8px' });
-    await colText(guideCol, SETUP_GUIDE_URL.replace(/^https:\/\//, ''), { fontSize: '30px', fontWeight: 'bold', color: '#80deea', marginTop: '2px', textAlign: 'center' });
+    await this.link(guideCol, SETUP_GUIDE_URL.replace(/^https:\/\//, ''), SETUP_GUIDE_URL, { fontSize: '30px', fontWeight: 'bold', color: '#80deea', marginTop: '2px' });
     await colText(guideCol, 'Move this panel by grabbing the bar under it. Scroll down for more.', { fontSize: '19px', color: '#999999', marginTop: '16px', textAlign: 'center' });
     await colText(guideCol, 'Made by FireRat', { fontSize: '19px', color: '#999999', marginTop: '8px', textAlign: 'center' });
     this.infoVersionLabel = await colText(guideCol, '', { fontSize: '17px', color: '#888888', marginTop: '4px', textAlign: 'center' });

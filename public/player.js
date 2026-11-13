@@ -847,6 +847,9 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
             // Resumed during a karaoke countdown: wait out what's left of it (holdStart syncs at the end).
             console.log("[PLAYER] Resuming during the countdown,", -currentTime, "s left");
             clearTimeout(this.resumeSyncTimer);
+            // Back to the start first: a skip while paused may have moved it, and the hold only
+            // rewinds a video that is playing.
+            try { this.player.seekTo(0); } catch (e) {}
             this.holdStart(-Number(currentTime));
             this.core.showToast("Host resumed playback.");
           } else {

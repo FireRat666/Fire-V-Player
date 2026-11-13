@@ -287,7 +287,10 @@ async function setVideoTrack(app, ws, data) {
     // song after it, and the vote sort puts the skipped one back second, so the next Next
     // would only bring it back.
     if (player.canVote && data && typeof data === 'object' && data.next === true) {
-      await skipVotedTrack(app, ws.i);
+      // Only the song the host saw playing: a double press, or a Next sent as it ended,
+      // would otherwise take off the song after it too.
+      const playing = player.playlist[player.currentTrack];
+      if (playing && playing.link === data.current) await skipVotedTrack(app, ws.i);
       return;
     }
     if(index < player.playlist.length && index > -1) {

@@ -1632,8 +1632,10 @@ var FirePlaylistPanel = class {
     if (!player || !player.playlist || !player.playlist.length) return;
     const len = player.playlist.length;
     const index = (player.currentTrack + delta + len) % len;
-    // next: with voting on, the server ends the current song instead (see setVideoTrack).
-    this.send(Commands.SET_TRACK, delta > 0 ? { index, next: true } : index);
+    // next: with voting on, the server ends the current song instead (see setVideoTrack), and
+    // only if it is still the one named in current (not after a double press or a song's end).
+    const playing = player.playlist[player.currentTrack];
+    this.send(Commands.SET_TRACK, delta > 0 ? { index, next: true, current: playing && playing.link } : index);
   }
 
   setTab(tab) {

@@ -611,12 +611,19 @@ class App {
    * @private
    */
   _createVideoObject(videoData, userObject, source, isYoutubeWebsite = false) {
+    // A length in ms: a number (or numeric text), or { milis }. Anything else (a client can send
+    // anything) is 0, an unknown length.
+    const ms = (d) => {
+      const raw = (typeof d === 'object' && d !== null) ? d.milis : d;
+      const n = typeof raw === 'number' || typeof raw === 'string' ? Number(raw) : NaN;
+      return Number.isFinite(n) && n >= 0 ? n : 0;
+    };
     // Standardizes video objects from different sources (ytfps, scraper)
     if (source === 'ytfps') {
       return {
         title: videoData.title,
         thumbnail: videoData.thumbnail_url,
-        duration: videoData.milis_length,
+        duration: ms(videoData.milis_length),
         link: videoData.url,
         votes: 0,
         user: userObject,
@@ -624,15 +631,10 @@ class App {
       };
     }
     // Default to 'scraper' source
-    // The duration from the scraper/search can either be a flat number of milliseconds
-    // or an object like { milis: 12345 }. This handles both cases.
-    const durationMs = (typeof videoData.duration === 'object' && videoData.duration !== null)
-      ? videoData.duration.milis
-      : videoData.duration;
     return {
       title: videoData.title,
       thumbnail: videoData.thumbnail,
-      duration: durationMs,
+      duration: ms(videoData.duration),
       link: videoData.link,
       votes: 0,
       user: userObject,

@@ -103,6 +103,11 @@ async function addToPlaylist(app, ws, v, skipUpdate, isYoutubeWebsite) {
         app.send(ws, Commands.ERROR, { message: "This video is already in the playlist." });
         return;
       }
+      // Checked again: the host may have locked the player during the lookup.
+      if (player.locked && !(player.host && player.host.id === ws.u.id)) {
+        app.send(ws, Commands.ERROR, { message: "The player was locked meanwhile. Add the video again to ask the host." });
+        return;
+      }
       appendVideo(app, ws.i, app._createVideoObject(resolvedV, ws.u, 'scraper', isYoutubeWebsite), skipUpdate);
       dropWaiting(app, ws.i, resolvedV.link);
       await app.savePlayerState(ws.i);
@@ -458,6 +463,8 @@ async function fromPlaylist(app, ws, data) {
       app.send(ws, Commands.ERROR, { message: lists.errorMessage(error) });
       return;
     }
+    // Checked again: the room may have switched to karaoke while the list loaded.
+    if (data.fromPlayer === true && player.isKaraoke) return;
     if (!list.items.length) {
       app.send(ws, Commands.ERROR, { message: `Nothing in "${list.title}" can be played here.${skippedNote(list.skipped)}` });
       return;

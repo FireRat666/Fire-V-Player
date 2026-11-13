@@ -796,6 +796,12 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         }
         break;
       case Commands.HOST_SEEK:
+        // A seek during a countdown ends it, or its timer would pause and rewind the seek.
+        if (this.holdTimer) {
+          clearInterval(this.holdTimer);
+          this.holdTimer = null;
+          this.hideCountdown();
+        }
         if (this.playerData && json.data) {
           this.playerData.lastStartTime = json.data.newLastStartTime;
           this.playerData.currentTime = json.data.newCurrentTime;
@@ -837,6 +843,12 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
             this.core.showToast("Host paused playback.");
             // We no longer call this.disableAutoSync() here to preserve the user's manual toggle state
             // and UI visibility. The SYNC_TIME handler already ignores syncs while paused.
+          } else if (Number(currentTime) < 0) {
+            // Resumed during a karaoke countdown: wait out what's left of it (holdStart syncs at the end).
+            console.log("[PLAYER] Resuming during the countdown,", -currentTime, "s left");
+            clearTimeout(this.resumeSyncTimer);
+            this.holdStart(-Number(currentTime));
+            this.core.showToast("Host resumed playback.");
           } else {
             console.log("[PLAYER] Resuming YouTube at", currentTime);
             // Everyone goes to the point the host resumed at (whatever they skipped to while

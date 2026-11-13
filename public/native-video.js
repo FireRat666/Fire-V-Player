@@ -422,7 +422,8 @@ var FireNativeScreen = (() => {
       if (hard || ((this.autoSync || settling) && Math.abs(drift) > MAX_DRIFT_S)) {
         // Still off just after a jump: that is what the jump itself cost, so the next aims ahead by it.
         const now = performance.now();
-        if (!this.wantPaused && now - this.lastJumpAt < SYNC_EVERY_MS * 2.5 && Math.abs(drift) <= MAX_SEEK_LEAD_S) {
+        // Not from a forced sync: a host seek or track change moves the world, not the jump's cost.
+        if (!hard && !this.wantPaused && now - this.lastJumpAt < SYNC_EVERY_MS * 2.5 && Math.abs(drift) <= MAX_SEEK_LEAD_S) {
           this.seekLead = Math.max(0, Math.min(MAX_SEEK_LEAD_S, this.seekLead + drift));
           this.core.nativeSeekLead = this.seekLead;
         }
@@ -492,7 +493,12 @@ var FireNativeScreen = (() => {
           const data = msg.data || {};
           this.wantPaused = !!data.paused;
           this.clearHold(); // the sync after a resume starts it again if the song is still counting down
-          if (!this.wantPaused && Number.isFinite(Number(data.currentTime))) this.seek(Number(data.currentTime) + this.seekLead);
+          const at = Number(data.currentTime);
+          // Resumed during a karaoke countdown: wait out what's left of it at 0:00, as onSync does.
+          if (!this.wantPaused && Number.isFinite(at)) {
+            if (at < 0) this.setHold(-at);
+            else this.seek(at + this.seekLead);
+          }
           this.lastToggleAt = -Infinity;
           this.applyPaused();
           // On resume, everyone goes to the host's point (above, whatever they skipped to while

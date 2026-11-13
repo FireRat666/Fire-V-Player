@@ -2473,7 +2473,8 @@ var FirePlaylistPanel = class {
 
     // Controls
     this.display(this.prevTrackBtn, !this.karaoke && host && playlist.length > 1);
-    this.display(this.nextTrackBtn, !this.karaoke && host && playlist.length > 1);
+    // With voting on, Next ends the current song (see changeTrack), so it works on the last one too.
+    this.display(this.nextTrackBtn, !this.karaoke && host && playlist.length > (player.canVote ? 0 : 1));
     if (this.karaoke) {
       const singer = this.currentSinger();
       const canControlSong = hasPlaylist && (host || !!(singer && window.user && singer.id === window.user.id));

@@ -27,7 +27,10 @@ async function toggleLock(app, ws, locked) {
     const player = app.videoPlayers[ws.i];
     player.locked = locked;
     // Unlocked, anyone can add, so songs waiting for approval go ahead.
-    if (!player.locked) require('./karaokeHandler.js').approveAll(app, ws.i);
+    if (!player.locked) {
+      require('./karaokeHandler.js').approveAll(app, ws.i);
+      require('./playlistHandler.js').approveAllVideos(app, ws.i);
+    }
     // Instead of sending the whole state, broadcast a small, specific message.
     player.sockets.forEach(socket => {
       app.send(socket, Commands.LOCK_STATE_CHANGED, { locked: player.locked });
@@ -58,6 +61,44 @@ async function toggleCanTakeOver(app, ws, canTakeOver) {
 
     player.canTakeOver = canTakeOver;
     player.sockets.forEach(socket => {
+      app.send(socket, Commands.CAN_TAKE_OVER_STATE_CHANGED, { canTakeOver: player.canTakeOver });
+    });
+    await app.savePlayerState(ws.i);
+  });
+}
+
+/**
+ * Sets the lock and Take Over together (the panel's "who controls the player" choice), so one
+ * can't change without the other: both are checked first, then both are set and saved, and
+ * everyone is told what they are now.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - Client WebSocket requesting the change.
+ * @param {{locked: boolean, canTakeOver: boolean}} data - The two settings wanted.
+ * @returns {Promise<void>}
+ */
+async function setControl(app, ws, data) {
+  app.onlyIfHost(ws, async () => {
+    const player = app.videoPlayers[ws.i];
+    if (!data || typeof data.locked !== 'boolean' || typeof data.canTakeOver !== 'boolean') {
+      app.send(ws, Commands.ERROR, { message: "That isn't a control setting." });
+      return;
+    }
+    // As for toggleCanTakeOver: only a host who is in the space can turn Take Over off.
+    if (player.canTakeOver && !data.canTakeOver && !player.hostConnected) {
+      app.send(ws, Commands.ERROR, { message: "You must be in the 3D space to disable takeover." });
+      return;
+    }
+    const unlocking = !!player.locked && !data.locked;
+    player.locked = data.locked;
+    player.canTakeOver = data.canTakeOver;
+    // Unlocked, anyone can add, so songs and videos waiting for approval go ahead (as toggleLock).
+    if (unlocking) {
+      require('./karaokeHandler.js').approveAll(app, ws.i);
+      require('./playlistHandler.js').approveAllVideos(app, ws.i);
+    }
+    player.sockets.forEach(socket => {
+      app.send(socket, Commands.LOCK_STATE_CHANGED, { locked: player.locked });
       app.send(socket, Commands.CAN_TAKE_OVER_STATE_CHANGED, { canTakeOver: player.canTakeOver });
     });
     await app.savePlayerState(ws.i);
@@ -218,7 +259,7 @@ async function stop(app, ws) {
     await internalStop(app, ws.i);
     return;
   }
-  app.onlyIfHost(ws, async () => internalStop(app, ws.i), player.locked);
+  app.onlyIfHost(ws, async () => internalStop(app, ws.i));
 }
 
 /**
@@ -259,7 +300,7 @@ async function setVideoTrack(app, ws, data) {
     } else {
       app.send(ws, Commands.OUT_OF_BOUNDS);
     }
-  }, player.locked && !player.canVote);
+  }); // the host's, even under Everyone (or with voting on)
 }
 
 /**
@@ -300,7 +341,7 @@ async function setVideoTime(app, ws, time) {
       });
     });
     await app.savePlayerState(ws.i);
-  }, player.locked);
+  }); // the host's, even under Everyone
 }
 
 /**
@@ -376,6 +417,7 @@ async function togglePause(app, ws) {
 module.exports = {
     toggleLock,
     toggleCanTakeOver,
+    setControl,
     takeOver,
     adminTakeOver,
     hostSkip,

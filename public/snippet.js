@@ -33,7 +33,8 @@
 
   const KIND = {
     'position': 'pos', 'button-position': 'pos', 'box-trigger-position': 'pos', 'singer-button-position': 'pos',
-    'playlist-panel-position': 'pos', 'playlist-panel-offset': 'pos',
+    'playlist-panel-position': 'pos', 'playlist-panel-offset': 'pos', 'audio-position': 'pos',
+    'audio-position-left': 'pos', 'audio-position-right': 'pos',
     'rotation': 'rot', 'button-rotation': 'rot', 'box-trigger-rotation': 'rot', 'singer-button-rotation': 'rot',
     'playlist-panel-rotation': 'rot',
     'scale': 'scale', 'button-scale': 'scale', 'box-trigger-scale': 'scale'

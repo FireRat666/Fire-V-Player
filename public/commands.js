@@ -21,6 +21,7 @@ var Commands = {
   VOTING_STATE_CHANGED: 'voting-state-changed',
   TOGGLE_LOCK: 'toggle-lock',
   TOGGLE_CAN_TAKE_OVER: 'toggle-can-take-over',
+  SET_CONTROL: 'set-control', // UI -> server: { locked, canTakeOver }, the lock and Take Over changed together or not at all
   ADD_TO_PLAYLIST: 'add-to-playlist',
   MOVE_PLAYLIST_ITEM: 'move-playlist-item',
   REMOVE_PLAYLIST_ITEM: 'remove-playlist-item',
@@ -45,6 +46,7 @@ var Commands = {
   SET_VOLUME: 'set-volume',
   MUTE: 'mute',
   CAPTIONS: 'captions', // in-world script -> its own player page: show or hide closed captions
+  PREVIEW_VIDEO: 'preview-video', // in-world script -> its own player page: play a preview video (or null to go back to the room's track)
   AUTO_SYNC: 'auto-sync',
   SKIP_BACK: 'skip-back',
   SKIP_FORWARD: 'skip-forward',
@@ -81,6 +83,9 @@ var Commands = {
   PASTE_CODE: 'paste-code', // server -> that UI: { code, expiresIn }
   PASTE_RECEIVED: 'paste-received', // server -> that UI: { text } sent from the phone, for the search box
   APPROVE_SINGER: 'approve-singer', // the host's UI -> server: userId of a singer whose song waits for approval
+  WAITING_VIDEOS: 'waiting-videos', // server -> UIs: { waiting } videos added while locked, waiting for the host (playlist mode)
+  APPROVE_VIDEO: 'approve-video', // the host's UI -> server: link of a waiting video, which goes to the end of the playlist
+  REJECT_VIDEO: 'reject-video', // the host's (or the adder's) UI -> server: link of a waiting video to drop
   SINGER_LIST_UPDATED: 'singer-list-updated',
   RESTART_SONG: 'restart-song',
   TOGGLE_AUTO_ADVANCE: 'toggle-auto-advance',

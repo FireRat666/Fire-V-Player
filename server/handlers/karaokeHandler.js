@@ -19,6 +19,11 @@ const { videoById } = require('../youtube/search.js');
  * @returns {boolean}
  */
 const isApproved = singer => singer.approved !== false;
+/**
+ * Seconds a karaoke song waits before it starts, so every device has loaded it and they all
+ * start together. The song is sent with its time at minus this, counting up to 0.
+ */
+const KARAOKE_COUNTDOWN_S = 3;
 
 /**
  * The singer whose song plays next: the first approved one in the queue.
@@ -209,14 +214,14 @@ async function playNextKaraokeSong(app, instanceId) {
   // Atomically update the player state on the server
   player.playlist = []; // Clear the main playlist
   player.currentTrack = 0;
-  player.currentTime = 0;
+  player.currentTime = -KARAOKE_COUNTDOWN_S;
   // A new song always plays, as a skip or picking a track does. Otherwise a pause left over
   // from before (e.g. from playlist mode) loads every song paused, on a black screen.
   player.paused = false;
   const newVideo = app._createVideoObject(videoToPlay, nextSinger.user, 'scraper');
   player.playlist.push(newVideo);
   
-  player.lastStartTime = (new Date().getTime() / 1000);
+  player.lastStartTime = (new Date().getTime() / 1000) + KARAOKE_COUNTDOWN_S;
   
   // Remove the singer from the upcoming queue *after* getting their info.
   player.singers.splice(index, 1);
@@ -231,6 +236,7 @@ async function playNextKaraokeSong(app, instanceId) {
           newTrackIndex: 0,
           track: player.playlist[0], paused: player.paused,
           newLastStartTime: player.lastStartTime,
+          newCurrentTime: player.currentTime,
           playlist: player.playlist
           // The 'singers' payload is no longer bundled here.
       });
@@ -356,12 +362,12 @@ async function restartSong(app, ws) {
   const isCurrentSinger = currentVideo.user.id === ws.u.id;
 
   if (isHost || isCurrentSinger) {
-    player.lastStartTime = (new Date().getTime() / 1000);
-    player.currentTime = 0;
+    player.lastStartTime = (new Date().getTime() / 1000) + KARAOKE_COUNTDOWN_S;
+    player.currentTime = -KARAOKE_COUNTDOWN_S;
     player.paused = false; // a restart plays from the start, like a new song
 
     player.sockets.forEach(socket => {
-      app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, newCurrentTime: 0 });
+      app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, newCurrentTime: player.currentTime });
     });
     await app.savePlayerState(ws.i);
   }

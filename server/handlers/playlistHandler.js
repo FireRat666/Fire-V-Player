@@ -13,6 +13,10 @@ const lists = require('../lists.js');
 // change, so this keeps that message a sensible size.
 const MAX_PLAYLIST_IMPORT = 500;
 const MAX_SAVED_LISTS = 50; // shared Lists per room
+// Videos added while the player is locked wait for the host (see suggestVideo): at most this many
+// per person, and in all.
+const MAX_WAITING_PER_USER = 3;
+const MAX_WAITING = 30;
 
 /**
  * Resolves a raw URL/ID or partial video metadata object into a standardized, fully populated video object.
@@ -81,6 +85,11 @@ async function resolveVideoData(app, ws, v) {
 async function addToPlaylist(app, ws, v, skipUpdate, isYoutubeWebsite) {
   const player = app.videoPlayers[ws.i];
   if (player) {
+    // Locked, in playlist mode: someone else's video waits for the host to approve it.
+    if (player.locked && !player.isKaraoke && ws.u && ws.u.id && player.host && player.host.id !== ws.u.id) {
+      await suggestVideo(app, ws, v, isYoutubeWebsite);
+      return;
+    }
     app.onlyIfHost(ws, async () => {
       let resolvedV;
       try {
@@ -94,21 +103,198 @@ async function addToPlaylist(app, ws, v, skipUpdate, isYoutubeWebsite) {
         app.send(ws, Commands.ERROR, { message: "This video is already in the playlist." });
         return;
       }
-      if (!player.playlist.length) {
-        player.currentTrack = 0;
-        player.currentTime = 0;
-        player.lastStartTime = new Date().getTime() / 1000;
+      // Checked again: the host may have locked the player during the lookup.
+      if (player.locked && !(player.host && player.host.id === ws.u.id)) {
+        app.send(ws, Commands.ERROR, { message: "The player was locked meanwhile. Add the video again to ask the host." });
+        return;
       }
-      const newVideo = app._createVideoObject(resolvedV, ws.u, 'scraper', isYoutubeWebsite);
-      player.playlist.push(newVideo);
-      if (!skipUpdate) {
-        player.sockets.forEach(socket => {
-          app.send(socket, Commands.ITEM_APPENDED, { video: newVideo });
-        });
-      }
+      appendVideo(app, ws.i, app._createVideoObject(resolvedV, ws.u, 'scraper', isYoutubeWebsite), skipUpdate);
+      dropWaiting(app, ws.i, resolvedV.link);
       await app.savePlayerState(ws.i);
     }, player.locked);
   }
+}
+
+/**
+ * Puts a video at the end of the playlist and tells everyone (unless `skipUpdate`). The first video
+ * of an empty playlist is sent as a track change, so the screens start playing it.
+ */
+function appendVideo(app, instanceId, video, skipUpdate) {
+  const player = app.videoPlayers[instanceId];
+  const wasEmpty = !player.playlist.length;
+  if (wasEmpty) {
+    player.currentTrack = 0;
+    player.currentTime = 0;
+    player.lastStartTime = new Date().getTime() / 1000;
+  }
+  player.playlist.push(video);
+  if (skipUpdate) return;
+  if (wasEmpty) {
+    player.sockets.forEach(socket => app.send(socket, Commands.TRACK_CHANGED, {
+      newTrackIndex: player.currentTrack, track: video, paused: player.paused,
+      newLastStartTime: player.lastStartTime, playlist: player.playlist
+    }));
+  } else {
+    player.sockets.forEach(socket => app.send(socket, Commands.ITEM_APPENDED, { video }));
+  }
+}
+
+/** The waiting videos as the UIs get them: { v: video, id, name, p: when it was added }. */
+function waitingFor(player) {
+  return (Array.isArray(player.waiting) ? player.waiting : []).map(w => ({
+    v: w.video, id: w.user && w.user.id, name: w.user && w.user.name, p: w.timestamp
+  }));
+}
+
+/** The place of a waiting video that is the same video as `link` (see app._isDuplicateVideo), or -1. */
+function waitingIndex(app, player, link) {
+  if (!Array.isArray(player.waiting)) return -1;
+  return player.waiting.findIndex(w => w.video && app._isDuplicateVideo({ playlist: [w.video] }, link));
+}
+
+/**
+ * Takes a video off the waiting list once it's in the playlist another way (the host added or
+ * played it themselves), so it isn't both in the playlist and waiting. The caller saves the state.
+ */
+function dropWaiting(app, instanceId, link) {
+  const player = app.videoPlayers[instanceId];
+  const k = player ? waitingIndex(app, player, link) : -1;
+  if (k < 0) return;
+  player.waiting.splice(k, 1);
+  broadcastWaiting(app, instanceId);
+}
+
+function broadcastWaiting(app, instanceId) {
+  const player = app.videoPlayers[instanceId];
+  if (!player) return;
+  const waiting = waitingFor(player);
+  player.sockets.forEach(socket => app.send(socket, Commands.WAITING_VIDEOS, { waiting }));
+}
+
+/**
+ * A video someone (not the host) adds while the player is locked, in playlist mode: it waits,
+ * outside the playlist, until the host approves it (approveVideo) or rejects it (rejectVideo).
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {Object} ws - The adder's WebSocket.
+ * @param {string|Object} v - Video URL or partial object.
+ * @param {boolean} [isYoutubeWebsite] - Whether it came from the web search.
+ * @returns {Promise<void>}
+ */
+async function suggestVideo(app, ws, v, isYoutubeWebsite) {
+  const player = app.videoPlayers[ws.i];
+  if (!player) return;
+  if (!Array.isArray(player.waiting)) player.waiting = [];
+  // Checked before the lookup, and again after it, as several adds can be looked up at once.
+  const full = () => {
+    if (player.waiting.filter(w => w.user && w.user.id === ws.u.id).length >= MAX_WAITING_PER_USER) {
+      app.send(ws, Commands.ERROR, { message: `You have ${MAX_WAITING_PER_USER} videos waiting for the host already.` });
+      return true;
+    }
+    if (player.waiting.length >= MAX_WAITING) {
+      app.send(ws, Commands.ERROR, { message: 'Too many videos are waiting for the host. Try again later.' });
+      return true;
+    }
+    return false;
+  };
+  if (full()) return;
+  let resolvedV;
+  try {
+    resolvedV = await resolveVideoData(app, ws, v);
+  } catch (err) {
+    app.send(ws, Commands.ERROR, { message: `Failed to resolve video: ${err.message}` });
+    return;
+  }
+  if (app._isDuplicateVideo(player, resolvedV.link)) {
+    app.send(ws, Commands.ERROR, { message: "This video is already in the playlist." });
+    return;
+  }
+  // The same video however its link is written (a watch link and a youtu.be one), as for the playlist.
+  if (waitingIndex(app, player, resolvedV.link) >= 0) {
+    app.send(ws, Commands.ERROR, { message: "This video is already waiting for the host." });
+    return;
+  }
+  // Checked again: the lookup above can take a while. Switched to karaoke meanwhile, the playlist
+  // is put aside and songs go through the singer queue, so it isn't added either way.
+  if (player.isKaraoke) {
+    app.send(ws, Commands.ERROR, { message: 'The player switched to karaoke. Search for the song again to join the queue.' });
+    return;
+  }
+  if (!player.locked || (player.host && player.host.id === ws.u.id)) {
+    appendVideo(app, ws.i, app._createVideoObject(resolvedV, ws.u, 'scraper', isYoutubeWebsite));
+    await app.savePlayerState(ws.i);
+    return;
+  }
+  if (full()) return;
+  const user = { id: ws.u.id, name: ws.u.name };
+  // A title that isn't text (a client can send anything) is no title, here and in what follows.
+  const title = typeof resolvedV.title === 'string' ? resolvedV.title : '';
+  player.waiting.push({ video: app._createVideoObject({ ...resolvedV, title }, user, 'scraper', isYoutubeWebsite), user, timestamp: Date.now() });
+  console.log(`${ws.u.name} asked to add "${title}" in ${ws.i}; it waits for the host.`);
+  broadcastWaiting(app, ws.i);
+  app.send(ws, Commands.ERROR, { message: `"${title || 'The video'}" waits for the host to approve it.` });
+  await app.savePlayerState(ws.i);
+}
+
+/**
+ * Puts an approved waiting video at the end of the playlist, unless it's in it already. In karaoke
+ * the playlist is put aside (savedPlaylist), so it goes to the end of that, for when the room goes
+ * back to playlist mode.
+ */
+function addApproved(app, instanceId, video) {
+  const player = app.videoPlayers[instanceId];
+  if (player.isKaraoke) {
+    if (!player.savedPlaylist || !Array.isArray(player.savedPlaylist.playlist)) player.savedPlaylist = { playlist: [], currentTrack: 0 };
+    const saved = player.savedPlaylist.playlist;
+    if (!app._isDuplicateVideo({ playlist: saved }, video.link)) saved.push(video);
+  } else if (!app._isDuplicateVideo(player, video.link)) {
+    appendVideo(app, instanceId, video);
+  }
+}
+
+/** The host approves a waiting video: it goes to the end of the playlist (see addApproved). */
+async function approveVideo(app, ws, link) {
+  app.onlyIfHost(ws, async () => {
+    const player = app.videoPlayers[ws.i];
+    const k = Array.isArray(player.waiting) ? player.waiting.findIndex(w => w.video.link === link) : -1;
+    if (k < 0) return;
+    const [w] = player.waiting.splice(k, 1);
+    addApproved(app, ws.i, w.video);
+    broadcastWaiting(app, ws.i);
+    await app.savePlayerState(ws.i);
+  });
+}
+
+/** The host, or whoever added it, drops a waiting video. */
+async function rejectVideo(app, ws, link) {
+  const player = app.videoPlayers[ws.i];
+  if (!player || !ws.u || !Array.isArray(player.waiting)) return;
+  const k = player.waiting.findIndex(w => w.video.link === link);
+  if (k < 0) return;
+  const w = player.waiting[k];
+  const mine = w.user && w.user.id === ws.u.id;
+  if (!mine && !(player.host && player.host.id === ws.u.id)) {
+    app.send(ws, Commands.ERROR);
+    return;
+  }
+  player.waiting.splice(k, 1);
+  broadcastWaiting(app, ws.i);
+  await app.savePlayerState(ws.i);
+}
+
+/**
+ * Adds every waiting video to the playlist (see addApproved), for when the host unlocks the player
+ * (anyone can add then). Returns whether any were waiting. It doesn't save the player's state: the
+ * caller does (toggleLock saves after it).
+ */
+function approveAllVideos(app, instanceId) {
+  const player = app.videoPlayers[instanceId];
+  if (!player || !Array.isArray(player.waiting) || !player.waiting.length) return false;
+  const waiting = player.waiting;
+  player.waiting = [];
+  waiting.forEach(w => addApproved(app, instanceId, w.video));
+  broadcastWaiting(app, instanceId);
+  return true;
 }
 
 /**
@@ -141,7 +327,7 @@ async function movePlaylistItem(app, ws, { url, index }) {
       } else {
         app.send(ws, Commands.DOES_NOT_EXIST);
       }
-    }, app.videoPlayers[ws.i].locked && !app.videoPlayers[ws.i].canVote);
+    }); // the host's, even under Everyone (anyone may add, only the host changes the playlist)
   }
 }
 
@@ -169,7 +355,7 @@ async function removePlaylistItem(app, ws, index) {
         app.send(socket, Commands.ITEM_REMOVED, { index: index, newCurrentTrack: player.currentTrack });
       });
       await app.savePlayerState(ws.i);
-    }, app.videoPlayers[ws.i].locked && !app.videoPlayers[ws.i].canVote);
+    }); // the host's, even under Everyone (anyone may add, only the host changes the playlist)
   }
 }
 
@@ -266,6 +452,9 @@ async function fromPlaylist(app, ws, data) {
 
   app.onlyIfHost(ws, async () => {
     if (!(player.playlist.length === 0 || data.shouldClear)) return;
+    // A screen loading the default playlist when it joins. In karaoke an empty room means nobody is
+    // singing, so the list's first song would start as if someone had chosen to sing it.
+    if (data.fromPlayer === true && player.isKaraoke) return;
     let list;
     try {
       list = await loadPlaylistSource(ws, id);
@@ -274,6 +463,8 @@ async function fromPlaylist(app, ws, data) {
       app.send(ws, Commands.ERROR, { message: lists.errorMessage(error) });
       return;
     }
+    // Checked again: the room may have switched to karaoke while the list loaded.
+    if (data.fromPlayer === true && player.isKaraoke) return;
     if (!list.items.length) {
       app.send(ws, Commands.ERROR, { message: `Nothing in "${list.title}" can be played here.${skippedNote(list.skipped)}` });
       return;
@@ -427,7 +618,7 @@ async function clearPlaylist(app, ws, skipUpdate) {
         });
       }
       await app.savePlayerState(ws.i);
-    }, app.videoPlayers[ws.i].locked);
+    }); // the host's, even under Everyone
   }
 }
 
@@ -502,12 +693,15 @@ async function addAndPlay(app, ws, v) {
       player.currentTime = 0;
       player.lastStartTime = new Date().getTime() / 1000;
       app.resetBrowserIfNeedBe(player, newIndex);
+      dropWaiting(app, ws.i, newVideo.link);
       app.updateVotes(ws.i);
       player.sockets.forEach(socket => {
         app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, playlist: player.playlist });
       });
       await app.savePlayerState(ws.i);
-    }, app.videoPlayers[ws.i].locked, true); // karaoke turns are checked above
+      // Karaoke turns are checked above, so karaoke goes by the lock; in playlist mode it's the
+      // host's, even under Everyone.
+    }, app.videoPlayers[ws.i].isKaraoke ? app.videoPlayers[ws.i].locked : true, true);
   }
 }
 
@@ -542,8 +736,9 @@ async function addAndPlayNext(app, ws, v) {
       player.sockets.forEach(socket => {
         app.send(socket, Commands.ITEM_INSERTED, { video: newVideo, index: nextIndex });
       });
+      dropWaiting(app, ws.i, newVideo.link);
       await app.savePlayerState(ws.i);
-    }, app.videoPlayers[ws.i].locked);
+    }); // the host's, even under Everyone
   }
 }
 
@@ -612,6 +807,10 @@ function updateVotes(app, instanceId) {
 
 module.exports = {
   addToPlaylist,
+  approveVideo,
+  rejectVideo,
+  approveAllVideos,
+  waitingFor,
   movePlaylistItem,
   removePlaylistItem,
   fromPlaylist,

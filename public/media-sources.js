@@ -7,7 +7,7 @@
 
 /**
  * @typedef {Object} DetectedMedia
- * @property {'youtube'|'file'|'hls'|'dash'|'mpegts'|'twitch'|'twitchclip'|'vimeo'|'vdoninja'|'archive'|'loc'|'tubi'|'nasa'|'eso'} type - The detected media stream/source type.
+ * @property {'youtube'|'file'|'hls'|'dash'|'mpegts'|'twitch'|'twitchclip'|'vimeo'|'vdoninja'|'sdq'|'archive'|'loc'|'tubi'|'nasa'|'eso'} type - The detected media stream/source type.
  *   'tubi' is a Tubi movie, episode or series page, and 'nasa' a NASA+ video page: the player asks the
  *   server for the page's stream when it plays (`stream` is true), as Tubi's stream links expire.
  *   'archive' is an Internet Archive page or item (or a publicdomainmovie.net page) that the server
@@ -124,6 +124,14 @@ var MediaSources = (() => {
       const scene = u.searchParams.has('scene') || u.searchParams.has('s');
       const name = q('view') || q('v') || (scene ? q('room') || q('r') : '');
       return name ? { type: 'vdoninja', name: name.slice(0, 100) } : null;
+    }
+
+    // A screen shared through screen.sdq.st (a mediasoup server): its watch link
+    // (screen.sdq.st:8443/?room=<room>), or its publish link, which names the same room. The
+    // player joins the room as a watcher itself, so the publish page is never opened.
+    if (host === 'screen.sdq.st' && u.protocol === 'https:') {
+      const room = (u.searchParams.get('room') || '').trim();
+      return room ? { type: 'sdq', room: room.slice(0, 100), origin: u.origin } : null;
     }
 
     // Internet Archive: archive.org/details/<id>, archive.org/embed/<id>, archive.org/download/<id>[/<file>],

@@ -155,7 +155,7 @@ var Karaoke = class {
     const proto = this.getProtocol(host);
 
     // Set the spinner's src from the config, making it consistent with other UIs.
-    this.loadingSpinner.src = `${proto}://${host}/assets/3-dots-move.svg`;
+    this.loadingSpinner.src = `https://firer.at/files/fvp/3-dots-move.svg`;
     
     this.lockPlayer.addEventListener('click', () => {
       if (this.core.player) {
@@ -170,7 +170,7 @@ var Karaoke = class {
     // into the document head. This ensures that any element with the '.teal' class,
     // including ones created later, will get the correct background style.
     const style = document.createElement('style');
-    style.innerHTML = `.teal { background: url(${proto}://${host}/assets/Button_bg.png); background-size: 100% 100%; }`;
+    style.innerHTML = `.teal { background: url(https://firer.at/files/fvp/Button_bg.png); background-size: 100% 100%; }`;
     document.head.appendChild(style);
     // --- End of FIX ---
     

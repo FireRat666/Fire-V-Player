@@ -122,7 +122,8 @@ class App {
         isKaraoke: player.isKaraoke,
         savedPlaylist: savedPlaylist,
         paused: player.paused,
-        lists: player.lists || []
+        lists: player.lists || [],
+        waiting: (player.waiting || []).slice(0, 30) // videos waiting for the host (playlist mode)
       };
 
       // Use Sequelize's "upsert" method to insert or update the record.
@@ -460,6 +461,9 @@ class App {
       case Commands.TOGGLE_CAN_TAKE_OVER:
         await hostHandler.toggleCanTakeOver(this, ws, msg.data);
         break;
+      case Commands.SET_CONTROL:
+        await hostHandler.setControl(this, ws, msg.data);
+        break;
       case Commands.TAKE_OVER:
         await hostHandler.takeOver(this, ws);
         break;
@@ -542,6 +546,12 @@ class App {
       case Commands.APPROVE_SINGER:
         await karaokeHandler.approveSinger(this, ws, msg.data);
         break;
+      case Commands.APPROVE_VIDEO:
+        await playlistHandler.approveVideo(this, ws, msg.data);
+        break;
+      case Commands.REJECT_VIDEO:
+        await playlistHandler.rejectVideo(this, ws, msg.data);
+        break;
       case Commands.PLAY_KARAOKE_TRACK:
         await karaokeHandler.playKaraokeTrack(this, ws, msg.data);
         break;
@@ -601,12 +611,19 @@ class App {
    * @private
    */
   _createVideoObject(videoData, userObject, source, isYoutubeWebsite = false) {
+    // A length in ms: a number (or numeric text), or { milis }. Anything else (a client can send
+    // anything) is 0, an unknown length.
+    const ms = (d) => {
+      const raw = (typeof d === 'object' && d !== null) ? d.milis : d;
+      const n = typeof raw === 'number' || typeof raw === 'string' ? Number(raw) : NaN;
+      return Number.isFinite(n) && n >= 0 ? n : 0;
+    };
     // Standardizes video objects from different sources (ytfps, scraper)
     if (source === 'ytfps') {
       return {
         title: videoData.title,
         thumbnail: videoData.thumbnail_url,
-        duration: videoData.milis_length,
+        duration: ms(videoData.milis_length),
         link: videoData.url,
         votes: 0,
         user: userObject,
@@ -614,15 +631,10 @@ class App {
       };
     }
     // Default to 'scraper' source
-    // The duration from the scraper/search can either be a flat number of milliseconds
-    // or an object like { milis: 12345 }. This handles both cases.
-    const durationMs = (typeof videoData.duration === 'object' && videoData.duration !== null)
-      ? videoData.duration.milis
-      : videoData.duration;
     return {
       title: videoData.title,
       thumbnail: videoData.thumbnail,
-      duration: durationMs,
+      duration: ms(videoData.duration),
       link: videoData.link,
       votes: 0,
       user: userObject,
@@ -790,10 +802,25 @@ class App {
     if (!player || !data || typeof data.link !== 'string' || !(seconds > 0 && seconds < 24 * 3600)) return;
     if (this.getYoutubeId(data.link)) return; // YouTube lengths come from YouTube itself
     let changed = false;
+    const current = player.playlist[player.currentTrack];
+    const currentWasUnknown = !!current && current.link === data.link && !current.duration;
     player.playlist.forEach(v => {
       if (v.link === data.link && !v.duration) { v.duration = Math.round(seconds * 1000); changed = true; }
     });
     if (!changed) return;
+    // The track's time ran on while its length wasn't known (in an empty room, say), so it may be
+    // far past its end. It ended at its length, not then: the next track starts from its beginning,
+    // instead of the ticker spending the extra time on a run of tracks, each skipped seconds in as
+    // its own length comes in.
+    if (currentWasUnknown) {
+      const length = current.duration / 1000;
+      const now = new Date().getTime() / 1000;
+      const elapsed = player.paused ? player.currentTime : now - player.lastStartTime;
+      if (elapsed > length) {
+        player.currentTime = length;
+        if (!player.paused) player.lastStartTime = now - length;
+      }
+    }
     player.sockets.forEach(socket => {
       this.send(socket, Commands.PLAYLIST_UPDATED, { playlist: player.playlist, currentTrack: player.currentTrack });
     });
@@ -924,11 +951,23 @@ class App {
   onlyIfHost(ws, callback, locked, inKaraoke = false) {
     if (ws.u && ws.u.id && ws.i) {
       const player = this.videoPlayers[ws.i];
-      // Unlocked, anyone may use the playlist's controls. In karaoke they stay the host's (unless
-      // the caller says otherwise), so nobody can stop, seek, restart or remove someone's song.
+      // Unlocked, anyone may do what the caller opens this way (adding videos, saved lists).
+      // Playback and playlist changes don't pass a lock, so they stay the host's. In karaoke an
+      // unlocked action stays the host's too unless the caller says otherwise, so nobody can stop,
+      // seek, restart or remove someone's song.
       const open = locked === false && (!player || !player.isKaraoke || inKaraoke);
       if (player && (player.host.id === ws.u.id || open)) {
-        callback();
+        // The callbacks are async and nothing waits for them, so an error in one is caught and
+        // logged here: an unhandled rejection would stop the whole server, not just this action.
+        const failed = (err) => {
+          console.error(`[ERROR] Action by ${App.who(ws.u)} in ${ws.i} failed:`, err);
+          try { this.send(ws, Commands.ERROR, { message: "That didn't work. Try again." }); } catch (e) { /* socket gone */ }
+        };
+        try {
+          Promise.resolve(callback()).catch(failed);
+        } catch (err) {
+          failed(err);
+        }
       } else {
         this.send(ws, Commands.ERROR);
       }
@@ -1249,7 +1288,8 @@ class App {
         saveStateTimeout: null, // For debouncing database writes
         lastSyncTime: 0,
         paused: false,
-        lists: [] // the room's shared saved lists (see playlistHandler.saveList)
+        lists: [], // the room's shared saved lists (see playlistHandler.saveList)
+        waiting: [] // videos added while locked, waiting for the host (see playlistHandler.suggestVideo)
       };
 
       if (existingState) {
@@ -1260,6 +1300,9 @@ class App {
         }
         if (!Array.isArray(this.videoPlayers[instanceId].lists)) {
           this.videoPlayers[instanceId].lists = [];
+        }
+        if (!Array.isArray(this.videoPlayers[instanceId].waiting)) {
+          this.videoPlayers[instanceId].waiting = [];
         }
       }
 
@@ -1371,6 +1414,7 @@ class App {
       if (includePlaylist) {
         videoObject.playlist = player.playlist;
         videoObject.lists = player.lists || [];
+        videoObject.waiting = playlistHandler.waitingFor(player);
       }
 
       // Optionally include the singer list for karaoke mode.

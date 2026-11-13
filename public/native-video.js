@@ -19,6 +19,8 @@ var FireNativeScreen = (() => {
   const SYNC_EVERY_MS = 5000;
   /** Maximum allowable drift in seconds before hard-seeking to catch up. */
   const MAX_DRIFT_S = 1.0;
+  /** The most a jump aims ahead to make up for the time the player takes to play again (see seekLead). */
+  const MAX_SEEK_LEAD_S = 6;
   /** Cooldown in milliseconds after toggling playback state. */
   const TOGGLE_COOLDOWN_MS = 1500;
   /** Timeout in milliseconds before warning that video failed to prepare. */
@@ -48,8 +50,12 @@ var FireNativeScreen = (() => {
       this.link = link;
       this.destroyed = false;
       this.prepared = false;
-      this.autoSync = true;
-      this.wantPaused = !!(core.player && core.player.paused);
+      // The viewer's Auto Sync choice (off unless they turn it on, as on the browser screen). Off,
+      // the file still goes to where the world is when it loads, on a host seek, a track change
+      // and a resume (see settle), but isn't pulled back into step every few seconds.
+      this.autoSync = core.autoSync === true;
+      this.settleLeft = 0;    // checks still to make that a forced jump landed where the world is
+      this.wantPaused = !this.isPreview() && !!(core.player && core.player.paused);
       this.volume = Number.isFinite(Number(core.tempVolume)) ? Number(core.tempVolume) : Number(core.params.volume);
       this.muted = core.params.mute === 'true' || core.params.mute === true;
       this.baseTime = 0;      // where the video was at baseAt (performance.now())
@@ -57,6 +63,13 @@ var FireNativeScreen = (() => {
       this.lastToggleAt = -Infinity;
       this.pendingSync = null;
       this.hostSyncPending = false; // a host seek or track change waiting for its sync (resync)
+      this.holdUntil = 0;     // held at its start until then (performance.now()): a karaoke countdown
+      // How long this app's player takes to play again after a seek (about 2s where it loads the
+      // file anew), learnt from jumps that came up short. Jumps aim that far ahead: without it
+      // every jump lands that far behind, which is out of step again, so it jumps for ever.
+      this.seekLead = Number(core.nativeSeekLead) || 0; // kept on the core, so the next file starts with it
+      this.lastJumpAt = -Infinity;
+      this.holdFromCore();
       this.ready = this.create().catch(e => {
         console.error('[NativeScreen] Could not set up the video player.', e);
         this.core.showToast("Couldn't start the world's video player.", 6000);
@@ -89,7 +102,7 @@ var FireNativeScreen = (() => {
       await core.addComponent(go, core.bsComponent('Plane', { width: w, height: h }, 'BanterPlane', [w, h]));
       await core.addComponent(go, core.bsComponent('Material', { shaderName: 'Unlit/Diffuse' }, 'BanterMaterial', ['Unlit/Diffuse']));
       if (this.destroyed) return;
-      const settings = { url: this.link, volume: this.unityVolume(), loop: false, playOnAwake: !this.wantPaused, skipOnDrop: true, waitForFirstFrame: true };
+      const settings = { url: this.link, volume: this.unityVolume(), loop: false, playOnAwake: !this.wantPaused && !this.held(), skipOnDrop: true, waitForFirstFrame: true };
       const vp = await core.addComponent(go, core.bsComponent('VideoPlayer', settings,
         'BanterVideoPlayer', [settings.url, settings.volume, settings.loop, settings.playOnAwake, settings.skipOnDrop, settings.waitForFirstFrame]));
       if (this.destroyed) return;
@@ -189,6 +202,7 @@ var FireNativeScreen = (() => {
       // Loaded once Unity says so, or once the time starts moving (in case it never does).
       if (!this.prepared && (this.state.isPrepared || this.state.duration > 0 || Number(vp.time) > 0)) {
         this.prepared = true;
+        this.core.syncSecondScreens(); // its picture is a texture they can show now (see textureId)
         this.reportDuration();
         this.requestSync(true); // start where everyone else is
       }
@@ -210,6 +224,17 @@ var FireNativeScreen = (() => {
       }
     }
 
+    /**
+     * The SDK's name for this video's picture as a texture other materials can show (see
+     * core.js's second screens): "asset_video_" and the video player's id, from its first frame
+     * on. Null before that, and on a client whose video player has no such texture.
+     * @returns {string|null}
+     */
+    textureId() {
+      const id = this.vp && this.vp.unityId;
+      return this.prepared && id != null && id !== '' ? `asset_video_${id}` : null;
+    }
+
     /** Gets media duration in seconds. @returns {number} */
     duration() { return this.state && this.state.duration > 0 ? this.state.duration : 0; }
     /** Checks if video is currently actively playing. @returns {boolean} */
@@ -229,8 +254,14 @@ var FireNativeScreen = (() => {
       return d ? Math.min(t, d) : t;
     }
 
+    /** True when this screen is playing a viewer's local karaoke preview rather than the room's track. */
+    isPreview() {
+      return !!(this.core.previewVideo && this.core.previewVideo.link === this.link);
+    }
+
     /** Reports media duration to server via MEDIA_DURATION command. */
     reportDuration() {
+      if (this.isPreview()) return;
       const d = this.duration();
       if (!d) return;
       this.durationReported = true;
@@ -244,6 +275,48 @@ var FireNativeScreen = (() => {
     currentTrack() {
       const p = this.core.player;
       return p && Array.isArray(p.playlist) ? p.playlist[p.currentTrack] : null;
+    }
+
+    /** True while a karaoke song is counting down to its start: the file waits, paused, at 0:00. */
+    holding() { return performance.now() < this.holdUntil; }
+    /** The same, for the room's track only: a viewer's own preview of the same file plays through it. */
+    held() { return this.holding() && !this.isPreview(); }
+
+    /** Starts a hold from a track change the core has just had, if it's counting down. */
+    holdFromCore() {
+      if (this.isPreview()) return;
+      const left = (Number(this.core.countdownUntil) || 0) - performance.now();
+      if (left > 0) this.setHold(left / 1000);
+      else this.clearHold();
+    }
+
+    /**
+     * Holds the file at its start for `seconds`, then plays it and checks where the world is.
+     * @param {number} seconds
+     */
+    setHold(seconds) {
+      this.holdUntil = performance.now() + seconds * 1000;
+      clearTimeout(this.countdownTimer);
+      this.countdownTimer = setTimeout(() => {
+        this.clearHold();
+        this.lastToggleAt = -Infinity;
+        this.applyPaused();
+        // Once it has had a moment to start. Not a forced jump, which would be heard on every
+        // screen as the song starts.
+        this.countdownTimer = setTimeout(() => this.requestSync(false), 1000);
+      }, seconds * 1000);
+      if (this.prepared && this.localTime() > 0.2) this.seek(0);
+      this.lastToggleAt = -Infinity;
+      this.applyPaused();
+    }
+
+    /** Ends a hold, so the next applyPaused may play. @returns {boolean} whether there was one. */
+    clearHold() {
+      const was = this.holding();
+      this.holdUntil = 0;
+      clearTimeout(this.countdownTimer);
+      if (was) this.lastToggleAt = -Infinity;
+      return was;
     }
 
     /** Computes Unity normalized volume (0.0 to 1.0). @returns {number} */
@@ -264,10 +337,11 @@ var FireNativeScreen = (() => {
       if (!vp || !this.prepared) return;
       const now = performance.now();
       if (now - this.lastToggleAt < TOGGLE_COOLDOWN_MS) return;
-      if (this.playing() === !this.wantPaused) return;
+      const paused = this.wantPaused || this.held(); // a countdown keeps the room's track paused too
+      if (this.playing() === !paused) return;
       // At the end, playing again would start the file over. The server moves on instead.
       const d = this.duration();
-      if (!this.wantPaused && (this.endedAt != null || (d && this.localTime() >= d - 0.5))) return;
+      if (!paused && (this.endedAt != null || (d && this.localTime() >= d - 0.5))) return;
       this.lastToggleAt = now;
       this.seenPlaying = false; // wait for Unity to say it's playing again
       vp.PlayToggle();
@@ -299,7 +373,7 @@ var FireNativeScreen = (() => {
      * @param {boolean} hard - If true, forces jump regardless of small drift.
      */
     requestSync(hard) {
-      if (this.destroyed) return;
+      if (this.destroyed || this.isPreview()) return;
       this.pendingSync = { hard: !!hard || (this.pendingSync && this.pendingSync.hard) };
       // native: the server answers the world's own connection, not only a browser page's.
       this.core.sendMessage({ path: Commands.REQUEST_SYNC, data: { clientTimestamp: Date.now(), native: true } });
@@ -307,9 +381,11 @@ var FireNativeScreen = (() => {
 
     /** Re-synchronizes after track changes or host seek events. */
     resync() {
-      this.autoSync = true;
+      if (this.isPreview()) return;
+      this.autoSync = this.core.autoSync === true;
       if (this.core.player) this.wantPaused = !!this.core.player.paused;
       this.hostSyncPending = true;
+      this.holdFromCore();
       this.requestSync(true);
     }
 
@@ -318,25 +394,51 @@ var FireNativeScreen = (() => {
      * @param {Object} data - Time sync payload.
      */
     onSync(data) {
-      if (!data || !this.prepared) return;
+      if (!data || !this.prepared || this.isPreview()) return;
       const p = this.core.player;
       if (p && typeof data.currentTrack === 'number' && data.currentTrack !== p.currentTrack) return; // stale
-      const hard = this.pendingSync && this.pendingSync.hard;
+      let hard = this.pendingSync && this.pendingSync.hard;
+      const settling = !hard && !!this.settling; // checking a forced jump: corrects with Auto Sync off too
+      this.settling = false;
       this.pendingSync = null;
       this.resumeSyncPending = false;
       this.hostSyncPending = false;
       const latency = Math.max(0, Date.now() - Number(data.clientTimestamp || Date.now())) / 2000;
       const serverTime = Number(data.currentTime) + (this.wantPaused ? 0 : latency);
       if (!Number.isFinite(serverTime)) return;
+      // A karaoke song counting down to its start: it waits at 0:00, paused, until then.
+      if (serverTime < 0) {
+        if (!this.wantPaused) this.setHold(-serverTime);
+        return;
+      }
+      // Held, but the world has started: play, and go to where it is.
+      if (this.clearHold()) { hard = true; this.applyPaused(); }
       const d = this.duration();
       if (d && serverTime >= d - 0.5) return; // about to end; the server moves on
       // Ended with no known length: the server keeps counting until someone skips, so only a
       // host seek or track change (hard) moves it.
       if (this.endedAt != null && !hard) return;
       const drift = serverTime - this.localTime();
-      if (hard || (this.autoSync && Math.abs(drift) > MAX_DRIFT_S)) {
-        if (!hard) console.log(`[NativeScreen] ${drift > 0 ? 'Behind' : 'Ahead'} by ${Math.abs(drift).toFixed(2)}s, jumping.`);
-        this.seek(serverTime);
+      if (hard || ((this.autoSync || settling) && Math.abs(drift) > MAX_DRIFT_S)) {
+        // Still off just after a jump: that is what the jump itself cost, so the next aims ahead by it.
+        const now = performance.now();
+        // Not from a forced sync: a host seek or track change moves the world, not the jump's cost.
+        if (!hard && !this.wantPaused && now - this.lastJumpAt < SYNC_EVERY_MS * 2.5 && Math.abs(drift) <= MAX_SEEK_LEAD_S) {
+          this.seekLead = Math.max(0, Math.min(MAX_SEEK_LEAD_S, this.seekLead + drift));
+          this.core.nativeSeekLead = this.seekLead;
+        }
+        this.lastJumpAt = now;
+        const lead = this.wantPaused ? 0 : this.seekLead;
+        if (!hard) console.log(`[NativeScreen] ${drift > 0 ? 'Behind' : 'Ahead'} by ${Math.abs(drift).toFixed(2)}s, jumping${lead ? ` (${lead.toFixed(2)}s ahead, for the time a jump takes here)` : ''}.`);
+        this.seek(serverTime + lead);
+        // A forced jump is checked once it has had time to play again (twice at most), as the
+        // jump itself takes time and nothing else corrects it while Auto Sync is off.
+        if (hard) this.settleLeft = 2;
+        clearTimeout(this.settleTimer);
+        if (this.settleLeft > 0 && !this.wantPaused) {
+          this.settleLeft--;
+          this.settleTimer = setTimeout(() => { this.settling = true; this.requestSync(false); }, SYNC_EVERY_MS);
+        }
       }
     }
 
@@ -359,9 +461,17 @@ var FireNativeScreen = (() => {
           break;
         case Commands.SKIP_BACK:
         case Commands.SKIP_FORWARD: {
+          if (this.isPreview()) {
+            this.seek(this.localTime() + (msg.path === Commands.SKIP_FORWARD ? SKIP_S : -SKIP_S));
+            break;
+          }
           // A viewer's own skip: stop pulling them back into step until the next track or host seek.
+          clearTimeout(this.settleTimer); // a check still to come would undo the skip
+          this.settleLeft = 0;
+          this.settling = false; // and so would the answer to a check already asked for
           if (this.autoSync) {
             this.autoSync = false;
+            this.core.autoSync = false;
             // So the panel's Auto Sync button shows Off, as the browser page's skip does.
             if (typeof this.core.notifyListeners === 'function') {
               this.core.notifyListeners({ path: Commands.AUTO_SYNC_STATE_CHANGED, data: { enabled: false } });
@@ -379,9 +489,16 @@ var FireNativeScreen = (() => {
           break;
         }
         case Commands.PAUSE_STATE_CHANGED: {
+          if (this.isPreview()) break;
           const data = msg.data || {};
           this.wantPaused = !!data.paused;
-          if (!this.wantPaused && Number.isFinite(Number(data.currentTime))) this.seek(Number(data.currentTime));
+          this.clearHold(); // the sync after a resume starts it again if the song is still counting down
+          const at = Number(data.currentTime);
+          // Resumed during a karaoke countdown: wait out what's left of it at 0:00, as onSync does.
+          if (!this.wantPaused && Number.isFinite(at)) {
+            if (at < 0) this.setHold(-at);
+            else this.seek(at + this.seekLead);
+          }
           this.lastToggleAt = -Infinity;
           this.applyPaused();
           // On resume, everyone goes to the host's point (above, whatever they skipped to while
@@ -402,6 +519,7 @@ var FireNativeScreen = (() => {
         case Commands.AUTO_SYNC:
           // The viewer's own Auto Sync button: on pulls them back into step straight away.
           this.autoSync = msg.data === true || msg.data === 'true';
+          this.core.autoSync = this.autoSync;
           if (this.autoSync) this.requestSync(false);
           break;
       }
@@ -413,6 +531,8 @@ var FireNativeScreen = (() => {
       clearInterval(this.pollTimer);
       clearInterval(this.syncTimer);
       clearTimeout(this.resumeSyncTimer);
+      clearTimeout(this.countdownTimer);
+      clearTimeout(this.settleTimer);
       // Destroying the object destroys the video player with it.
       if (this.go) this.core.destroyObject(this.go);
       this.go = null;

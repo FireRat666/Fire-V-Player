@@ -4,6 +4,7 @@
   "description": "-",
   "main": "server/app.js",
   "repository": "-",
+  "license": "GPL-3.0-or-later",
   "scripts": {
     "start": "node server/app.js",
     "hash-password": "node server/hash-password.js"

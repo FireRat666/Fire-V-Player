@@ -23,9 +23,9 @@ To show the video on more surfaces, give any object a **BS Material** and name t
 In the world, the player shows whatever its own screen draws on it:
 - **YouTube and most links:** the space page.
 - **Twitch:** the player's own browser.
-- **Video files on the world's video player:** there's no picture the page can share, so second screens go black. The player makes the world's video player under the scene's `Fire-V-Player World Video` object when it has one, so a Unity graph that knows that object can share its picture.
+- **Video files on the world's video player:** second screens show the video's own picture, at its own size, from its first frame on. The player makes the world's video player under the scene's `Fire-V-Player World Video` object when it has one.
 
-While the player loads, second screens show a "Fire-V-Player loading" picture. Before the player starts, Unity draws a Texture of `Fire-V-Player` as plain white, so for a screen marked by its name, put the picture's link in **Texture** instead to show it from the moment the world loads: `https://vidya.firer.at/assets/SecondScreenLoading.png` (or the same path on your own server).
+While the player loads, second screens show a "Fire-V-Player loading" picture. Before the player starts, Unity draws a Texture of `Fire-V-Player` as plain white, so for a screen marked by its name, put the picture's link in **Texture** instead to show it from the moment the world loads: `https://firer.at/files/fvp/SecondScreenLoading.png`.
 
 For a ready-made one, copy [`unity/Editor/FireVPlayerSecondScreen.cs`](unity/Editor/FireVPlayerSecondScreen.cs) into the same `Editor` folder. Then use **GameObject > Fire-V-Player > Second Screen** (or right-click in the Hierarchy). It makes a 16:9 quad named `Fire-V-Player`, as wide as the player's screen, with the loading picture as its Texture.
 
@@ -110,6 +110,8 @@ In a Creator SDK world (`Assets/WebRoot/index.html`), add the player as a snippe
   spatial="true"
   spatial-min-distance="5"
   spatial-max-distance="40"
+  audio-3d="true"
+  audio-position=""
   controls-follow-screen="false"
   button-position="0 0.83 2"
   button-rotation=""
@@ -147,32 +149,52 @@ Settings are the same as the script attributes below, except:
 
 The player builds everything in the world with the BS SDK (`BS.GameObject` and components such as `BS.Browser`), so the page needs no `<a-scene>`; one left over from older versions does no harm. Script-tag positions and rotations still use A-Frame axes (Z flipped from Unity's), as before, so existing script tags keep working.
 
-In these worlds the Playlist button opens an **in-world panel** beside the screen. The main view has playback and volume controls, **Reload** (see [Reloading your screen](#reloading-your-screen)), the playlist (play, reorder, remove, vote), the saved **Lists** (see [Saved lists](#saved-lists)) and YouTube search. Under the search box are your last five searches (kept on your device; click one to search again, **Clear** forgets them) and, in karaoke mode, **+ karaoke**, **+ lyrics** and **+ zoom karaoke**, which add that word to the search. Next to the search box, **Phone** gives you a 6-letter code and a QR code: scan the QR with your phone (it opens the page with the code filled in), or open `vidya.firer.at/paste` (your server's `/paste`) and type the code, then send a link or search, and it lands in your own search box in the world. It never adds anything by itself, so you still press Add, and the lock and karaoke approval rules still apply. A code works for 10 minutes, only for you, and too many wrong codes from one phone make it wait. Search also accepts a video link, or a playlist link, which asks whether to replace the playlist, add it all, or save it to Lists (see [Saved lists](#saved-lists)). The list scrolls (thumbstick, or drag it), 20 rows at a time; the panel opens at the video that's playing. Beside the tabs, **21-40 / 300** says which rows are shown, **<** and **>** move to the previous or next 20, **<<** and **>>** move 100, **|<** and **>|** go to the start and end, and **Now** goes back to the video that's playing. (On a client without scroll views, the list shows in pages of 7 and the same buttons turn the pages.) To move the panel, grab the pill under it in VR and carry it; the panel comes with it, stays upright and stays where you let go. The hand's Playlist button opens it in front of you, karaoke's Singers button opens it just above that button, and the Playlist button by the screen puts it back beside the screen. Only your own panel moves. **Refresh** fetches the latest playlist from the server; the panel also does this each time it opens. **Info** shows who made the player, how to use it, and the setup guide (a QR code to scan with your phone, and its short link firer.at/fvp) for adding it to your own world. The red **X** closes the panel. **More...** opens a second view with:
+In these worlds the Playlist button opens an **in-world panel** beside the screen. Its buttons use symbols rather than words where they can, so they read in any language; **ⓘ** (Info) has a legend of what each one means. (The world's UI font has symbols such as ▶ ◀◀ ✓ ✕ ♛ but no colour emoji, so the padlock and speaker are drawn.)
 
-- host controls: lock, take over, voting, clear, load the default playlist
-- seek to a time (host)
-- your player only: **Reload Video**, skip back/forward, Auto Sync, Captions (closed captions on or off for you, remembered on your device) and Resolution (steps your screen's page through 1280 x 720, 1600 x 900, 1920 x 1080 and 2560 x 1440 (2K), and on PC and PC VR also 3840 x 2160 (4K), then back to the snippet's `resolution`; remembered on your device. Standalone headsets such as Quest stop at 2K, as their browsers struggle with more. Higher is sharper, mostly for 4K and 360 videos, but costs more to draw), and, when the snippet has `hand-controls`, **Hand Controls** (moves your hand buttons, see [Hand controls](#hand-controls))
-- add by link: a video (YouTube, Twitch, Vimeo or a direct link, see [Links from other sites](#links-from-other-sites)), or a YouTube playlist or list of links (see [Playlists of links](#playlists-of-links)): **Add** adds a video, and asks what to do with a playlist (see [Saved lists](#saved-lists))
-- space admins only: **Admin Take Over** (see [Admin Take Over](#admin-take-over)) and the mode switch between playlist and karaoke (see [Switching mode in world](#switching-mode-in-world))
+- **Top row:** the host chip (**♛** and the host's name, with a padlock coloured by who controls the player, see [Who controls the player](#who-controls-the-player); pressing it opens **☰**), **ⓘ** Info, **☰** More, and the red **✕** to close. While Info or More is open, its button shows **↩** to go back.
+- **Playback:** **|◀** previous, **◀◀** / **▶▶** skip back and forward, **❚❚** / **▶** pause and play, **▶|** next, and the brown **↻** reload (see [Reloading your screen](#reloading-your-screen)). On the right, the speaker buttons turn your own volume down (**−**) and up (**+**), with the volume between them, and mute (the speaker with **✕**, red while muted).
+- **Tabs:** **♫ Playlist** (with **+2** when two videos wait for the host, see below), **☰ Lists** (see [Saved lists](#saved-lists)) and **+ Search & Add**. Each video has **▶** play (host), **⬆** / **⬇** move (host), **✕** remove (host), or **▲** / **▼** to vote when voting is on. Search results have **▶ Now** and **▶| Next** (host) and **+ Add**.
+
+Under the search box are your last five searches (kept on your device; click one to search again, **✕** forgets them) and, in karaoke mode, **+ karaoke**, **+ lyrics** and **+ zoom karaoke**, which add that word to the search. Next to the search box, **☎ Phone** gives you a 6-letter code and a QR code: scan the QR with your phone (it opens the page with the code filled in), or open `vidya.firer.at/paste` (your server's `/paste`) and type the code, then send a link or search, and it lands in your own search box in the world. It never adds anything by itself, so you still press Add, and the control and karaoke approval rules still apply. A code works for 10 minutes, only for you, and too many wrong codes from one phone make it wait. Search also accepts a video link, or a playlist link, which asks whether to replace the playlist, add it all, or save it to Lists (see [Saved lists](#saved-lists)). The list scrolls (thumbstick, or drag it), 20 rows at a time; the panel opens at the video that's playing. Beside the tabs, **21-40 / 300** says which rows are shown, **‹** and **›** move to the previous or next 20, **«** and **»** move 100, **⇤** and **⇥** go to the start and end, and **◉ Now** goes back to the video that's playing. (On a client without scroll views, the list shows in pages of 7 and the same buttons turn the pages.) To move the panel, grab the pill under it in VR and carry it; the panel comes with it, stays upright and stays where you let go. The hand's Playlist button opens it in front of you, karaoke's Singers button opens it just above that button, and the Playlist button by the screen puts it back beside the screen. Only your own panel moves. The panel fetches the latest playlist from the server each time it opens (**☰ > ↻ Refresh List** does it again).
+
+**ⓘ** (Info) scrolls: how to use it, the setup guide (a QR code to scan with your phone, and its short link firer.at/fvp) for adding the player to your own world, what each button means, and who controls the player. **☰** (More) scrolls too, and has:
+
+- **♛ Who controls the player** (see [Who controls the player](#who-controls-the-player)), with **♛ Take Over** for anyone else when the host allows it
+- **♛ Host controls** (the host only): **Voting** (playlist) or **Auto Advance** (karaoke, starts the next singer when a song ends), **✕ Clear Playlist**, **↻ Load Default Playlist**, and **Go to** a time with **◀◀ 30s** / **30s ▶▶**, which move everyone
+- **☺ Just for you**: **↻ Reload Video**, **◀◀** / **▶▶** skip, **Auto Sync**, **CC** (closed captions on or off for you, remembered on your device), **↻ Refresh List**, **▣** resolution (steps your screen's page through 1280 x 720, 1600 x 900, 1920 x 1080 and 2560 x 1440 (2K), and on PC and PC VR also 3840 x 2160 (4K), then back to the snippet's `resolution`; remembered on your device. Standalone headsets such as Quest stop at 2K, as their browsers struggle with more. Higher is sharper, mostly for 4K and 360 videos, but costs more to draw), and, when the snippet has `hand-controls`, **☚** hand controls (moves your hand buttons, see [Hand controls](#hand-controls)). On/off settings show **✓** in green when on and **✕** in grey when off.
+- **+ Add by link**: a video (YouTube, Twitch, Vimeo or a direct link, see [Links from other sites](#links-from-other-sites)), or a YouTube playlist or list of links (see [Playlists of links](#playlists-of-links)): **+ Add** adds a video, and asks what to do with a playlist (see [Saved lists](#saved-lists))
+- space admins only: **♛ Admin Take Over** (see [Admin Take Over](#admin-take-over)) and the mode switch between playlist and karaoke (see [Switching mode in world](#switching-mode-in-world))
 
 The Creator SDK client currently doesn't open the 2D playlist page, so the panel has no button for it.
 
-When someone can't play a video, the panel shows the suggested replacement with Replace (host) and Dismiss.
+While only the host controls the player (see [Who controls the player](#who-controls-the-player)), anyone else's **+ Add** doesn't go straight into the playlist: the video waits after the playlist, on a brown row, until the host presses **✓** (it goes to the end of the playlist) or **✕**. Whoever added it can **✕** it too. The host gets a message when one arrives. Each person can have 3 waiting, and 30 can wait in all. Switching to **Everyone** adds every waiting video.
+
+When someone can't play a video, the panel shows the suggested replacement with **⇄ Replace** (host) and **✕**.
+
+### Who controls the player
+
+The host (**♛**) runs the player for everyone. In **☰**, the host picks one of three, and the chip at the top of everyone's panel shows which is on:
+
+- **Only the host** (green, closed padlock): only the host changes videos, and videos other people add wait for the host to approve them (in karaoke, only the host starts songs and new songs wait for approval), and nobody can take over while the host is in the space.
+- **Everyone** (orange, open padlock): anyone can add videos and save lists for everyone, but only the host can play, skip, move or remove them (in karaoke, anyone can join the queue, and the next singer can start their own song), and the host stays the host: nobody can take over while they're in the space.
+- **Everyone + Take Over** (red, open padlock): anyone can press **♛ Take Over** and become the host, and then change anything.
+
+These are the server's lock and Take Over settings, set together, so a locked player can't be left open to Take Over by mistake (a player locked with Take Over on, from before, shows as **Everyone + Take Over**, as anyone can still become the host). When the host leaves the space, Take Over turns on after 42 seconds, so the player is never stuck. Taking over leaves Take Over on, so the new host picks again if they want to keep it.
 
 In karaoke mode the Singers button (and the Join/Leave Queue button) opens the same panel as a **Singers panel**:
 
-- **Now singing** shows who is singing which song. The host and the person singing get **Restart Song** and **Stop Song**.
-- **Singers** is the queue. The host can **Play & Sing** anyone, move singers **Up** / **Down** and **Remove** them, and anyone can **Remove Me**.
-- While the player is unlocked, the singer at the top can start their own song with **Play & Sing**, but only when no song is playing, so nobody can cut into someone else's song. While it's locked, only the host can start songs.
-- While it's locked, other people can still pick a song with **Sing It**. It waits in the queue until the host presses **Approve** or **Reject**. Unlocking approves every waiting song.
-- **Search** finds a song (or takes a pasted video link). **Sing It** adds you to the queue with that song. You can be in the queue once.
-- **More...** has the host controls (lock, take over, Auto Advance, which starts the next singer when a song ends), seek, and your own player's skip, Auto Sync and Captions.
+- **Now singing** shows who is singing which song. The host and the person singing get **|◀** (start the song again) and **■** (stop it).
+- **♪ Singers** is the queue. The host can **▶ Sing** anyone (start their song), move singers **⬆** / **⬇** and **✕** remove them, and anyone can **✕ Leave**.
+- With control on **Everyone**, the singer at the top can start their own song with **▶ Sing**, but only when no song is playing, so nobody can cut into someone else's song. Otherwise only the host can start songs.
+- When only the host controls it, other people can still pick a song with **♪ Sing It**. It waits in the queue until the host presses **✓** (approve) or **✕** (reject). Switching to **Everyone** approves every waiting song.
+- **+ Search Songs** finds a song (or takes a pasted video link). **▶ Preview** plays the song on the main screen just for you (with **◀◀**, **▶▶**, **♪ Sing It** and **■ Stop** on the panel), so you can check that it loads and has lyrics before adding it; **■ Stop**, **♪ Sing It** or closing the panel returns your screen to the room's song. **♪ Sing It** adds you to the queue with that song. You can be in the queue once.
+- **☰** has who controls the player, the host controls (Auto Advance, which starts the next singer when a song ends), and your own player's skip, Auto Sync and CC.
 
 Whoever runs the karaoke should take over the player first, as only the host can start other people's songs.
 
 ### Hand controls
 
-With `hand-controls="true"`, each player gets seven buttons that go with them: mute, volume down and up, reload (see [Reloading your screen](#reloading-your-screen)), skip back and forward, and the Playlist (or Singers) panel. **More... > Hand Controls** in the panel moves them, one place per click, and your choice is remembered on your device:
+With `hand-controls="true"`, each player gets seven buttons that go with them: mute, volume down and up, reload (see [Reloading your screen](#reloading-your-screen)), skip back and forward, and the Playlist (or Singers) panel. **☰ > ☚** (hand controls) in the panel moves them, one place per click, and your choice is remembered on your device:
 
 - **Left Wrist**: on the back of the left wrist (the default in VR).
 - **Right Wrist**: the same on the right wrist, for when another menu is on your left hand.
@@ -188,11 +210,11 @@ The volume buttons are on the top row and Reload is at the far end of the bottom
 
 ### Reloading your screen
 
-When a video or stream freezes or won't load for you, **Reload** (the circular arrow under the screen and on the hand controls, the panel's **Reload** beside the playback controls, or **More... > Reload Video**) builds your own screen again. The video starts again at the same point as everyone else's, as when someone joins late. Nobody else's screen changes, so the host doesn't need to switch videos back and forth to fix it for you. In karaoke it's in **More...** and on the hand controls.
+When a video or stream freezes or won't load for you, **Reload** (the circular arrow under the screen and on the hand controls, the panel's brown **↻** beside the playback controls, or **☰ > ↻ Reload Video**) builds your own screen again. The video starts again at the same point as everyone else's, as when someone joins late. Nobody else's screen changes, so the host doesn't need to switch videos back and forth to fix it for you.
 
 ### Saved lists
 
-The panel's **Lists** tab (and **More... > Saved Lists** on the 2D playlist page) shows the snippet's playlists: the default `playlist` first, then each one in `playlists`, a comma separated list of YouTube playlists and [playlists of links](#playlists-of-links), up to 10 in all:
+The panel's **☰ Lists** tab (and **More... > Saved Lists** on the 2D playlist page) shows the snippet's playlists: the default `playlist` first, then each one in `playlists`, a comma separated list of YouTube playlists and [playlists of links](#playlists-of-links), up to 10 in all:
 
 ```html
 playlists="PLZWiw-xxQ4SPDmADhvme7-pU2bx3s7nKX, https://docs.google.com/document/d/<id>/edit, https://example.com/friday.m3u"
@@ -206,12 +228,12 @@ A YouTube playlist can be its ID or any link with `list=` in it, including a vid
 playlists="PLZWiw-xxQ4SPDmADhvme7-pU2bx3s7nKX, https://www.youtube.com/watch?v=jfKfPfyJRdk, https://stream.vrcdn.live/live/vrcdn.live.ts"
 ```
 
-Each shows its name and how many videos it has. **Open** lists its videos under it, each with **Add** (and, for the host, **Play Now** and **Play Next**, or **Play** when it's already in the playlist). **Add All** adds every video to the end of the playlist, skipping ones already in it, and **Replace** (host) makes the list the playlist. Adding follows the usual rules: anyone can add while the player is unlocked, only the host while it's locked.
+Each shows its name and how many videos it has. **▼ Open** lists its videos under it, each with **+ Add** (and, for the host, **▶ Now** and **▶| Next**, or **▶** when it's already in the playlist). **+ All** adds every video to the end of the playlist, skipping ones already in it, and **⇄ Replace** (host) makes the list the playlist. Adding follows the usual rules (see [Who controls the player](#who-controls-the-player)): while control is on **Everyone**, anyone can use **+ Add** and **+ All**. Otherwise **+ Add** from anyone but the host waits for the host to approve it, and **+ All** is the host's only.
 
-Lists can also be saved from inside the world. Pasting a YouTube playlist or a list of links into **Search & Add** or **More... > Add by link** asks what to do with it: **Replace Playlist** (host), **Add All to End**, **Save for Everyone**, **Save for Me**, or **Just This Video** for a video link inside a playlist.
+Lists can also be saved from inside the world. Pasting a YouTube playlist or a list of links into **+ Search & Add** or **☰ > + Add by link** asks what to do with it: **⇄ Replace Playlist** (host), **+ Add All to End**, **★ Save for Everyone**, **☆ Save for Me**, or **+ Just This Video** for a video link inside a playlist.
 
-- **Save for Everyone** adds it to the room's shared lists, marked **(shared)** with who saved it. The server checks the list works first, keeps it with the playlist (so it's still there next time), and shows it to everyone in the room straight away, in the panel and on the 2D page (**Add Playlist > Save to Lists** there). Saving and **Remove** follow the same rules as adding: anyone while unlocked, only the host while locked. A room keeps up to 50.
-- **Save for Me** keeps it only on your device, for this world, marked **(mine)**. **Share** turns it into a shared list, and **Remove** takes it out.
+- **★ Save for Everyone** adds it to the room's shared lists, marked **(shared)** with who saved it. The server checks the list works first, keeps it with the playlist (so it's still there next time), and shows it to everyone in the room straight away, in the panel and on the 2D page (**Add Playlist > Save to Lists** there). Saving and removing (**✕**) follow the same rules as adding. A room keeps up to 50.
+- **☆ Save for Me** keeps it only on your device, for this world, marked **(mine)**. **★ Share** turns it into a shared list, and **✕** takes it out.
 
 The snippet's lists come first, then the shared ones, then your own. A list opened with **Browse** on the 2D page joins its list until you leave.
 
@@ -295,6 +317,7 @@ These only work with `untrusted-links="true"` in the snippet, as they can come f
 | DASH stream | `https://.../manifest.mpd` | Like an HLS stream, played with dash.js. Protected (DRM) streams can't play, and some codecs (HEVC, MPEG-H audio) may not play in the client's browser. |
 | VRCDN stream | `https://stream.vrcdn.live/live/NAME.live.ts` or `rtspt://stream.vrcdn.live/live/NAME` | Plays in the browser for everyone, PC and Quest. The PC `rtspt://` link is turned into the `.live.ts` one, since browsers and the world's video player can't play RTSP. Plays until someone skips. VRCDN's always-on test stream is `https://stream.vrcdn.live/live/vrcdn.live.ts`. |
 | VDO.Ninja | `https://vdo.ninja/?view=<stream id>`, or `?room=<room>&scene` for a whole room | Shown as VDO.Ninja's own page and plays until someone skips. Volume and mute work; there's no pause or seek. Its video controls (picture-in-picture, fullscreen) are hidden, as fullscreen would blank the screen. Links that would join a room or send video (`?push=`, `?room=` without `scene`) aren't accepted. |
+| Screen share (screen.sdq.st) | `https://screen.sdq.st:8443/?room=<room>`, or the room's publish link | The room's shared screen, played by the player itself, so volume, mute and pause work; there's no seek. It can be added before anyone is sharing: the screen says it's waiting and shows the share when it starts, and joins again if the connection drops. Needs `untrusted-links`. |
 
 Without it, the server won't add them, and a player whose world doesn't allow them shows a notice instead of playing one. If a browser won't start a file with sound, it starts muted and the sound comes on at the first click on the screen.
 
@@ -304,7 +327,7 @@ Files, streams and Twitch videos show no length until the first player loads the
 
 ### Switching mode in world
 
-At the bottom of the panel's **More...** view, the **Space admins only** section has:
+At the bottom of the panel's **☰** (More) view, the **Space admins only** section has:
 
 - **Switch to Karaoke** / **Switch to Playlist**, which switches the player for everyone in the space.
 - **Use Snippet Default**, shown once the mode has been changed, which goes back to the snippet's `karaoke` setting.
@@ -319,7 +342,7 @@ Everyone sees these buttons, because the client can't always tell who is a space
 
 The **Space admins only** section also has **Admin Take Over** (shown when you aren't the host). It makes a space admin the host even when the player is locked or the host has turned Take Over off, so a world's owner or moderators can always stop someone running the player.
 
-- While the admin is in the space, nobody else can take over (Take Over is turned off for them). They can turn it back on, or Lock / Unlock, like any host.
+- While the admin is in the space, nobody else can take over (Take Over is turned off for them). They can change who controls the player (see [Who controls the player](#who-controls-the-player)) like any host.
 - When they leave the space, the usual rule applies: 42 seconds later anyone can take over again. So people can still use the player when no admin is around.
 - It works the same way as the mode switch: pressing it saves the admin's ID as protected space state (the key `fire-v-player-admin`), which only space admins can write. When that change arrives, the admin's own player asks the server for control. For anyone else the write is refused, and after a few seconds the panel says "Only space admins can take control this way."
 - The player server can't check who is a space admin itself. It trusts the admin's player, as it trusts every player's own user ID. That stops anyone using the normal client, but not a modified one.
@@ -355,12 +378,12 @@ All parameters are optional unless marked as **(Required)**.
 | :--- | :--- | :--- |
 | `src` | **(Required)** The URL to your running Fire-V-Player instance's `playlist.js` or `karaoke.js` file. | N/A |
 | `instance` | The room code (`room` on the snippet). Each space has its own room for a code; `shared:<code>` is the same room in every world that uses it. See [Rooms](#rooms). | Empty: the space's URL |
-| `playlist` | The playlist to load by default if the instance is empty: a YouTube playlist ID (e.g., `PL...`) or link, or a link to a list of links (a `.txt` or `.m3u` file, a Google Doc, a Drive folder or an archive.org item; see [Playlists of links](#playlists-of-links)), a Tubi category or series, or a NASA+ series (see [Links from other sites](#links-from-other-sites)). | `""` |
+| `playlist` | The playlist to load by default if the instance is empty (not in karaoke mode, where empty means nobody is singing): a YouTube playlist ID (e.g., `PL...`) or link, or a link to a list of links (a `.txt` or `.m3u` file, a Google Doc, a Drive folder or an archive.org item; see [Playlists of links](#playlists-of-links)), a Tubi category or series, or a NASA+ series (see [Links from other sites](#links-from-other-sites)). | `""` |
 | `playlists` | Saved playlists for the Lists tab: comma separated YouTube playlists (IDs or links), links to lists of links, Tubi categories and series, NASA+ series, ESO and ESA/Hubble archive pages, and single video or stream links, up to 10 with `playlist`. See [Saved lists](#saved-lists). | `""` |
 | `youtube` | The URL of a single YouTube video to use as the default "silent" video when nothing is playing. | A silent visual video |
 | `volume` | The initial volume, from `0` to `100`. | `40` |
 | `mute` | Whether the player should start muted. | `false` |
-| `untrusted-links` | Whether links from any site (video files, `.m3u8` and `.mpd` streams, VRCDN, VDO.Ninja) can be played, as well as YouTube, Twitch, Vimeo, Tubi, NASA+, the Internet Archive, the Library of Congress and ESO. Off by default, as those links aren't moderated. Each viewer's own world must allow them for them to play on their screen. See [Links from other sites](#links-from-other-sites). | `false` |
+| `untrusted-links` | Whether links from any site (video files, `.m3u8` and `.mpd` streams, VRCDN, VDO.Ninja, screen.sdq.st screen shares) can be played, as well as YouTube, Twitch, Vimeo, Tubi, NASA+, the Internet Archive, the Library of Congress and ESO. Off by default, as those links aren't moderated. Each viewer's own world must allow them for them to play on their screen. See [Links from other sites](#links-from-other-sites). | `false` |
 | `captions` | Whether closed captions start on. Each viewer can turn them on or off in the panel's More view, and their choice is remembered on their device. | `true` |
 | `resolution` | The width in pixels of the screen's page, which is 16:9 (`1600` is 1600 x 900). Higher is sharper, and YouTube and Twitch lay out as for a bigger window, but each frame costs more to draw, especially on Quest. The screen stays the same size in the world whatever the resolution. Each viewer can pick another for their own screen in the panel's More view. From 640 to 3840. | `1600` |
 | `space-screen` | Altspace (SideQuest Creator SDK) only. `auto`: the screen draws the space page's own browser, with the player page laid over that page, so no second browser is opened. It's used when the client can resize the space page (its `SetWorldBrowserSize` call or the `!swbs!` command) and the page really takes the size within 5 seconds; otherwise, and for a second player in the same space (only one can have the space page), the screen is a browser as before. The space page goes back to its own size when the player is removed. This screen can't be clicked, so Twitch links, which need clicks to start playing, always get a browser screen instead. `false`: always open a browser for the screen. Banter is unaffected. | `auto` |
@@ -374,10 +397,31 @@ All parameters are optional unless marked as **(Required)**.
 | `position` | The `x y z` position of the player screen in the 3D scene. | `0 0 0` |
 | `rotation` | The `x y z` rotation of the player screen. | `0 0 0` |
 | `scale` | The `x y z` scale of the player screen. | `1 1 1` |
-| `spatial` | Set to `true` to make the volume fade as you move away from the screen. Turned off, the volume is the same wherever you stand. Either way it only changes the volume: on PC the SDK always plays the screen's sound from the screen's direction (its browser has no 2D sound setting), and on Quest the page plays its own sound, which isn't placed in the world, so it's effectively 2D. | `true` |
-| `spatial-min-distance` | With `spatial` on, the distance at which the volume starts to fade. | `5` |
-| `spatial-max-distance` | With `spatial` on, how far past `spatial-min-distance` the volume reaches zero. | `40` |
+| `spatial` | Set to `true` to make the volume fade as you move away from the screen. Turned off, the volume is the same wherever you stand. It works with both `audio-3d` settings. Each viewer can pick their own with the panel's **◔ Fade** button (in ☰), which their device remembers. | `true` |
+| `spatial-min-distance` | The distance at which the sound starts to fade (with `spatial` on). | `5` |
+| `spatial-max-distance` | How far past `spatial-min-distance` the sound reaches zero. | `40` |
+| `audio-3d` | `true`: 3D sound from the direction of the screen (or the audio positions). `false`: 2D sound, the same in both ears. See [2D and 3D sound](#2d-and-3d-sound). Each viewer can pick their own with the panel's **♫ Sound** button (in ☰), which their device remembers. | `true` |
+| `audio-position` | The `x y z` position the sound comes from, in the same terms as `position`. Empty: the screen. | *(empty)* |
+| `audio-position-left`, `audio-position-right` | Separate `x y z` positions for the left and right speakers of a **video file**, for stereo across a room. Links play through one speaker, which uses `audio-position`. | *(empty)* |
 | `mip-maps` | The number of mip-map levels for the browser texture, in older Banter clients. The Creator SDK ignores it. | `1` |
+
+#### 2D and 3D sound
+
+| `audio-3d` | What you hear |
+|---|---|
+| `true` | 3D sound from the direction of the screen (or the audio positions). |
+| `false` | 2D sound, the same in both ears. |
+
+Whether the sound gets quieter with distance is the separate `spatial` setting, which works with both: full volume within `spatial-min-distance`, silent `spatial-max-distance` further on.
+
+`audio-3d` and the audio positions set the Unity Audio Sources the sound plays through, on PC and on Quest:
+
+- **Links (YouTube and so on)** play through the screen browser's speakers. The space-page screen (`space-screen`) has no speakers a page can set, so while `audio-3d` is `false` (2D), or an audio position is set, the screen is a browser of its own instead.
+- **Video files** play through the world's video player, which has a speaker for each channel.
+
+> **Left and right are for video files only.** `audio-position-left` and `audio-position-right` place a stereo **video file's** two sides, which have a speaker each. A browser (YouTube, Twitch and every other link) plays both sides through **one** speaker that neither a page nor a kit can split or copy in the app as it is (its content check refuses graphs that touch the browser's sound emitter). That speaker goes to `audio-position`, or stays at the screen. With `audio-3d` on it fades with distance from there when `spatial` is on, and doesn't fade when `spatial` is off.
+
+> **This needs an app with the SDK's typed API (`BS.Unity`).** The page sets the speakers through it. In an app without it, `audio-3d="false"` (2D) and the audio positions do nothing (`spatial` still fades the volume), and the player says so in the console and when a viewer picks a sound in the panel.
 
 ### UI & Control Parameters
 

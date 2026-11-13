@@ -83,6 +83,14 @@ var PROGRESS_WIDTH = 820;
 // downloaded for as long as the client runs (UIElementBridge's texture cache) and never checks one
 // is still there, so after a rejoin a cached link can show nothing and never download again.
 var THUMB_VISIT = Date.now().toString(36);
+// Symbols drawn as pictures (public/assets/icons, served from the assets host) when a button's or label's text starts with
+// one (see setIconText): pause, cross, crown (the host), menu, fade, hand.
+var ICON_FILES = { '\u275A\u275A': 'pause', '\u2715': 'close', '\u265B': 'host', '\u2630': 'menu', '\u25D4': 'fade', '\u261A': 'hand' };
+var ICON_TINTS = { '#80deea': '-80deea', '#ffd54f': '-ffd54f' };
+var ICON_START = /^(\u275A\u275A|[\u2715\u265B\u2630\u25D4\u261A])\s?([\s\S]*)$/;
+// What the panel shows for those symbols in the middle of a sentence, where a picture can't go:
+// pause bars, cross, crown (the host), menu, fade, pointing hand.
+var PLAIN_SYMBOLS = { '\u275A': '|', '\u2715': '\u00D7', '\u265B': '\u25C9', '\u2630': '=', '\u25D4': '~', '\u261A': '\u25C0' };
 var FirePlaylistPanel = class {
   constructor(core) {
     this.core = core;
@@ -128,6 +136,7 @@ var FirePlaylistPanel = class {
     this.failed = false;
     this.clockSkew = 0;
     this.cache = new Map();
+    this.iconParts = new Map(); // elements whose text starts with a picture icon (see setIconText)
     this.renderTimer = null;
     this.tickTimer = null;
     this.statusTimer = null;
@@ -157,10 +166,20 @@ var FirePlaylistPanel = class {
     return !!(p && p.host && window.user && p.host.id === window.user.id);
   }
 
-  // The list on the first tab: the playlist, or in karaoke mode the singer queue.
+  // The list on the first tab: the playlist, then the videos waiting for the host to approve them
+  // (added while locked; after the playlist, so its indexes stay the same), or in karaoke mode the
+  // singer queue.
   listItems() {
     const p = this.core.player || {};
-    return (this.karaoke ? p.players : p.playlist) || [];
+    if (this.karaoke) return p.players || [];
+    const waiting = Array.isArray(p.waiting) ? p.waiting.map(w => Object.assign({ waiting: true }, w)) : [];
+    return (p.playlist || []).concat(waiting);
+  }
+
+  // Whether this user's + Add asks the host instead (playlist mode, locked, not the host).
+  addWaits() {
+    const p = this.core.player;
+    return !this.karaoke && !!p && !!p.locked && !this.isHost();
   }
 
   isInQueue() {
@@ -204,9 +223,55 @@ var FirePlaylistPanel = class {
     c[key] = value;
     return true;
   }
+  // The UI font on a Quest has fewer symbols than on PC, and draws an empty box for one it
+  // lacks. These are the ones seen missing there, with a symbol or letter it has. PC shows the
+  // same, so the panel looks alike everywhere and what's tested on one holds on the other.
+  plainSymbols(text) {
+    return text.replace(/[\u275A\u2715\u265B\u2630\u25D4\u261A]/g, ch => PLAIN_SYMBOLS[ch]);
+  }
   setText(el, text) {
     text = text == null ? '' : String(text);
+    // Text that starts with one of the picture icons (see ICON_FILES), or an element that has
+    // shown one before, is drawn as a picture and a label inside the element.
+    const m = ICON_START.exec(text);
+    if (m || this.iconParts.has(el)) return this.setIconText(el, m ? ICON_FILES[m[1]] : null, m ? m[2] : text);
+    text = this.plainSymbols(text);
     if (this._changed(el, 'text', text)) el.text = text;
+  }
+  // The picture icons: the UI font on a Quest lacks these symbols, and pictures look the same
+  // on every device. The element's own text is emptied, and it gets a picture and a label as
+  // children (as iconButton's do), made once and then only changed. `file` null shows text only
+  // (the pause button's play symbol, say).
+  setIconText(el, file, rest) {
+    let part = this.iconParts.get(el);
+    if (!part) {
+      part = { el };
+      this.iconParts.set(el, part);
+      if (this._changed(el, 'text', '')) el.text = '';
+      el.SetStyles(Object.assign({ display: 'flex', flexDirection: 'row', alignItems: 'center' }, el.fvpButton ? { justifyContent: 'center' } : {}));
+      const size = `${Math.round((parseFloat(el.fvpFontSize) || 20) * 1.3)}px`;
+      part.building = (async () => {
+        part.img = await this.div(el, { width: size, height: size, flexShrink: 0 });
+        part.txt = await this.label(el, '', { fontSize: el.fvpFontSize || '20px', color: el.fvpColor || '#ffffff', whiteSpace: 'nowrap', flexShrink: 1, overflow: 'hidden', textOverflow: 'ellipsis' });
+        part.building = null;
+        this.applyIconText(part);
+      })().catch(e => console.warn('[PlaylistPanel] Could not make an icon:', e));
+    }
+    part.file = file;
+    part.rest = this.plainSymbols(rest || '');
+    if (!part.building) this.applyIconText(part);
+  }
+  applyIconText(part) {
+    // The pictures are white; the two other text colours that carry one have their own copies.
+    // The address changes each visit, as the thumbnails' do: the app keeps pictures by address,
+    // and one kept from an earlier visit to the space shows as an empty box.
+    const tint = ICON_TINTS[String(part.el.fvpColor || '').toLowerCase()] || '';
+    const url = part.file ? `url("${this.core.assetUrl(`icons/${part.file}${tint}.png`)}?fvp=${THUMB_VISIT}")` : 'none';
+    if (this._changed(part.img, 'backgroundImage', url)) part.img.SetStyles({ backgroundImage: url });
+    this.display(part.img, !!part.file);
+    this.display(part.txt, !!part.rest);
+    this.setStyle(part.txt, 'marginLeft', part.file && part.rest ? '8px' : '0px');
+    if (this._changed(part.txt, 'text', part.rest)) part.txt.text = part.rest;
   }
   display(el, on) {
     const v = on ? 'flex' : 'none';
@@ -380,6 +445,8 @@ var FirePlaylistPanel = class {
   async label(parent, text, styles) {
     const el = await this.ready(this.ui.CreateLabel(undefined, parent));
     el.SetStyles(Object.assign({ color: '#ffffff', fontSize: '20px', backgroundColor: 'rgba(0,0,0,0)' }, styles || {}));
+    el.fvpFontSize = (styles && styles.fontSize) || '20px'; // for a picture icon (see setIconText)
+    el.fvpColor = (styles && styles.color) || '#ffffff';
     this.setText(el, text);
     return el;
   }
@@ -392,6 +459,9 @@ var FirePlaylistPanel = class {
       marginLeft: '4px', marginRight: '4px', marginTop: '4px', marginBottom: '4px',
       borderRadius: '10px', borderWidth: '0px', backgroundImage: 'none'
     }, styles || {}));
+    el.fvpButton = true; // for a picture icon (see setIconText)
+    el.fvpFontSize = (styles && styles.fontSize) || '20px';
+    el.fvpColor = (styles && styles.color) || '#ffffff';
     this.setText(el, text);
     // Guard against a click arriving twice from one press.
     let last = 0;
@@ -403,6 +473,121 @@ var FirePlaylistPanel = class {
       try { onClick(); } catch (e) { console.error('[PlaylistPanel] click handler failed:', e); }
     });
     return el;
+  }
+
+  // A web address shown as text that opens in the viewer's browser when pressed (the client asks
+  // them first). `url` is the address, or a function giving it, for one that changes.
+  async link(parent, text, url, styles) {
+    return this.button(parent, text, () => this.openLink(typeof url === 'function' ? url() : url), Object.assign({
+      backgroundColor: 'rgba(0,0,0,0)', paddingLeft: '6px', paddingRight: '6px', paddingTop: '2px', paddingBottom: '2px',
+      marginLeft: '0px', marginRight: '0px', marginTop: '0px', marginBottom: '0px'
+    }, styles || {}));
+  }
+
+  openLink(url) {
+    if (!url) return;
+    if (!this.core.openPage(url)) this.core.showToast(`Couldn't open it here. Go to ${url.replace(/^https?:\/\//, '')} in your browser.`, 6000);
+  }
+
+  // A button with drawn icons (drawLock, drawSpeaker) and text as children, so the icon can be
+  // more than the UI font has. `draw` adds the icon to the button. Its text label is btn.label.
+  async iconButton(parent, draw, text, onClick, styles) {
+    const btn = await this.button(parent, '', onClick, Object.assign({ display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }, styles || {}));
+    if (draw) await draw(btn);
+    btn.label = text != null ? await this.label(btn, text, { fontSize: (styles && styles.fontSize) || '20px', marginLeft: draw && text ? '8px' : '0px' }) : null;
+    return btn;
+  }
+
+  // The UI font has symbols (▶ ◀◀ ✓ ...; fewer on Quest, see plainSymbols) but no colour emoji, so a padlock and a speaker are
+  // drawn from boxes. A padlock: the shackle (a round-topped border) over the body; open lifts the
+  // shackle to the right.
+  async drawLock(parent, open, color = '#ffffff') {
+    const box = await this.div(parent, { width: '26px', height: '32px', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end' });
+    await this.div(box, {
+      width: '16px', height: '14px', borderTopWidth: '4px', borderLeftWidth: '4px', borderRightWidth: '4px', borderBottomWidth: '0px',
+      borderColor: color, borderTopLeftRadius: '8px', borderTopRightRadius: '8px',
+      marginLeft: open ? '14px' : '0px', marginBottom: open ? '2px' : '-2px'
+    });
+    await this.div(box, { width: '24px', height: '18px', backgroundColor: color, borderRadius: '4px' });
+    return box;
+  }
+
+  // A speaker: body and cone, then a sound wave, or a cross when muted. Blocky (the cone is a taller
+  // box), as the UI draws a border-made triangle as a thin sliver.
+  async drawSpeaker(parent, wave, muted, color = '#ffffff') {
+    const box = await this.div(parent, { height: '30px', flexShrink: 0, display: 'flex', flexDirection: 'row', alignItems: 'center' });
+    await this.div(box, { width: '8px', height: '12px', backgroundColor: color, borderTopLeftRadius: '2px', borderBottomLeftRadius: '2px' });
+    await this.div(box, { width: '9px', height: '24px', backgroundColor: color, borderTopRightRadius: '3px', borderBottomRightRadius: '3px', marginLeft: '1px' });
+    if (muted) await this.label(box, '✕', { fontSize: '20px', color, marginLeft: '4px' });
+    if (wave) {
+      await this.div(box, { width: '8px', height: '18px', borderRightWidth: '3px', borderColor: color, borderTopRightRadius: '50%', borderBottomRightRadius: '50%', marginLeft: '1px' });
+    }
+    return box;
+  }
+
+  // A scrolling column (a UI Toolkit ScrollView) filling `parent`, or a plain column without one.
+  async scrollColumn(parent) {
+    if (typeof this.ui.CreateScrollView === 'function') {
+      try {
+        const scroller = await this.ready(this.ui.CreateScrollView(parent));
+        scroller.SetStyles({
+          flexGrow: 1, flexShrink: 1, flexBasis: '0px', minHeight: '0px',
+          overflow: 'scroll', backgroundColor: 'rgba(0,0,0,0)', backgroundImage: 'none'
+        });
+        return await this.div(scroller, { display: 'flex', flexDirection: 'column', flexShrink: 0, paddingRight: '6px' });
+      } catch (e) {
+        console.warn('[PlaylistPanel] Could not make a scroll view:', e);
+      }
+    }
+    return this.div(parent, { display: 'flex', flexDirection: 'column', flexGrow: 1, overflow: 'hidden' });
+  }
+
+  // Who may control the player, from the server's two settings (lock and Take Over): 'host'
+  // (locked, no Take Over), 'everyone' (unlocked, no Take Over: the host stays the host) or
+  // 'takeover' (anyone can press Take Over and become the host). Take Over on while locked is
+  // 'takeover' too, as anyone can still become the host and change everything.
+  controlLevel(player) {
+    if (!player || player.canTakeOver) return 'takeover';
+    return player.locked ? 'host' : 'everyone';
+  }
+
+  // The three choices, closed to open: [level, padlock open, colour, name].
+  controlLevels() {
+    return [
+      ['host', false, '#2e7d32', 'Only the host'],
+      ['everyone', true, '#ef6c00', 'Everyone'],
+      ['takeover', true, '#c62828', 'Everyone + Take Over']
+    ];
+  }
+
+  controlText(level) {
+    const k = this.karaoke;
+    if (level === 'host') {
+      return (k ? 'Only the host starts songs, and new songs wait for the host to approve them.' : 'Only the host changes videos, and new ones wait for the host to approve them.')
+        + ' Nobody can take over while the host is here.';
+    }
+    if (level === 'everyone') {
+      return (k ? 'Anyone can join the queue, and the next singer can start their own song.' : 'Anyone can add videos. Only the host can play, skip, move or remove them.')
+        + ' Nobody can take over while the host is here.';
+    }
+    return 'Anyone can press Take Over and become the host, and then change anything.';
+  }
+
+  // The host picks who may control the player (see controlLevel): sets lock and Take Over together,
+  // so a locked player can't be left open to Take Over by mistake.
+  setControl(level) {
+    const p = this.core.player;
+    if (!p) return;
+    if (!this.isHost()) {
+      this.setStatus(p.canTakeOver ? 'Only the host can change this. Press Take Over to become the host.' : 'Only the host can change this.');
+      return;
+    }
+    const locked = level === 'host';
+    const takeOver = level === 'takeover';
+    // One message for both, so the server changes them together or (refused) not at all; it
+    // answers everyone with what they are now.
+    if (!!p.locked !== locked || !!p.canTakeOver !== takeOver) this.send(Commands.SET_CONTROL, { locked, canTakeOver: takeOver });
+    this.setStatus(this.controlText(level), 6000);
   }
 
   // A text input. Returns null when this SDK has no UITextField.
@@ -540,14 +725,21 @@ var FirePlaylistPanel = class {
     await this.label(header, this.karaoke ? 'Fire-V-Player Karaoke' : 'Fire-V-Player', { fontSize: '30px', fontWeight: 'bold' });
     // The server's build (see server/version.js), so people can tell an old version from a new one.
     this.versionLabel = await this.label(header, '', { fontSize: '18px', color: '#888888', marginLeft: '12px', flexGrow: 1 });
-    this.hostLabel = await this.label(header, '', { fontSize: '20px', color: '#bbbbbb', marginRight: '12px' });
-    await this.button(header, 'Refresh', () => this.refresh(true), { backgroundColor: GREY });
-    this.infoBtn = await this.button(header, 'Info', () => this.setView(this.view === 'info' ? 'main' : 'info'), { backgroundColor: GREY });
-    this.moreBtn = await this.button(header, 'More...', () => this.setView(this.view === 'more' ? 'main' : 'more'), { backgroundColor: '#2e7d32' });
-    await this.button(header, 'X', () => this.close(), {
-      backgroundColor: '#c62828', fontSize: '30px', fontWeight: 'bold', width: '60px', height: '56px',
-      paddingLeft: '0px', paddingRight: '0px', paddingTop: '0px', paddingBottom: '0px', marginLeft: '14px', textAlign: 'center'
+    // Who runs the player: the host (♛) and a padlock coloured by who may control it (see
+    // controlLevel). Pressing it opens More, where that's set, and Take Over.
+    this.hostChip = await this.button(header, '', () => this.setView(this.view === 'more' ? 'main' : 'more'), {
+      display: 'flex', flexDirection: 'row', alignItems: 'center', backgroundColor: '#2e7d32',
+      paddingLeft: '12px', paddingRight: '14px', maxWidth: '380px', height: '52px'
     });
+    this.chipLockOpen = await this.drawLock(this.hostChip, true);
+    this.chipLockShut = await this.drawLock(this.hostChip, false);
+    this.hostLabel = await this.label(this.hostChip, '', {
+      fontSize: '20px', marginLeft: '10px', flexShrink: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
+    });
+    const headIcon = { backgroundColor: GREY, fontSize: '28px', width: '56px', height: '52px', paddingLeft: '0px', paddingRight: '0px', paddingTop: '0px', paddingBottom: '0px' };
+    this.infoBtn = await this.button(header, 'ⓘ', () => this.setView(this.view === 'info' ? 'main' : 'info'), headIcon);
+    this.moreBtn = await this.button(header, '☰', () => this.setView(this.view === 'more' ? 'main' : 'more'), Object.assign({}, headIcon, { backgroundColor: '#2e7d32' }));
+    await this.button(header, '✕', () => this.close(), Object.assign({}, headIcon, { backgroundColor: '#c62828', fontSize: '30px', marginLeft: '14px' }));
 
     // Now playing
     const nowCard = this.nowCard = await this.div(rootEl, {
@@ -570,31 +762,53 @@ var FirePlaylistPanel = class {
     this.addProgressSeek(progHit);
 
     // Playback + volume controls
+    // Symbols instead of words, so they read in any language (the Info view has a legend).
     const controls = this.controlsRow = await row(rootEl, { marginTop: '6px' });
-    this.prevTrackBtn = await this.button(controls, 'Prev', () => this.changeTrack(-1));
-    this.rewBtn = await this.button(controls, '<< Skip', () => this.core.back());
-    this.pauseBtn = await this.button(controls, 'Pause', () => this.send(Commands.TOGGLE_PAUSE));
-    this.ffBtn = await this.button(controls, 'Skip >>', () => this.core.forward());
-    this.nextTrackBtn = await this.button(controls, 'Next', () => this.changeTrack(1));
+    const sym = { fontSize: '26px', minWidth: '64px', paddingLeft: '12px', paddingRight: '12px', height: '52px' };
+    const symBtn = (text, fn, styles) => this.button(controls, text, fn, Object.assign({}, sym, styles || {}));
+    this.prevTrackBtn = await symBtn('|◀', () => this.changeTrack(-1));
     if (this.karaoke) {
-      // The host or the person singing can restart or stop the song.
-      this.restartBtn = await this.button(controls, 'Restart Song', () => this.send(Commands.RESTART_SONG));
-      this.stopBtn = await this.button(controls, 'Stop Song', () => this.send(Commands.STOP), { backgroundColor: '#c62828' });
+      // The host or the person singing can start the song again or stop it.
+      this.restartBtn = await symBtn('|◀', () => { this.stopPreview(true); this.send(Commands.RESTART_SONG); });
     }
-    // Rebuilds only this viewer's screen, for a video that froze or didn't load for them. Karaoke's
-    // row is full, so there it's only in More.
-    if (!this.karaoke) await this.button(controls, 'Reload', () => this.core.reloadScreen(), { backgroundColor: '#5d4037' });
+    this.rewBtn = await symBtn('◀◀', () => this.core.back());
+    this.pauseBtn = await symBtn('❚❚', () => this.send(Commands.TOGGLE_PAUSE));
+    this.ffBtn = await symBtn('▶▶', () => this.core.forward());
+    this.nextTrackBtn = await symBtn('▶|', () => this.changeTrack(1));
+    if (this.karaoke) this.stopBtn = await symBtn('■', () => { this.stopPreview(true); this.send(Commands.STOP); }, { backgroundColor: '#c62828' });
+    // Rebuilds only this viewer's screen, for a video that froze or didn't load for them.
+    await symBtn('↻', () => this.core.reloadScreen(), { backgroundColor: '#5d4037' });
     await this.div(controls, { flexGrow: 1 });
-    await this.button(controls, 'Vol -', () => { this.core.volume(false); this.renderSoon(); }, { backgroundColor: GREY });
-    this.volLabel = await this.label(controls, '', { fontSize: '20px', width: '110px', textAlign: 'center' });
-    await this.button(controls, 'Vol +', () => { this.core.volume(true); this.renderSoon(); }, { backgroundColor: GREY });
-    this.muteBtn = await this.button(controls, 'Mute', () => { this.core.mute(); this.renderSoon(); }, { backgroundColor: GREY });
+    // This viewer's volume: drawn speakers, as the UI font has none.
+    const vol = { backgroundColor: GREY, height: '52px', paddingLeft: '12px', paddingRight: '14px', fontSize: '26px' };
+    await this.iconButton(controls, b => this.drawSpeaker(b, false, false), '−', () => { this.core.volume(false); this.renderSoon(); }, vol);
+    this.volLabel = await this.label(controls, '', { fontSize: '24px', width: '56px', textAlign: 'center' });
+    await this.iconButton(controls, b => this.drawSpeaker(b, true, false), '+', () => { this.core.volume(true); this.renderSoon(); }, vol);
+    this.muteBtn = await this.iconButton(controls, b => this.drawSpeaker(b, false, true), null, () => { this.core.mute(); this.renderSoon(); }, vol);
 
     // Replacement suggestion (when a user can't play a video)
     this.noticeRow = await row(rootEl, { marginTop: '6px', backgroundColor: '#4e342e', borderRadius: '10px', paddingLeft: '10px', paddingRight: '6px' });
     this.noticeLabel = await this.label(this.noticeRow, '', { fontSize: '18px', flexGrow: 1, flexShrink: 1, whiteSpace: 'normal' });
-    this.replaceConfirmBtn = await this.button(this.noticeRow, 'Replace', () => this.confirmReplace(), { backgroundColor: '#2e7d32' });
-    await this.button(this.noticeRow, 'Dismiss', () => this.dismissReplace(), { backgroundColor: '#c62828' });
+    this.replaceConfirmBtn = await this.button(this.noticeRow, '⇄ Replace', () => this.confirmReplace(), { backgroundColor: '#2e7d32' });
+    await this.button(this.noticeRow, '✕', () => this.dismissReplace(), { backgroundColor: '#c62828' });
+
+    // Karaoke preview: plays a searched song on this viewer's screen only, so they can check it has
+    // lyrics before adding it. Shown across Search and the other tabs while a preview is running.
+    if (this.karaoke) {
+      this.previewRow = await row(rootEl, {
+        display: 'none', marginTop: '6px', backgroundColor: '#1e3a5f', borderRadius: '10px',
+        paddingLeft: '10px', paddingRight: '6px', paddingTop: '4px', paddingBottom: '4px'
+      });
+      this.previewLabel = await this.label(this.previewRow, '', {
+        fontSize: '18px', flexGrow: 1, flexShrink: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
+      });
+      await this.button(this.previewRow, '◀◀', () => this.core.back(), { fontSize: '24px' });
+      await this.button(this.previewRow, '▶▶', () => this.core.forward(), { fontSize: '24px' });
+      this.previewSingBtn = await this.button(this.previewRow, '♪ Sing It', () => {
+        if (this.core.previewVideo) this.singIt(this.core.previewVideo);
+      }, { backgroundColor: '#2e7d32' });
+      await this.button(this.previewRow, '■ Stop', () => this.stopPreview(), { backgroundColor: '#c62828' });
+    }
 
     // A pasted playlist: what to do with it.
     this.listPromptRow = await this.div(rootEl, {
@@ -603,39 +817,43 @@ var FirePlaylistPanel = class {
     });
     this.listPromptLabel = await this.label(this.listPromptRow, '', { fontSize: '20px', whiteSpace: 'normal' });
     const promptBtns = await row(this.listPromptRow, { marginTop: '4px', flexWrap: 'wrap' });
-    this.promptReplaceBtn = await this.button(promptBtns, 'Replace Playlist', () => this.answerListPrompt('replace'), { backgroundColor: '#2e7d32' });
-    this.promptAppendBtn = await this.button(promptBtns, 'Add All to End', () => this.answerListPrompt('append'));
-    this.promptShareBtn = await this.button(promptBtns, 'Save for Everyone', () => this.answerListPrompt('share'), { backgroundColor: '#6a1b9a' });
-    this.promptSaveBtn = await this.button(promptBtns, 'Save for Me', () => this.answerListPrompt('save'), { backgroundColor: '#4a148c' });
-    this.promptVideoBtn = await this.button(promptBtns, 'Just This Video', () => this.answerListPrompt('video'));
-    await this.button(promptBtns, 'Cancel', () => this.answerListPrompt(null), { backgroundColor: GREY });
+    this.promptReplaceBtn = await this.button(promptBtns, '⇄ Replace Playlist', () => this.answerListPrompt('replace'), { backgroundColor: '#2e7d32' });
+    this.promptAppendBtn = await this.button(promptBtns, '+ Add All to End', () => this.answerListPrompt('append'));
+    this.promptShareBtn = await this.button(promptBtns, '★ Save for Everyone', () => this.answerListPrompt('share'), { backgroundColor: '#6a1b9a' });
+    this.promptSaveBtn = await this.button(promptBtns, '☆ Save for Me', () => this.answerListPrompt('save'), { backgroundColor: '#4a148c' });
+    this.promptVideoBtn = await this.button(promptBtns, '+ Just This Video', () => this.answerListPrompt('video'));
+    await this.button(promptBtns, '✕ Cancel', () => this.answerListPrompt(null), { backgroundColor: GREY });
 
     // ---- Main view: playlist / search
     this.mainView = await this.div(rootEl, { display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, overflow: 'hidden' });
 
     const tabs = await row(this.mainView, { marginTop: '6px' });
-    this.tabPlaylistBtn = await this.button(tabs, this.karaoke ? 'Singers' : 'Playlist', () => this.setTab('playlist'));
+    // Tight padding, so the page buttons still fit beside the tabs with a long playlist and
+    // videos waiting for the host (Playlist (322+2), 101-120 / 322).
+    const tabBtn = { paddingLeft: '10px', paddingRight: '10px' };
+    this.tabPlaylistBtn = await this.button(tabs, this.karaoke ? 'Singers' : 'Playlist', () => this.setTab('playlist'), tabBtn);
     // Saved lists (not in karaoke mode, where the first tab is the singer queue).
-    this.tabListsBtn = this.karaoke ? null : await this.button(tabs, 'Lists', () => this.setTab('lists'));
+    this.tabListsBtn = this.karaoke ? null : await this.button(tabs, 'Lists', () => this.setTab('lists'), tabBtn);
     // Search opens over the whole panel (see render), so it stands out from the tabs.
-    this.tabSearchBtn = await this.button(tabs, this.karaoke ? 'Search Songs' : 'Search & Add', () => this.openSearch(), {
-      backgroundColor: SEARCH_COLOR, paddingLeft: '22px', paddingRight: '22px', fontWeight: 'bold'
+    this.tabSearchBtn = await this.button(tabs, this.karaoke ? '+ Search Songs' : '+ Search & Add', () => this.openSearch(), {
+      backgroundColor: SEARCH_COLOR, paddingLeft: '12px', paddingRight: '12px', fontWeight: 'bold'
     });
     // While searching: a title and the way back, instead of the tabs.
     this.searchTitle = await this.label(tabs, this.karaoke ? 'Search for a song' : 'Search', { fontSize: '26px', fontWeight: 'bold', marginLeft: '6px', marginRight: '12px' });
-    this.closeSearchBtn = await this.button(tabs, this.karaoke ? 'Back to Singers' : 'Back to Playlist', () => this.closeSearch(), { backgroundColor: '#c62828' });
+    this.closeSearchBtn = await this.button(tabs, this.karaoke ? '↩ Singers' : '↩ Playlist', () => this.closeSearch(), { backgroundColor: '#c62828' });
     await this.div(tabs, { flexGrow: 1 });
     // Page buttons: first, back 5, back 1, forward 1, forward 5, last. With a scroll view they
     // move the window of rows (see LIST_WINDOW), and Now goes back to the playing video.
-    const pageBtn = { backgroundColor: GREY, paddingLeft: '12px', paddingRight: '12px' };
-    this.nowBtn = this.karaoke ? null : await this.button(tabs, 'Now', () => this.showCurrent(), pageBtn);
-    this.firstPageBtn = await this.button(tabs, '|<', () => this.changePage(-Infinity), pageBtn);
-    this.back5Btn = await this.button(tabs, '<<', () => this.changePage(-PAGE_JUMP), pageBtn);
-    this.prevPageBtn = await this.button(tabs, '<', () => this.changePage(-1), pageBtn);
-    this.pageLabel = await this.label(tabs, '1 / 1', { fontSize: '18px', width: '130px', textAlign: 'center' });
-    this.nextPageBtn = await this.button(tabs, '>', () => this.changePage(1), pageBtn);
-    this.fwd5Btn = await this.button(tabs, '>>', () => this.changePage(PAGE_JUMP), pageBtn);
-    this.lastPageBtn = await this.button(tabs, '>|', () => this.changePage(Infinity), pageBtn);
+    // Narrow, so the row fits beside the tabs with a long playlist's label (101-120 / 322).
+    const pageBtn = { backgroundColor: GREY, paddingLeft: '6px', paddingRight: '6px', marginLeft: '2px', marginRight: '2px', fontSize: '24px', minWidth: '44px' };
+    this.nowBtn = this.karaoke ? null : await this.button(tabs, '◉ Now', () => this.showCurrent(), Object.assign({}, pageBtn, { fontSize: '20px', paddingLeft: '10px', paddingRight: '10px' }));
+    this.firstPageBtn = await this.button(tabs, '⇤', () => this.changePage(-Infinity), pageBtn);
+    this.back5Btn = await this.button(tabs, '«', () => this.changePage(-PAGE_JUMP), pageBtn);
+    this.prevPageBtn = await this.button(tabs, '‹', () => this.changePage(-1), pageBtn);
+    this.pageLabel = await this.label(tabs, '1 / 1', { fontSize: '17px', width: '116px', textAlign: 'center', flexShrink: 0 });
+    this.nextPageBtn = await this.button(tabs, '›', () => this.changePage(1), pageBtn);
+    this.fwd5Btn = await this.button(tabs, '»', () => this.changePage(PAGE_JUMP), pageBtn);
+    this.lastPageBtn = await this.button(tabs, '⇥', () => this.changePage(Infinity), pageBtn);
 
     this.searchRow = await row(this.mainView, { marginTop: '4px' });
     const searchHint = this.karaoke ? 'Search for a song to sing, or paste a video link' : 'Search YouTube, or paste a YouTube / Twitch / Vimeo / video link';
@@ -647,7 +865,7 @@ var FirePlaylistPanel = class {
     if (this.searchField) {
       await this.button(this.searchRow, 'Search', () => this.doSearch(), { backgroundColor: '#1565c0' });
       // Typing a link on a headset is hard: get a code, and send the link from a phone instead.
-      await this.button(this.searchRow, 'Phone', () => this.askPasteCode(), { backgroundColor: '#6a1b9a' });
+      await this.button(this.searchRow, '☎ Phone', () => this.askPasteCode(), { backgroundColor: '#6a1b9a' });
       // Speak (speech to text, toggleSpeech) stays hidden until Altspace answers StartTTS/StopTTS:
       // there it never does, which only confuses people. Set SPEAK_ENABLED to bring it back.
       const scene = this.core.banterScene();
@@ -658,7 +876,7 @@ var FirePlaylistPanel = class {
       if (this.searchQuery) this.setSearchText(this.searchQuery);
     } else {
       // A link sent from a phone still goes in (pasteFromPhone sets searchQuery without a field).
-      await this.button(this.searchRow, 'Phone', () => this.askPasteCode(), { backgroundColor: '#6a1b9a' });
+      await this.button(this.searchRow, '☎ Phone', () => this.askPasteCode(), { backgroundColor: '#6a1b9a' });
     }
 
     // Paste from your phone: a QR code that opens the page with the code filled in, and the
@@ -672,7 +890,9 @@ var FirePlaylistPanel = class {
     this.phoneQrBoxes = [];
     const phoneText = await this.div(this.phoneCard, { display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 1 });
     this.phoneScanLabel = await this.label(phoneText, 'Scan this with your phone, or go to', { fontSize: '28px', color: '#e1bee7' });
-    this.phoneUrlLabel = await this.label(phoneText, '', { fontSize: '46px', fontWeight: 'bold', color: '#80deea', marginTop: '4px' });
+    // Opens the page with the code already in, for someone at a computer rather than a phone.
+    this.phoneUrlLabel = await this.link(phoneText, '', () => this.pasteCode && `${this.core.getProtocol()}://${this.core.hostUrl}/p/${this.pasteCode}`,
+      { fontSize: '46px', fontWeight: 'bold', color: '#80deea', marginTop: '4px' });
     await this.label(phoneText, 'and enter this code:', { fontSize: '28px', color: '#e1bee7', marginTop: '8px' });
     this.phoneCodeLabel = await this.label(phoneText, '', {
       fontSize: '96px', fontWeight: 'bold', color: '#ffffff', marginTop: '4px',
@@ -680,7 +900,7 @@ var FirePlaylistPanel = class {
     });
     const phoneFoot = await row(phoneText, { marginTop: '10px' });
     this.phoneExpiryLabel = await this.label(phoneFoot, '', { fontSize: '22px', color: '#bbbbbb', marginRight: '16px' });
-    await this.button(phoneFoot, 'Done', () => this.hidePasteCode(), { backgroundColor: '#455a64', fontSize: '24px' });
+    await this.button(phoneFoot, '✓ Done', () => this.hidePasteCode(), { backgroundColor: '#455a64', fontSize: '24px' });
 
     // Search helpers: karaoke's words to add to the search, then recent searches.
     this.searchToolsRow = await row(this.mainView, { overflow: 'hidden' });
@@ -705,7 +925,7 @@ var FirePlaylistPanel = class {
       }, small));
       this.recentBtns.push(btn);
     }
-    this.clearRecentBtn = await this.button(this.searchToolsRow, 'Clear', () => this.clearRecent(), Object.assign({ backgroundColor: '#c62828' }, small));
+    this.clearRecentBtn = await this.button(this.searchToolsRow, '✕', () => this.clearRecent(), Object.assign({ backgroundColor: '#c62828' }, small));
 
     // List rows: a fixed pool, re-filled as the list or its window changes. In a scroll view when
     // this SDK has one (as in the user's other worlds: CreateScrollView, overflow scroll, and a
@@ -743,39 +963,39 @@ var FirePlaylistPanel = class {
     const firstRows = this.scrolling ? FIRST_ROWS : this.rowsPerPage;
     for (let k = 0; k < firstRows; k++) this.rows.push(await this.makeRow(list));
 
-    // ---- Info view: who made the player, how to use it, and where to get it for a world
+    // ---- Info view: how to use it, what the symbols mean, who controls the player, and where to
+    // get it for a world. It scrolls.
     this.infoView = await this.div(rootEl, { display: 'none', flexDirection: 'column', flexGrow: 1, flexShrink: 1, overflow: 'hidden', marginTop: '6px' });
-    const infoBox = await this.div(this.infoView, {
-      display: 'flex', flexDirection: 'column', flexShrink: 0, backgroundColor: '#23232d',
+    const infoCol = await this.scrollColumn(this.infoView);
+    const infoBox = async () => this.div(infoCol, {
+      display: 'flex', flexDirection: 'column', flexShrink: 0, backgroundColor: '#23232d', marginBottom: '8px',
       borderRadius: '14px', paddingLeft: '18px', paddingRight: '18px', paddingTop: '12px', paddingBottom: '12px'
     });
-    // Tips on the left, each a button's name and what it's for; the setup guide's QR code on the right.
-    const infoCols = await row(infoBox, { alignItems: 'flex-start' });
-    const howCol = await this.div(infoCols, { display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, marginRight: '24px' });
     const colText = (parent, text, styles) => this.label(parent, text, Object.assign({ fontSize: '21px', whiteSpace: 'normal', marginTop: '6px' }, styles || {}));
-    await colText(howCol, 'How to use it', { fontSize: '26px', fontWeight: 'bold', marginTop: '0px' });
+    const heading = (parent, text) => colText(parent, text, { fontSize: '26px', fontWeight: 'bold', marginTop: '0px' });
+    // Tips on the left, each a button and what it's for; the setup guide's QR code on the right.
+    this.infoIntroBox = await infoBox();
+    const infoCols = await row(this.infoIntroBox, { alignItems: 'flex-start' });
+    const howCol = await this.div(infoCols, { display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, marginRight: '24px' });
+    await heading(howCol, 'How to use it');
     const tips = this.karaoke ? [
-      ['Search Songs', 'Find a song, or paste a video link. + karaoke and + lyrics help find versions with words on screen.'],
-      ['Sing It', 'Puts you in the singer queue with that song. You can be in the queue once.'],
-      ['Play & Sing', 'When it is your turn and no song is playing, press it on your name to start.'],
-      ['Locked', 'Only the host starts songs, and your song waits until the host approves it.'],
-      ['Phone', 'Shows a code. Send a link from your phone into your search, no typing in VR.'],
-      ['Restart / Stop', 'The singer and the host can restart or stop the song.'],
-      ['Vol / Mute', 'Only change what you hear, not anyone else.'],
-      ['Hand controls', 'Move them in More... The orange button folds them away to one button.']
+      ['+ Search Songs', 'Find a song, or paste a video link. + karaoke and + lyrics help find versions with words on screen.'],
+      ['▶ Preview', 'Plays the song on the screen just for you, so you can check it has lyrics before adding it.'],
+      ['♪ Sing It', 'Puts you in the singer queue with that song. You can be in the queue once.'],
+      ['▶ Sing', 'When it is your turn and no song is playing, press it on your name to start.'],
+      ['☎ Phone', 'Shows a code. Send a link from your phone into your search, no typing in VR.'],
+      ['♛ Host', 'Runs the karaoke. Press the host name at the top to see who can start songs, or to take over.'],
+      ['☚ Hand', 'Your hand controls: move them in More (the green button). The orange button folds them away to one button.']
     ] : [
-      ['Search & Add', 'Search YouTube, Internet Archive, Tubi, NASA+ or ESO (the button beside the box picks), or paste a link.'],
-      ['Phone', 'Shows a code. Send a link from your phone into your search, no typing in VR.'],
-      ['Host', 'The host runs the player for everyone. Take Over in More... makes you the host, when allowed.'],
-      ['Locked', 'Only the host can add videos. Unlocked, anyone can add.'],
-      ['Lists', 'Saved playlists for this room. Add All puts a whole list on the end.'],
-      ['Reload', "Fixes a video that froze or won't load for you. Nobody else's screen changes."],
-      ['Vol / Mute', 'Only change what you hear, not anyone else.'],
-      ['Hand controls', 'Move them in More... The orange button folds them away to one button.']
+      ['+ Search & Add', 'Search YouTube, Internet Archive, Tubi, NASA+ or ESO (the button beside the box picks), or paste a link.'],
+      ['☎ Phone', 'Shows a code. Send a link from your phone into your search, no typing in VR.'],
+      ['☰ Lists', 'Saved playlists for this room. + All puts a whole list on the end.'],
+      ['♛ Host', 'Runs the player for everyone. Press the host name at the top to see who else can control it, or to take over.'],
+      ['☚ Hand', 'Your hand controls: move them in More (the green button). The orange button folds them away to one button.']
     ];
     for (const [name, text] of tips) {
       const tip = await row(howCol, { alignItems: 'flex-start', marginTop: '8px' });
-      await this.label(tip, name, { fontSize: '21px', fontWeight: 'bold', color: '#80deea', width: '170px', flexShrink: 0, whiteSpace: 'normal' });
+      await this.label(tip, name, { fontSize: '21px', fontWeight: 'bold', color: '#80deea', width: '190px', flexShrink: 0, whiteSpace: 'normal' });
       await this.label(tip, text, { fontSize: '21px', whiteSpace: 'normal', flexGrow: 1, flexShrink: 1 });
     }
     const guideCol = await this.div(infoCols, { display: 'flex', flexDirection: 'column', alignItems: 'center', width: '320px', flexShrink: 0 });
@@ -784,97 +1004,177 @@ var FirePlaylistPanel = class {
     const qrSize = (SETUP_GUIDE_QR.length + 2 * QR_MARGIN) * QR_MODULE_PX;
     this.qrEl = await this.div(guideCol, { width: `${qrSize}px`, height: `${qrSize}px`, flexShrink: 0, backgroundColor: '#ffffff', marginTop: '10px' });
     await colText(guideCol, 'Scan with your phone for the setup guide, or go to', { fontSize: '19px', textAlign: 'center', color: '#bbbbbb', marginTop: '8px' });
-    await colText(guideCol, SETUP_GUIDE_URL.replace(/^https:\/\//, ''), { fontSize: '30px', fontWeight: 'bold', color: '#80deea', marginTop: '2px', textAlign: 'center' });
-    await colText(guideCol, 'Move this panel by grabbing the bar under it.', { fontSize: '19px', color: '#999999', marginTop: '16px', textAlign: 'center' });
+    await this.link(guideCol, SETUP_GUIDE_URL.replace(/^https:\/\//, ''), SETUP_GUIDE_URL, { fontSize: '30px', fontWeight: 'bold', color: '#80deea', marginTop: '2px' });
+    await colText(guideCol, 'Move this panel by grabbing the bar under it. Scroll down for more.', { fontSize: '19px', color: '#999999', marginTop: '16px', textAlign: 'center' });
     await colText(guideCol, 'Made by FireRat', { fontSize: '19px', color: '#999999', marginTop: '8px', textAlign: 'center' });
     this.infoVersionLabel = await colText(guideCol, '', { fontSize: '17px', color: '#888888', marginTop: '4px', textAlign: 'center' });
 
-    // ---- More view: host controls, seek, your own player, add by link
+    // What each symbol means, two to a line.
+    const legendBox = this.infoLegendBox = await infoBox();
+    await heading(legendBox, 'What the buttons mean');
+    const legend = [
+      ['|◀', this.karaoke ? 'Start the song again (host or singer)' : 'Previous video (host)'],
+      this.karaoke ? ['■', 'Stop the song (host or singer)'] : ['▶|', 'Next video (host)'],
+      ['❚❚ ▶', 'Pause and play, for everyone (host)'],
+      ['◀◀ ▶▶', this.karaoke ? 'Nudge your screen a little, to match the singer' : 'Skip back or forward, for you (the host: everyone)'],
+      ['↻', 'Reload the video, for you only, if it froze'],
+      this.karaoke ? ['♪', 'Sing: join the queue, or start your song'] : ['▲ ▼', 'Vote a video up or down, when voting is on'],
+      [b => this.drawSpeaker(b, true, false), 'Your volume (only what you hear)'],
+      [b => this.drawSpeaker(b, false, true), 'Mute or unmute, for you'],
+      ['⬆ ⬇', 'Move up or down the list'],
+      ['✕', 'Remove, close, or turn off'],
+      ['+', 'Add'],
+      ['✓', 'On, or approve'],
+      ['♛', 'The host, who runs the player'],
+      ['☰', 'More: settings and host controls'],
+      ['CC', 'Captions on your screen'],
+      ['▣', 'Your screen\'s sharpness (resolution)'],
+      ['♫', 'Your sound: all round you (2D) or from the screen (3D)'],
+      ['◔', 'Your sound gets quieter as you walk away, or not']
+    ];
+    let legendRow = null;
+    for (let k = 0; k < legend.length; k++) {
+      if (k % 2 === 0) legendRow = await row(legendBox, { marginTop: '6px', alignItems: 'center' });
+      const [icon, text] = legend[k];
+      const chip = await this.div(legendRow, {
+        display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+        width: '96px', height: '44px', backgroundColor: '#455a64', borderRadius: '10px'
+      });
+      if (typeof icon === 'function') await icon(chip);
+      else await this.label(chip, icon, { fontSize: '24px' });
+      await this.label(legendRow, text, { fontSize: '20px', whiteSpace: 'normal', width: '390px', flexShrink: 1, marginLeft: '12px', marginRight: '12px' });
+    }
+
+    // Who controls the player: the three choices in ☰ (see controlLevel).
+    const controlBox = await infoBox();
+    await heading(controlBox, 'Who controls the player');
+    await colText(controlBox, 'The host picks one of these in More (the green button). The padlock at the top shows which is on.', { color: '#bbbbbb' });
+    for (const [level, open, color, name] of this.controlLevels()) {
+      const line = await row(controlBox, { marginTop: '8px', alignItems: 'center' });
+      const chip = await this.div(line, {
+        display: 'flex', flexDirection: 'row', alignItems: 'center', flexShrink: 0, width: '300px', height: '48px',
+        backgroundColor: color, borderRadius: '10px', paddingLeft: '12px'
+      });
+      await this.drawLock(chip, open);
+      await this.label(chip, name, { fontSize: '21px', marginLeft: '10px' });
+      await this.label(line, this.controlText(level), { fontSize: '20px', whiteSpace: 'normal', flexGrow: 1, flexShrink: 1, marginLeft: '12px' });
+    }
+    await colText(controlBox, 'When the host leaves the space, Take Over turns on after 42 seconds, so the player is never stuck.', { color: '#bbbbbb', fontSize: '19px' });
+
+    // ---- More view (☰): who controls the player, host controls, your own player, add by link,
+    // space admins. It scrolls.
     this.moreView = await this.div(rootEl, { display: 'none', flexDirection: 'column', flexGrow: 1, flexShrink: 1, overflow: 'hidden', marginTop: '6px' });
+    const moreCol = await this.scrollColumn(this.moreView);
     const section = async (title) => {
-      const box = await this.div(this.moreView, {
+      const box = await this.div(moreCol, {
         display: 'flex', flexDirection: 'column', flexShrink: 0, backgroundColor: '#23232d',
         borderRadius: '14px', paddingLeft: '12px', paddingRight: '12px', paddingTop: '8px', paddingBottom: '8px', marginBottom: '8px'
       });
-      await this.label(box, title, { fontSize: '20px', color: '#bbbbbb', marginLeft: '4px' });
+      await this.label(box, title, { fontSize: '21px', color: '#cccccc', marginLeft: '4px', fontWeight: 'bold' });
       return box;
     };
 
-    // Host controls
-    this.hostSection = await section('Host controls');
+    // Who controls the player: one choice of three, instead of separate Lock and Take Over, so a
+    // locked player isn't left open to Take Over by mistake (see controlLevel).
+    const controlSection = this.controlSection = await section('♛ Who controls the player');
+    const hostLine = await row(controlSection, { marginTop: '2px' });
+    this.controlHostLabel = await this.label(hostLine, '', { fontSize: '22px', color: '#ffd54f', marginLeft: '4px', marginRight: '12px', flexShrink: 1 });
+    this.takeOverBtn = await this.button(hostLine, '♛ Take Over', () => {
+      if (this.core.player && !this.isHost()) this.send(Commands.TAKE_OVER);
+    }, { backgroundColor: '#2e7d32', fontSize: '22px' });
+    const choices = await row(controlSection, { marginTop: '4px', alignItems: 'stretch' });
+    this.controlCards = {};
+    for (const [level, open, color, name] of this.controlLevels()) {
+      const card = await this.button(choices, '', () => this.setControl(level), {
+        display: 'flex', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'flex-start',
+        flexGrow: 1, flexShrink: 1, flexBasis: '0px', minWidth: '0px', paddingTop: '10px', paddingBottom: '10px',
+        borderWidth: '3px', borderColor: 'rgba(0,0,0,0)'
+      });
+      const top = await row(card);
+      await this.drawLock(top, open);
+      await this.label(top, name, { fontSize: '22px', fontWeight: 'bold', marginLeft: '10px' });
+      await this.label(card, this.controlText(level), { fontSize: '17px', whiteSpace: 'normal', marginTop: '6px', color: '#eeeeee' });
+      this.controlCards[level] = { card, color };
+    }
+    this.controlNote = await this.label(controlSection, '', { fontSize: '17px', color: '#999999', marginLeft: '4px', marginTop: '4px', whiteSpace: 'normal' });
+
+    // Host controls (the host only), with seek.
+    this.hostSection = await section('♛ Host controls');
     const hostRow = await row(this.hostSection, { flexWrap: 'wrap' });
-    this.lockBtn = await this.button(hostRow, 'Lock', () => {
-      if (this.core.player) this.send(Commands.TOGGLE_LOCK, !this.core.player.locked);
-    });
-    this.takeOverBtn = await this.button(hostRow, 'Take Over', () => {
-      const player = this.core.player;
-      if (!player) return;
-      if (this.isHost()) this.send(Commands.TOGGLE_CAN_TAKE_OVER, !player.canTakeOver);
-      else this.send(Commands.TAKE_OVER);
-    });
     if (this.karaoke) {
       // Auto Advance: when a song ends, the next singer starts by themselves.
-      this.autoAdvanceBtn = await this.button(hostRow, 'Auto Advance: Off', () => this.send(Commands.TOGGLE_AUTO_ADVANCE));
+      this.autoAdvanceBtn = await this.button(hostRow, 'Auto Advance', () => this.send(Commands.TOGGLE_AUTO_ADVANCE));
     } else {
-      this.votingBtn = await this.button(hostRow, 'Voting: Off', () => this.send(Commands.TOGGLE_VOTE));
-      this.clearBtn = await this.button(hostRow, 'Clear Playlist', () => this.send(Commands.CLEAR_PLAYLIST), { backgroundColor: '#c62828' });
-      this.loadDefaultBtn = await this.button(hostRow, 'Load Default Playlist', () => {
+      this.votingBtn = await this.button(hostRow, 'Voting', () => this.send(Commands.TOGGLE_VOTE));
+      this.clearBtn = await this.button(hostRow, '✕ Clear Playlist', () => this.send(Commands.CLEAR_PLAYLIST), { backgroundColor: '#c62828' });
+      this.loadDefaultBtn = await this.button(hostRow, '↻ Load Default Playlist', () => {
         this.send(Commands.FROM_PLAYLIST, { id: this.core.params.playlist, shouldClear: true, fromPlaylist: true });
         this.setStatus('Loading playlist...');
       }, { backgroundColor: '#2e7d32' });
     }
-    this.notHostLabel = await this.label(this.hostSection, '', { fontSize: '18px', color: '#999999', marginLeft: '4px', marginTop: '4px' });
-
-    // Seek (host)
-    this.seekSection = await section('Seek (moves everyone)');
-    const seekRow = await row(this.seekSection);
-    this.seekField = await this.textField(seekRow, 'Time, e.g. 95 or 1:35', v => { this.seekQuery = v; }, () => this.doSeek());
+    // Seek: moves everyone.
+    const seekRow = await row(this.hostSection, { marginTop: '4px' });
+    await this.label(seekRow, 'Go to (everyone):', { fontSize: '20px', color: '#bbbbbb', marginLeft: '4px', marginRight: '8px' });
+    this.seekField = await this.textField(seekRow, 'e.g. 95 or 1:35', v => { this.seekQuery = v; }, () => this.doSeek());
     if (this.seekField) {
-      this.seekField.SetStyles({ flexGrow: 0, flexBasis: '300px', width: '300px' });
-      await this.button(seekRow, 'Seek', () => this.doSeek(), { backgroundColor: '#1565c0' });
+      this.seekField.SetStyles({ flexGrow: 0, flexBasis: '220px', width: '220px' });
+      await this.button(seekRow, '▶ Go', () => this.doSeek(), { backgroundColor: '#1565c0' });
     }
-    await this.button(seekRow, '-30s', () => this.seekBy(-30), { backgroundColor: GREY });
-    await this.button(seekRow, '+30s', () => this.seekBy(30), { backgroundColor: GREY });
+    await this.button(seekRow, '◀◀ 30s', () => this.seekBy(-30), { backgroundColor: GREY });
+    await this.button(seekRow, '30s ▶▶', () => this.seekBy(30), { backgroundColor: GREY });
 
     // Your own player
-    const mineSection = await section('Your player only');
+    const mineSection = await section('☺ Just for you (nobody else\'s player changes)');
     const mineRow = await row(mineSection, { flexWrap: 'wrap' });
-    await this.button(mineRow, 'Reload Video', () => this.core.reloadScreen(), { backgroundColor: '#5d4037' });
-    await this.button(mineRow, '<< Skip', () => this.sendMine(Commands.LOCAL_SKIP_BACK, Commands.SKIP_BACK));
-    await this.button(mineRow, 'Skip >>', () => this.sendMine(Commands.LOCAL_SKIP_FORWARD, Commands.SKIP_FORWARD));
-    this.autoSyncBtn = await this.button(mineRow, 'Auto Sync: Off', () => {
+    await this.button(mineRow, '↻ Reload Video', () => this.core.reloadScreen(), { backgroundColor: '#5d4037' });
+    await this.button(mineRow, '◀◀', () => this.sendMine(Commands.LOCAL_SKIP_BACK, Commands.SKIP_BACK), { fontSize: '24px' });
+    await this.button(mineRow, '▶▶', () => this.sendMine(Commands.LOCAL_SKIP_FORWARD, Commands.SKIP_FORWARD), { fontSize: '24px' });
+    this.autoSyncBtn = await this.button(mineRow, 'Auto Sync', () => {
       this.autoSync = !this.autoSync;
+      this.core.autoSync = this.autoSync; // kept for a video file, which plays without the screen page
       this.sendMine(Commands.AUTO_SYNC, Commands.AUTO_SYNC, this.autoSync);
       this.render();
     });
-    this.captionsBtn = await this.button(mineRow, 'Captions: On', () => {
+    this.captionsBtn = await this.button(mineRow, 'CC', () => {
       this.core.setCaptions(this.core.captions === false);
       this.render();
     });
+    await this.button(mineRow, '↻ Refresh List', () => this.refresh(true), { backgroundColor: GREY });
+    // Fixed widths, so changing them doesn't move the buttons around.
+    const mineRow2 = await row(mineSection, { flexWrap: 'wrap' });
     // Steps through the screen resolutions (page widths; 4K on PC only), then back to the snippet's.
-    this.resolutionBtn = await this.button(mineRow, 'Resolution', () => {
+    this.resolutionBtn = await this.button(mineRow2, '▣', () => {
       const choices = this.core.screenResolutionChoices();
       const now = this.core.viewerResolution;
       const next = now ? choices[choices.indexOf(now) + 1] : choices[0];
       this.core.setScreenResolution(next || null);
       this.render();
-    }, { backgroundColor: '#00838f' });
+    }, { backgroundColor: '#00838f', width: '330px' });
+    // Switches this viewer's sound between 2D and 3D (Core's audioMode).
+    this.audioBtn = await this.button(mineRow2, '♫', () => {
+      this.core.setAudioMode(this.core.audioMode() === '3d' ? '2d' : '3d');
+      this.render();
+    }, { backgroundColor: '#4527a0', width: '330px' });
+    // Turns this viewer's distance fade on or off (Core's fadeOn).
+    this.fadeBtn = await this.button(mineRow2, '◔', () => {
+      this.core.setFade(this.core.fadeOn() ? 'off' : 'on');
+      this.render();
+    }, { backgroundColor: '#4527a0', width: '330px' });
     // Steps the hand controls through their places (Core's HAND_PLACES), when the snippet has them.
     if (this.core.params['hand-controls'] === 'true') {
-      this.handBtn = await this.button(mineRow, 'Hand Controls', () => {
+      this.handBtn = await this.button(mineRow2, '☚', () => {
         Promise.resolve(this.core.nextHandPlace()).then(() => this.render()).catch(() => {});
-      }, { backgroundColor: '#5d4037' });
+      }, { backgroundColor: '#5d4037', width: '330px' });
     }
-    await this.label(mineRow, 'These change only your own player.', { fontSize: '16px', color: '#999999', marginLeft: '8px', flexShrink: 1 });
 
     // Add by link (in karaoke mode, pasting a link into Search does this)
-    const linkSection = this.karaoke ? null : await section('Add by link');
+    const linkSection = this.karaoke ? null : await section('+ Add by link');
     if (linkSection) {
       const linkRow = await row(linkSection);
       this.linkField = await this.textField(linkRow, 'Video link, YouTube playlist, or list of links (.txt, .m3u, Google Doc, Drive folder)', v => { this.linkQuery = v; }, () => this.addLink());
       if (this.linkField) {
         // A video is added; a playlist or list of links asks what to do with it.
-        await this.button(linkRow, 'Add', () => this.addLink(), { backgroundColor: '#2e7d32' });
+        await this.button(linkRow, '+ Add', () => this.addLink(), { backgroundColor: '#2e7d32' });
       } else {
         await this.label(linkRow, 'Adding links needs text input, which this client does not have.', { color: '#bbbbbb', flexGrow: 1 });
       }
@@ -888,8 +1188,8 @@ var FirePlaylistPanel = class {
     this.modeSwitchBtn = await this.button(adminRow, '', () => this.switchMode(), { backgroundColor: '#6a1b9a' });
     this.modeDefaultBtn = await this.button(adminRow, 'Use Snippet Default', () => this.useDefaultMode(), { backgroundColor: GREY });
     // Take control even when the player is locked (see Core.adminTakeOver).
-    this.adminTakeOverBtn = await this.button(adminRow, 'Admin Take Over', () => this.adminTakeOver(), { backgroundColor: '#ad1457' });
-    await this.label(this.adminSection, 'These only work for space admins (the world owner and community moderators). Admin Take Over makes you the host even when the player is locked. The mode switches everyone in the space.', { fontSize: '16px', color: '#999999', marginLeft: '4px', marginTop: '4px', whiteSpace: 'normal' });
+    this.adminTakeOverBtn = await this.button(adminRow, '♛ Admin Take Over', () => this.adminTakeOver(), { backgroundColor: '#ad1457' });
+    await this.label(this.adminSection, 'These only work for space admins (the world owner and community moderators). Admin Take Over makes you the host even when nobody may take over. The mode switches everyone in the space.', { fontSize: '16px', color: '#999999', marginLeft: '4px', marginTop: '4px', whiteSpace: 'normal' });
 
     // Footer
     const footer = await row(rootEl, { marginTop: '4px' });
@@ -924,7 +1224,7 @@ var FirePlaylistPanel = class {
     const slot = { row: r, thumb, title, sub, buttons: [], actions: [] };
     for (let b = 0; b < 4; b++) {
       const idx = b;
-      const btn = await this.button(btns, '', () => { const fn = slot.actions[idx]; if (fn) fn(); }, { fontSize: '18px', paddingLeft: '12px', paddingRight: '12px' });
+      const btn = await this.button(btns, '', () => { const fn = slot.actions[idx]; if (fn) fn(); }, { fontSize: '21px', paddingLeft: '12px', paddingRight: '12px', minWidth: '54px' });
       slot.buttons.push(btn);
     }
     // Hidden until it has something to show, so a row built ahead of time stays out of the way.
@@ -1058,6 +1358,7 @@ var FirePlaylistPanel = class {
     this.destroyed = true;
     this.built = false;
     this.visible = false;
+    if (this.core && this.core.previewVideo && typeof this.core.stopPreview === 'function') this.core.stopPreview();
     [this.tickTimer, this.renderTimer, this.statusTimer, this.searchTimer, this.scrollTimer, this.listExpiryTimer].forEach(t => { clearTimeout(t); clearInterval(t); });
     this.tickTimer = this.renderTimer = this.statusTimer = this.searchTimer = this.scrollTimer = this.listExpiryTimer = null;
     (this.thumbTimers || []).forEach(clearTimeout);
@@ -1131,8 +1432,12 @@ var FirePlaylistPanel = class {
     if (!head || !head.position) return null;
     const p = head.position;
     let yaw = null;
+    // Toward the hand only when the head comes from pose-update, whose facing can't be trusted.
+    // The head marker's own facing is what the player sees, and it's in the same space as its
+    // position; the hand's pose comes another way, and aiming at it put the panel to one side
+    // (desktop players' hands don't follow their view) or off where the play space had moved.
     const hand = this.core.handPose;
-    if (fromHand && hand && hand.position) {
+    if (fromHand && head.source !== 'marker' && hand && hand.position) {
       const dx = hand.position.x - p.x, dz = hand.position.z - p.z;
       if (Math.hypot(dx, dz) > 0.05) yaw = Math.atan2(dx, dz);
     }
@@ -1213,12 +1518,13 @@ var FirePlaylistPanel = class {
     const root = this.root, mover = this.mover;
     if (!root || !mover) return;
     if (where === 'front') {
+      await this.core.freshHeadPose(); // where the player looks now, not at the last report
       const pose = this.frontPose(fromHand);
       if (!pose) return;
       this.frontYaw = pose.yaw;
       const f = n => Number(n).toFixed(2);
       const head = this.core.headPose();
-      console.log(`[PlaylistPanel] In front: head (${head.source}) ${f(head.position.x)} ${f(head.position.y)} ${f(head.position.z)}, facing ${Math.round(pose.yaw)} degrees${fromHand ? ' (toward the left hand)' : ''}.`);
+      console.log(`[PlaylistPanel] In front: head (${head.source}) ${f(head.position.x)} ${f(head.position.y)} ${f(head.position.z)}, facing ${Math.round(pose.yaw)} degrees${fromHand && head.source !== 'marker' ? ' (toward the hand)' : ''}.`);
       if (this.core.params['screen-debug'] === 'true') {
         this.setStatus(`Head (${head.source}) ${f(head.position.x)} ${f(head.position.y)} ${f(head.position.z)}, facing ${Math.round(pose.yaw)}°`, 15000);
       }
@@ -1302,6 +1608,7 @@ var FirePlaylistPanel = class {
    * @returns {Promise<void>}
    */
   async close() {
+    this.stopPreview(true);
     if (this.held && this.mover && typeof this.mover.ReleaseGrab === 'function') {
       try { await this.mover.ReleaseGrab(); } catch (e) {}
     }
@@ -1475,6 +1782,13 @@ var FirePlaylistPanel = class {
     el.OnMouseLeave(() => finish());
   }
 
+  // + Add on a search result or a list's video. While locked, someone else's video waits for the
+  // host (the server says so).
+  addVideo(v) {
+    this.send(Commands.ADD_TO_PLAYLIST, v);
+    this.setStatus(this.addWaits() ? `Asking the host to add "${v.title}"...` : `Added "${v.title}"`);
+  }
+
   // mode: false (one video), 'replace' (load as the playlist), 'append' (add a whole list to the
   // end) or 'browse' (open it in the Lists tab).
   // Add by link: a video is added, a playlist or list of links asks what to do with it.
@@ -1518,8 +1832,8 @@ var FirePlaylistPanel = class {
     else if (choice === 'share') this.shareList(found.id);
     else if (choice === 'save') this.saveList(found.id);
     else if (choice === 'video') {
-      if (!this.canAdd()) this.setStatus('The player is locked: only the host can add videos.');
-      else { this.send(Commands.ADD_TO_PLAYLIST, found.link); this.setStatus('Adding video...'); }
+      if (!this.canAdd() && !this.addWaits()) this.setStatus('The player is locked: only the host can add videos.');
+      else { this.send(Commands.ADD_TO_PLAYLIST, found.link); this.setStatus(this.addWaits() ? 'Asking the host...' : 'Adding video...'); }
     }
     this.render();
   }
@@ -1833,8 +2147,31 @@ var FirePlaylistPanel = class {
     this.core.showToast('Got the link from your phone');
   }
 
+  isPreviewing(v) {
+    return !!(v && this.core.previewVideo && this.core.previewVideo.link === v.link);
+  }
+
+  previewSong(v) {
+    if (!v || !v.link) return;
+    if (this.isPreviewing(v)) {
+      this.stopPreview();
+      return;
+    }
+    if (typeof this.core.startPreview === 'function') this.core.startPreview(v);
+    this.setStatus(`Previewing "${v.title || 'song'}" on your screen — only you see and hear this.`);
+    this.render();
+  }
+
+  stopPreview(silent) {
+    if (!this.core || !this.core.previewVideo) return;
+    if (typeof this.core.stopPreview === 'function') this.core.stopPreview();
+    if (!silent) this.setStatus('Stopped preview.');
+    this.renderSoon();
+  }
+
   singIt(v) {
     if (this.isInQueue()) { this.setStatus('You are already in the singer queue.'); return; }
+    this.stopPreview(true);
     this.send(Commands.ADD_TO_PLAYERS, v);
     this.setStatus(this.canAdd() ? `You're in the queue to sing "${v.title}"` : `"${v.title}" will be added once the host approves it`);
     this.setTab('playlist');
@@ -2065,6 +2402,13 @@ var FirePlaylistPanel = class {
     this.renderSoon();
   }
 
+  // An on/off setting's button: "✓ name" in green, or "✕ name" in grey.
+  setOnOff(btn, on, name) {
+    if (!btn) return;
+    this.setText(btn, `${on ? '✓' : '✕'} ${name}`);
+    this.setStyle(btn, 'backgroundColor', on ? '#2e7d32' : '#455a64');
+  }
+
   renderSoon() {
     if (this.renderTimer) return;
     this.renderTimer = setTimeout(() => {
@@ -2105,10 +2449,14 @@ var FirePlaylistPanel = class {
     const host = this.isHost();
     const hasPlaylist = playlist.length > 0;
 
-    // Header
-    const lockText = player.locked ? ' (locked)' : '';
-    if (!player.host) this.setText(this.hostLabel, 'Connecting...');
-    else this.setText(this.hostLabel, host ? `You are the host${lockText}` : `Host: ${player.host.name}${lockText}`);
+    // Header: the host and who may control the player (the padlock and the chip's colour).
+    const level = this.controlLevel(player);
+    const levelColor = this.controlLevels().find(l => l[0] === level)[2];
+    const hostName = player.host ? (host ? 'You' : player.host.name || 'Someone') : '';
+    this.setText(this.hostLabel, player.host ? `♛ ${hostName}` : 'Connecting...');
+    this.setStyle(this.hostChip, 'backgroundColor', player.host ? levelColor : '#455a64');
+    this.display(this.chipLockOpen, !!player.host && level !== 'host');
+    this.display(this.chipLockShut, !!player.host && level === 'host');
     const version = this.core.serverVersion || '';
     this.setText(this.versionLabel, version ? `v${version.split(' ')[0]}` : '');
     this.setText(this.infoVersionLabel, version ? `Version ${version}` : '');
@@ -2131,13 +2479,12 @@ var FirePlaylistPanel = class {
       this.display(this.stopBtn, canControlSong);
     }
     this.display(this.pauseBtn, host && hasPlaylist);
-    this.setText(this.pauseBtn, player.paused ? 'Play' : 'Pause');
+    this.setText(this.pauseBtn, player.paused ? '▶' : '❚❚');
     this.setStyle(this.pauseBtn, 'backgroundColor', player.paused ? '#2e7d32' : '#c62828');
     this.display(this.rewBtn, hasPlaylist);
     this.display(this.ffBtn, hasPlaylist);
     const muted = this.core.params.mute === 'true';
-    this.setText(this.volLabel, `Vol ${this.core.params.volume}`);
-    this.setText(this.muteBtn, muted ? 'Unmute' : 'Mute');
+    this.setText(this.volLabel, `${this.core.params.volume}`);
     this.setStyle(this.muteBtn, 'backgroundColor', muted ? '#c62828' : '#455a64');
 
     // Views
@@ -2146,8 +2493,9 @@ var FirePlaylistPanel = class {
     this.display(this.mainView, !more && !info);
     this.display(this.moreView, more);
     this.display(this.infoView, info);
-    this.setText(this.moreBtn, more ? 'Back' : 'More...');
-    this.setText(this.infoBtn, info ? 'Back' : 'Info');
+    // While open, ☰ and ⓘ go back (↩).
+    this.setText(this.moreBtn, more ? '↩' : '☰');
+    this.setText(this.infoBtn, info ? '↩' : 'ⓘ');
 
     // Replacement suggestion
     const r = this.pendingReplacement;
@@ -2155,19 +2503,25 @@ var FirePlaylistPanel = class {
     if (r) this.setText(this.noticeLabel, `Someone can't play "${r.original.title}". Replace it with "${r.alternative.title}"?`);
     this.display(this.replaceConfirmBtn, host);
 
+    // Karaoke preview bar
+    if (this.previewRow) {
+      const pv = this.core.previewVideo;
+      this.display(this.previewRow, !!pv);
+      if (pv) {
+        this.setText(this.previewLabel, `Previewing on your screen: ${pv.title || pv.link}`);
+        this.display(this.previewSingBtn, !this.isInQueue());
+      }
+    }
+
     // More view
-    this.setText(this.autoSyncBtn, this.autoSync ? 'Auto Sync: On' : 'Auto Sync: Off');
-    this.setStyle(this.autoSyncBtn, 'backgroundColor', this.autoSync ? '#2e7d32' : '#00838f');
-    const captions = this.core.captions !== false;
-    this.setText(this.captionsBtn, captions ? 'Captions: On' : 'Captions: Off');
-    this.setStyle(this.captionsBtn, 'backgroundColor', captions ? '#2e7d32' : '#00838f');
+    // On/off settings: ✓ and green when on, ✕ and grey when off.
+    this.setOnOff(this.autoSyncBtn, this.autoSync, 'Auto Sync');
+    this.setOnOff(this.captionsBtn, this.core.captions !== false, 'CC');
     const [resW, resH] = this.core.screenPageSize();
-    if (this.handBtn) this.setText(this.handBtn, `Hand Controls: ${this.core.handPlaceLabel()}`);
-    this.setText(this.resolutionBtn, `Resolution: ${resW} x ${resH}${this.core.viewerResolution ? '' : ' (default)'}`);
-    this.display(this.seekSection, host);
-    if (this.loadPlaylistBtn) this.display(this.loadPlaylistBtn, host);
-    this.setText(this.notHostLabel, host ? '' : (player.canTakeOver ? 'The host allows take over.' : 'Only the host can use these.'));
-    this.display(this.notHostLabel, !host);
+    if (this.handBtn) this.setText(this.handBtn, `☚ ${this.core.handPlaceLabel()}`);
+    if (this.audioBtn) this.setText(this.audioBtn, `♫ Sound: ${this.core.audioModeLabel()}`);
+    if (this.fadeBtn) this.setText(this.fadeBtn, `◔ Fade: ${this.core.fadeLabel()}`);
+    this.setText(this.resolutionBtn, `▣ ${resW} × ${resH}${this.core.viewerResolution ? '' : ' (default)'}`);
 
     // Space admins only, but shown to everyone
     this.display(this.adminTakeOverBtn, !host);
@@ -2181,20 +2535,24 @@ var FirePlaylistPanel = class {
       this.setText(this.modeDefaultBtn, `Use Snippet Default (${this.modeName(def)})`);
     }
 
+    // Who controls the player: the chosen card is in its colour with a white edge, the others grey.
+    this.setText(this.controlHostLabel, player.host ? (host ? '♛ You are the host' : `♛ Host: ${player.host.name || 'Someone'}`) : 'Connecting...');
+    this.display(this.takeOverBtn, !host && !!player.host && !!player.canTakeOver);
+    for (const [lvl, c] of Object.entries(this.controlCards || {})) {
+      const on = lvl === level;
+      this.setStyle(c.card, 'backgroundColor', on ? c.color : '#37404a');
+      this.setStyle(c.card, 'borderColor', on ? '#ffffff' : 'rgba(0,0,0,0)');
+    }
+    this.setText(this.controlNote, host
+      ? 'Press one to change it. It shows on the padlock at the top for everyone.'
+      : player.canTakeOver ? 'Only the host can change this. Press Take Over to become the host.' : 'Only the host can change this.');
+
     // Host controls
-    this.display(this.lockBtn, host);
-    this.setText(this.lockBtn, player.locked ? 'Unlock' : 'Lock');
-    this.setStyle(this.lockBtn, 'backgroundColor', player.locked ? '#00838f' : '#c62828');
-    this.display(this.takeOverBtn, host || !!player.canTakeOver);
-    this.setText(this.takeOverBtn, player.canTakeOver ? (host ? 'Take Over: On' : 'Take Over') : 'Take Over: Off');
-    this.setStyle(this.takeOverBtn, 'backgroundColor', player.canTakeOver ? (host ? '#c62828' : '#2e7d32') : '#00838f');
+    this.display(this.hostSection, host);
     if (this.karaoke) {
-      this.display(this.autoAdvanceBtn, host);
-      this.setText(this.autoAdvanceBtn, player.autoAdvance ? 'Auto Advance: On' : 'Auto Advance: Off');
-      this.setStyle(this.autoAdvanceBtn, 'backgroundColor', player.autoAdvance ? '#2e7d32' : '#00838f');
+      this.setOnOff(this.autoAdvanceBtn, !!player.autoAdvance, 'Auto Advance');
     } else {
-      this.display(this.votingBtn, host);
-      this.setText(this.votingBtn, player.canVote ? 'Voting: On' : 'Voting: Off');
+      this.setOnOff(this.votingBtn, !!player.canVote, 'Voting');
       this.display(this.clearBtn, host && hasPlaylist);
       this.display(this.loadDefaultBtn, host && !hasPlaylist && !!this.core.params.playlist);
     }
@@ -2230,14 +2588,15 @@ var FirePlaylistPanel = class {
       this.display(this.promptAppendBtn, this.canAdd() && !failed);
       this.display(this.promptShareBtn, this.canAdd() && !failed);
       this.display(this.promptSaveBtn, !failed);
-      this.display(this.promptVideoBtn, pl.video && this.canAdd());
+      this.display(this.promptVideoBtn, pl.video && (this.canAdd() || this.addWaits()));
     }
     const list = this.listItems();
-    this.setText(this.tabPlaylistBtn, `${this.karaoke ? 'Singers' : 'Playlist'} (${list.length})`);
+    const waitingCount = this.karaoke ? 0 : list.length - playlist.length;
+    this.setText(this.tabPlaylistBtn, `${this.karaoke ? '♪ Singers' : '♫ Playlist'} (${this.karaoke ? list.length : playlist.length}${waitingCount ? `+${waitingCount}` : ''})`);
     this.setStyle(this.tabPlaylistBtn, 'backgroundColor', this.tab === 'playlist' ? '#1565c0' : '#455a64');
     if (this.tabListsBtn) {
       const lists = this.getLists();
-      this.setText(this.tabListsBtn, lists.length ? `Lists (${lists.length})` : 'Lists');
+      this.setText(this.tabListsBtn, lists.length ? `☰ Lists (${lists.length})` : '☰ Lists');
       this.setStyle(this.tabListsBtn, 'backgroundColor', onLists ? '#1565c0' : '#455a64');
     }
     if (this.nowBtn) this.display(this.nowBtn, !!(!onSearch && hasPlaylist && (this.tab !== 'playlist' || list.length > this.pageSize())));
@@ -2275,6 +2634,7 @@ var FirePlaylistPanel = class {
     // Rows
     const canAdd = this.canAdd();
     const inPlaylist = (onLists || onSearch) ? new Set(playlist.map(v => v.link)) : null;
+    this.waitingLinks = new Set(list.filter(v => v.waiting).map(v => v.v && v.v.link));
     for (let k = 0; k < this.rows.length; k++) {
       const slot = this.rows[k];
       const i = start + k;
@@ -2287,14 +2647,15 @@ var FirePlaylistPanel = class {
       }
       else if (onSearch) this.fillSearchRow(slot, v, host, inPlaylist);
       else if (this.karaoke) this.fillSingerRow(slot, v, i, items, host);
+      else if (v.waiting) this.fillWaitingRow(slot, v, host);
       else this.fillPlaylistRow(slot, v, i, player, host);
     }
 
     let empty = '';
     if (!items.length) {
-      if (onLists) empty = "No saved lists. Paste a YouTube playlist or a list of links into Search & Add (or More... > Add by link) and choose Save for Everyone or Save for Me.";
+      if (onLists) empty = "No saved lists. Paste a YouTube playlist or a list of links into + Search & Add (or More > + Add by link) and choose ★ Save for Everyone or ☆ Save for Me.";
       else if (onSearch) empty = this.karaoke ? 'Search for a song above, or paste a link.' : 'Search YouTube above, or paste a YouTube, Twitch, Vimeo or video link.';
-      else if (this.karaoke) empty = host ? 'No singers yet. Use Search to pick a song and join the queue.' : 'No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first (More...).';
+      else if (this.karaoke) empty = host ? 'No singers yet. Use Search to pick a song and join the queue.' : 'No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first (press ♛ at the top).';
       else empty = 'The playlist is empty. Use Search to add videos.';
     }
     this.setText(this.emptyLabel, empty);
@@ -2372,18 +2733,35 @@ var FirePlaylistPanel = class {
 
     const defs = [];
     if (!isCurrent) {
-      if (host) defs.push({ text: 'Play', color: '#2e7d32', fn: () => this.send(Commands.SET_TRACK, { index: i, link: v.link }) });
+      if (host) defs.push({ text: '▶', color: '#2e7d32', fn: () => this.send(Commands.SET_TRACK, { index: i, link: v.link }) });
       if (player.canVote) {
-        defs.push({ text: 'Vote +', fn: () => this.send(Commands.UP_VOTE, v.link) });
-        defs.push({ text: 'Vote -', fn: () => this.send(Commands.DOWN_VOTE, v.link) });
+        defs.push({ text: '▲', fn: () => this.send(Commands.UP_VOTE, v.link) });
+        defs.push({ text: '▼', fn: () => this.send(Commands.DOWN_VOTE, v.link) });
       } else if (host) {
         const len = (player.playlist || []).length;
-        if (i > 0) defs.push({ text: 'Up', fn: () => this.send(Commands.MOVE_PLAYLIST_ITEM, { url: v.link, index: i - 1 }) });
-        if (i < len - 1) defs.push({ text: 'Down', fn: () => this.send(Commands.MOVE_PLAYLIST_ITEM, { url: v.link, index: i + 1 }) });
-        defs.push({ text: 'Remove', color: '#c62828', fn: () => this.send(Commands.REMOVE_PLAYLIST_ITEM, i) });
+        if (i > 0) defs.push({ text: '⬆', fn: () => this.send(Commands.MOVE_PLAYLIST_ITEM, { url: v.link, index: i - 1 }) });
+        if (i < len - 1) defs.push({ text: '⬇', fn: () => this.send(Commands.MOVE_PLAYLIST_ITEM, { url: v.link, index: i + 1 }) });
+        defs.push({ text: '✕', color: '#c62828', fn: () => this.send(Commands.REMOVE_PLAYLIST_ITEM, i) });
       }
     }
     this.setButtons(slot, defs.slice(0, 4));
+  }
+
+  // Playlist mode: a video added while the player was locked, waiting after the playlist until the
+  // host approves (✓, it goes to the end) or rejects it (✕). Whoever added it can take it back.
+  // `w` is { v: video, id, name, p }.
+  fillWaitingRow(slot, w, host) {
+    const v = w.v || {};
+    const me = !!(window.user && w.id === window.user.id);
+    this.setStyle(slot.row, 'backgroundColor', '#4a3f1e');
+    this.setText(slot.title, v.title || 'Untitled');
+    const dur = v.duration ? this.timeCode(v.duration / 1000) : '';
+    this.setText(slot.sub, `Waiting for the host to approve  -  added by ${me ? 'you' : (w.name || 'someone')}${dur ? '  -  ' + dur : ''}`);
+    this.setThumb(slot, v.thumbnail, v.link);
+    const defs = [];
+    if (host) defs.push({ text: '✓', color: '#2e7d32', fn: () => this.send(Commands.APPROVE_VIDEO, v.link) });
+    if (host || me) defs.push({ text: '✕', color: '#c62828', fn: () => this.send(Commands.REJECT_VIDEO, v.link) });
+    this.setButtons(slot, defs);
   }
 
   // Karaoke: one singer in the queue. `s` is { id, name, v: video, a: approved }. A song added
@@ -2401,10 +2779,10 @@ var FirePlaylistPanel = class {
     const defs = [];
     if (waiting) {
       if (host) {
-        defs.push({ text: 'Approve', color: '#2e7d32', fn: () => this.send(Commands.APPROVE_SINGER, s.id) });
-        defs.push({ text: 'Reject', color: '#c62828', fn: () => this.send(Commands.REMOVE_FROM_PLAYERS, s.id) });
+        defs.push({ text: '✓', color: '#2e7d32', fn: () => this.send(Commands.APPROVE_SINGER, s.id) });
+        defs.push({ text: '✕', color: '#c62828', fn: () => this.send(Commands.REMOVE_FROM_PLAYERS, s.id) });
       } else if (me) {
-        defs.push({ text: 'Remove Me', color: '#c62828', fn: () => this.send(Commands.REMOVE_FROM_PLAYERS, s.id) });
+        defs.push({ text: '✕ Leave', color: '#c62828', fn: () => this.send(Commands.REMOVE_FROM_PLAYERS, s.id) });
       }
     } else {
       // The host can start any singer. Otherwise, while unlocked, only the next singer can start
@@ -2413,38 +2791,46 @@ var FirePlaylistPanel = class {
       const next = singers.find(x => x.a !== false);
       const playing = !!(p.playlist && p.playlist.length);
       if (host || (me && next === s && !p.locked && !playing)) {
-        defs.push({ text: 'Play & Sing', color: '#2e7d32', fn: () => this.send(Commands.PLAY_KARAOKE_TRACK, (host && next !== s) ? { userId: s.id } : null) });
+        defs.push({ text: '▶ Sing', color: '#2e7d32', fn: () => { this.stopPreview(true); this.send(Commands.PLAY_KARAOKE_TRACK, (host && next !== s) ? { userId: s.id } : null); } });
       }
       if (host || me) {
-        defs.push({ text: me ? 'Remove Me' : 'Remove', color: '#c62828', fn: () => this.send(Commands.REMOVE_FROM_PLAYERS, s.id) });
+        defs.push({ text: me ? '✕ Leave' : '✕', color: '#c62828', fn: () => this.send(Commands.REMOVE_FROM_PLAYERS, s.id) });
       }
     }
     if (host) {
-      if (i > 0) defs.push({ text: 'Up', fn: () => this.send(Commands.MOVE_SINGER, { userId: s.id, direction: 'up' }) });
-      if (i < singers.length - 1) defs.push({ text: 'Down', fn: () => this.send(Commands.MOVE_SINGER, { userId: s.id, direction: 'down' }) });
+      if (i > 0) defs.push({ text: '⬆', fn: () => this.send(Commands.MOVE_SINGER, { userId: s.id, direction: 'up' }) });
+      if (i < singers.length - 1) defs.push({ text: '⬇', fn: () => this.send(Commands.MOVE_SINGER, { userId: s.id, direction: 'down' }) });
     }
     this.setButtons(slot, defs.slice(0, 4));
   }
 
   fillSearchRow(slot, v, host, inPlaylist) {
     const added = !this.karaoke && inPlaylist && inPlaylist.has(v.link);
-    this.setStyle(slot.row, 'backgroundColor', added ? '#1b3a2a' : '#2a2a33');
+    const waits = !this.karaoke && !added && !!this.waitingLinks && this.waitingLinks.has(v.link);
+    const previewing = this.karaoke && this.isPreviewing(v);
+    this.setStyle(slot.row, 'backgroundColor', previewing ? '#1e3a5f' : added ? '#1b3a2a' : '#2a2a33');
     this.setText(slot.title, v.title || 'Untitled');
     const channel = v.channel && v.channel.name ? v.channel.name : '';
     const dur = typeof v.duration === 'number' && v.duration > 0 ? this.timeCode(v.duration / 1000) : '';
-    this.setText(slot.sub, [added ? 'In the playlist' : '', channel, dur].filter(Boolean).join('  -  '));
+    this.setText(slot.sub, [previewing ? 'Previewing on your screen' : added ? 'In the playlist' : waits ? 'Waiting for the host' : '', channel, dur].filter(Boolean).join('  -  '));
     this.setThumb(slot, v.thumbnail, v.link);
 
     if (this.karaoke) {
-      this.setButtons(slot, this.isInQueue() ? [] : [{ text: 'Sing It', color: '#2e7d32', fn: () => this.singIt(v) }]);
+      const defs = [{
+        text: previewing ? '■ Stop' : '▶ Preview',
+        color: previewing ? '#c62828' : '#00838f',
+        fn: () => this.previewSong(v)
+      }];
+      if (!this.isInQueue()) defs.push({ text: '♪ Sing It', color: '#2e7d32', fn: () => this.singIt(v) });
+      this.setButtons(slot, defs);
       return;
     }
     // Adding stays on the results, so several can be added from one search.
     // Play comes first, on the left, as in the playlist.
     const defs = [];
-    if (host) defs.push({ text: 'Play Now', color: '#2e7d32', fn: () => { this.send(Commands.ADD_AND_PLAY, v); this.setTab('playlist'); } });
-    if (!added && this.canAdd()) defs.push({ text: 'Add', fn: () => { this.send(Commands.ADD_TO_PLAYLIST, v); this.setStatus(`Added "${v.title}"`); } });
-    if (host) defs.push({ text: 'Play Next', fn: () => { this.send(Commands.ADD_AND_PLAY_NEXT, v); this.setStatus(`"${v.title}" plays next`); } });
+    if (host) defs.push({ text: '▶ Now', color: '#2e7d32', fn: () => { this.send(Commands.ADD_AND_PLAY, v); this.setTab('playlist'); } });
+    if (!added && !waits && (this.canAdd() || this.addWaits())) defs.push({ text: '+ Add', fn: () => this.addVideo(v) });
+    if (host) defs.push({ text: '▶| Next', fn: () => { this.send(Commands.ADD_AND_PLAY_NEXT, v); this.setStatus(`"${v.title}" plays next`); } });
     this.setButtons(slot, defs);
   }
 
@@ -2469,20 +2855,20 @@ var FirePlaylistPanel = class {
     const first = data.state === 'ready' && data.items[0];
     this.setThumb(slot, first ? first.thumbnail : '', first ? first.link : '');
 
-    const defs = [{ text: open ? 'Close' : 'Open', color: '#455a64', fn: () => this.toggleList(list.id) }];
-    if (data.state === 'error') defs.push({ text: 'Retry', fn: () => this.requestList(list.id, true) });
+    const defs = [{ text: open ? '▲ Close' : '▼ Open', color: '#455a64', fn: () => this.toggleList(list.id) }];
+    if (data.state === 'error') defs.push({ text: '↻ Retry', fn: () => this.requestList(list.id, true) });
     else {
-      if (canAdd) defs.push({ text: 'Add All', fn: () => this.appendList(list.id) });
+      if (canAdd) defs.push({ text: '+ All', fn: () => this.appendList(list.id) });
       // A row has 4 buttons: a viewer's own list uses the last two for Share and Remove.
-      if (host && !list.user) defs.push({ text: 'Replace', color: '#2e7d32', fn: () => this.replaceWithList(list.id) });
+      if (host && !list.user) defs.push({ text: '⇄ Replace', color: '#2e7d32', fn: () => this.replaceWithList(list.id) });
     }
     // Shared lists can be taken out by whoever may add (the host, or anyone while unlocked); a
     // viewer's own list can be shared, or taken out again.
     if (list.shared) {
-      if (canAdd) defs.push({ text: 'Remove', color: '#c62828', fn: () => this.unshareList(list) });
+      if (canAdd) defs.push({ text: '✕', color: '#c62828', fn: () => this.unshareList(list) });
     } else if (list.user) {
-      if (canAdd && data.state !== 'error') defs.push({ text: 'Share', color: '#6a1b9a', fn: () => this.shareList(list.id) });
-      defs.push({ text: 'Remove', color: '#c62828', fn: () => this.removeList(list.id) });
+      if (canAdd && data.state !== 'error') defs.push({ text: '★ Share', color: '#6a1b9a', fn: () => this.shareList(list.id) });
+      defs.push({ text: '✕', color: '#c62828', fn: () => this.removeList(list.id) });
     }
     this.setButtons(slot, defs);
   }
@@ -2491,24 +2877,25 @@ var FirePlaylistPanel = class {
   fillListItemRow(slot, entry, host, canAdd, inPlaylist) {
     const v = entry.item;
     const added = inPlaylist && inPlaylist.has(v.link);
+    const waits = !added && !!this.waitingLinks && this.waitingLinks.has(v.link);
     this.setStyle(slot.row, 'backgroundColor', entry.index % 2 === 0 ? '#2a2a33' : '#31313c');
     this.setText(slot.title, `    ${entry.index + 1}. ${v.title || 'Untitled'}`);
     const dur = v.duration ? this.timeCode(v.duration / 1000) : '';
-    this.setText(slot.sub, [added ? 'In the playlist' : '', this.sourceName(v.link), dur].filter(Boolean).join('  -  '));
+    this.setText(slot.sub, [added ? 'In the playlist' : waits ? 'Waiting for the host' : '', this.sourceName(v.link), dur].filter(Boolean).join('  -  '));
     this.setThumb(slot, v.thumbnail, v.link);
 
     const defs = [];
-    if (canAdd && !added) defs.push({ text: 'Add', fn: () => { this.send(Commands.ADD_TO_PLAYLIST, v); this.setStatus(`Added "${v.title}"`); } });
+    if ((canAdd || this.addWaits()) && !added && !waits) defs.push({ text: '+ Add', fn: () => this.addVideo(v) });
     if (host && added) {
       // Already queued: play it where it is.
-      defs.push({ text: 'Play', color: '#2e7d32', fn: () => {
+      defs.push({ text: '▶', color: '#2e7d32', fn: () => {
         const p = this.core.player;
         const i = p && p.playlist ? p.playlist.findIndex(x => x.link === v.link) : -1;
         if (i >= 0) this.send(Commands.SET_TRACK, { index: i, link: v.link });
       } });
     } else if (host) {
-      defs.push({ text: 'Play Now', color: '#2e7d32', fn: () => { this.send(Commands.ADD_AND_PLAY, v); this.setStatus(`Playing "${v.title}"`); } });
-      defs.push({ text: 'Play Next', fn: () => { this.send(Commands.ADD_AND_PLAY_NEXT, v); this.setStatus(`"${v.title}" plays next`); } });
+      defs.push({ text: '▶ Now', color: '#2e7d32', fn: () => { this.send(Commands.ADD_AND_PLAY, v); this.setStatus(`Playing "${v.title}"`); } });
+      defs.push({ text: '▶| Next', fn: () => { this.send(Commands.ADD_AND_PLAY_NEXT, v); this.setStatus(`"${v.title}" plays next`); } });
     }
     this.setButtons(slot, defs);
   }
@@ -2520,7 +2907,7 @@ var FirePlaylistPanel = class {
     if (m.drive) return 'Google Drive';
     if (/dropbox/i.test(String(link))) return 'Dropbox';
     if (/archive\.org/i.test(String(link))) return 'archive.org';
-    return ({ youtube: 'YouTube', twitch: 'Twitch', twitchclip: 'Twitch clip', vimeo: 'Vimeo', vdoninja: 'VDO.Ninja', hls: 'Stream', mpegts: 'Stream', file: 'File' })[m.type] || '';
+    return ({ youtube: 'YouTube', twitch: 'Twitch', twitchclip: 'Twitch clip', vimeo: 'Vimeo', vdoninja: 'VDO.Ninja', sdq: 'Screen share', hls: 'Stream', mpegts: 'Stream', file: 'File' })[m.type] || '';
   }
 };
 window.FirePlaylistPanel = FirePlaylistPanel;

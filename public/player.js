@@ -471,6 +471,9 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         && !document.hidden && (!p.isYouTube || p.isYouTube()) && video.link !== this.unplayableLink;
       let t, state;
       try { t = p.getCurrentTime(); state = p.getPlayerState(); } catch (e) { t = null; }
+      // YouTube can answer undefined while it loads. Kept as the last time, nothing after it would
+      // count as moving, and a video playing fine would be reloaded again and again.
+      if (!Number.isFinite(t)) t = null;
       if (!watching || t === null || state === YT.PlayerState.ENDED) {
         s.lastTime = null; s.lastProgress = now; s.stage = 0;
         return;
@@ -598,6 +601,15 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       const parent = (oldFrame && oldFrame.parentNode) || document.getElementById('stage') || document.body;
       const el = document.createElement('div');
       Object.assign(el.style, { position: 'absolute', top: '0', left: '0', width: '100%', height: '100%', border: '0', visibility: 'hidden' });
+      // destroy() puts back the element a player replaced, so each is removed after it.
+      const destroy = player => {
+        let frame = null;
+        try { frame = player.getIframe(); } catch (e) {}
+        const next = frame && frame.nextSibling, parentNode = frame && frame.parentNode;
+        try { player.destroy(); } catch (e) {}
+        const back = parentNode && (next ? next.previousSibling : parentNode.lastChild);
+        if (back && back !== frame && back.tagName === 'DIV' && !back.childNodes.length) back.remove();
+      };
       parent.insertBefore(el, oldFrame ? oldFrame.nextSibling : parent.firstChild);
       const yt = this.pendingYt = new YT.Player(el, {
         height: window.innerHeight,
@@ -609,7 +621,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
           onReady: () => {
             if (this.pendingYt !== yt) return;
             this.pendingYt = null;
-            try { old.destroy(); } catch (e) {}
+            destroy(old);
             const frame = yt.getIframe();
             const left = document.getElementById('player'); // anything the old player left behind
             if (left && left !== frame) left.remove();
@@ -642,7 +654,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         if (this.pendingYt !== yt) return;
         this.pendingYt = null;
         console.log('[PLAYER] The new YouTube player never got ready, keeping the old one.');
-        try { yt.destroy(); } catch (e) {}
+        destroy(yt);
       }, 20000);
     }
 

@@ -76,6 +76,10 @@ var Commands = {
   // A screen at a live video's live point reports YouTube's position there; the server then
   // tells everyone where the stream's position 0 was (liveStart, see setLivePosition).
   LIVE_POSITION: 'live-position',
+  // A screen holding a new track at its start has loaded it (see App.holdForReady).
+  TRACK_READY: 'track-ready',
+  // Every screen has loaded the new track, so it starts at newLastStartTime, before the wait ends.
+  READY_START: 'ready-start',
   ITEM_REPLACED: 'item-replaced',
   ADD_AND_PLAY: 'add-and-play',
   ADD_AND_PLAY_NEXT: 'add-and-play-next',

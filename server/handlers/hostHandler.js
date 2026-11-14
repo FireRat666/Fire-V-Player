@@ -318,10 +318,11 @@ async function setVideoTrack(app, ws, data) {
       player.currentTime = 0;
       player.lastStartTime = new Date().getTime() / 1000;
       player.paused = false; // Ensure playback resumes on track change
+      app.holdForReady(player);
       app.resetBrowserIfNeedBe(player, index);
       app.updateVotes(ws.i);
       player.sockets.forEach(socket => {
-        app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime });
+        app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, newCurrentTime: player.currentTime });
       });
       await app.savePlayerState(ws.i);
     } else {
@@ -357,9 +358,10 @@ async function skipVotedTrack(app, instanceId) {
   player.currentTime = 0;
   player.lastStartTime = new Date().getTime() / 1000;
   player.paused = false;
+  app.holdForReady(player);
   app.resetBrowserIfNeedBe(player, 0);
   player.sockets.forEach(socket => {
-    app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: 0, track: player.playlist[0], paused: player.paused, newLastStartTime: player.lastStartTime, playlist: player.playlist });
+    app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: 0, track: player.playlist[0], paused: player.paused, newLastStartTime: player.lastStartTime, newCurrentTime: player.currentTime, playlist: player.playlist });
   });
   await app.savePlayerState(instanceId);
 }

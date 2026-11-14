@@ -32,6 +32,15 @@ const traffic = require('./traffic.js');
 const SkipJumpTimePlaylist = 5;
 /** Seek skip increment in seconds for karaoke mode (250ms). */
 const SkipJumpTimeKaraoke = 0.25;
+/**
+ * The longest a new playlist track waits for the room's screens to load it before it starts,
+ * unless the snippet's ready-delay says otherwise (see holdForReady).
+ */
+const READY_DELAY_DEFAULT_S = 5;
+/** The most ready-delay can be. */
+const READY_DELAY_MAX_S = 15;
+/** How far ahead a track starts once every screen has loaded it, so the message reaches them first. */
+const READY_LEAD_S = 0.3;
 
 /**
  * Main application coordinator managing server lifecycle, active room instances,
@@ -326,6 +335,11 @@ class App {
 
     // Remove the disconnected socket
     videoPlayer.sockets = videoPlayer.sockets.filter(_ws => _ws !== ws);
+    // A screen that left can't load the track the room is waiting on.
+    if (videoPlayer.readyGate) {
+      videoPlayer.readyGate.waiting.delete(ws);
+      this.releaseIfReady(instanceId);
+    }
 
     // Handle host disconnection. This logic is specifically for when the host leaves the 3D space.
     // A host with only a playlist UI open is not considered "present" for retaining control.
@@ -425,6 +439,10 @@ class App {
           // The space and player pages also name the room its code used before (core.js setRoom),
           // so the old room is copied whichever of them joins first.
           await this.createVideoPlayer(msg.data, msg.u, ws, typeof msg.legacy === 'string' ? msg.legacy : null);
+          // The snippet's ready-delay, from the space page (see holdForReady). The latest one to
+          // join sets it; a world's copies of the snippet normally agree.
+          const readyDelay = App.readyDelay(msg.readyDelay);
+          if (readyDelay !== null && this.videoPlayers[msg.data]) this.videoPlayers[msg.data].readyDelay = readyDelay;
           this.blacklist.seen(msg.u, msg.data);
           // Always, so a player that missed an unblock while disconnected is unfrozen.
           this.blacklist.tell(ws);
@@ -604,6 +622,9 @@ class App {
         break;
       case Commands.LIVE_POSITION:
         await this.setLivePosition(ws, msg.data);
+        break;
+      case Commands.TRACK_READY:
+        this.trackReady(ws, msg.data);
         break;
     }
   }
@@ -838,6 +859,89 @@ class App {
     await this.savePlayerState(ws.i);
   }
   /**
+   * A snippet's ready-delay: seconds from 0 (no wait) to READY_DELAY_MAX_S, or null when it
+   * doesn't say (an older page), so the room keeps what it has.
+   * @param {*} value
+   * @returns {number|null}
+   */
+  static readyDelay(value) {
+    if (value === undefined || value === null || String(value).trim() === '') return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.min(READY_DELAY_MAX_S, Math.max(0, n)) : null;
+  }
+
+  /**
+   * Holds a new playlist track at its start until the room's screens have loaded it, for at most
+   * the room's ready-delay. Without this the clock starts at once and a slow screen (a Quest)
+   * plays from 0:00 seconds after the others, then jumps ahead to catch up.
+   *
+   * Call it right after making a track current at 0:00, before sending TRACK_CHANGED with
+   * newCurrentTime: the track's start is put ready-delay seconds ahead, which every screen already
+   * waits at 0:00 for (as for karaoke's countdown). Each screen says when it has loaded the track
+   * (TRACK_READY); once all have, it starts at once (READY_START). A screen that never says only
+   * holds the room for the delay, and then catches up as before.
+   *
+   * Karaoke has its own countdown, a paused track waits for the host anyway, and a live video
+   * starts at its live point, so none of them wait. Nor does a room with no screen.
+   * @param {Object} player - The room.
+   */
+  holdForReady(player) {
+    player.readyGate = null;
+    if (player.isKaraoke || player.paused) return;
+    const track = player.playlist[player.currentTrack];
+    if (!track || track.live) return;
+    const wait = player.readyDelay != null ? player.readyDelay : READY_DELAY_DEFAULT_S;
+    const screens = player.sockets.filter(s => s.type === 'player');
+    if (!(wait > 0) || !screens.length) return;
+    const now = new Date().getTime() / 1000;
+    player.lastStartTime = now + wait;
+    player.currentTime = -wait;
+    player.readyGate = { link: track.link, start: player.lastStartTime, since: now, waiting: new Set(screens) };
+  }
+
+  /**
+   * A screen has loaded the track the room is waiting on (see holdForReady).
+   * @param {Object} ws - The screen's WebSocket.
+   * @param {{link: string}} data
+   */
+  trackReady(ws, data) {
+    const player = this.videoPlayers[ws.i];
+    const gate = player && player.readyGate;
+    if (!gate || !data || data.link !== gate.link) return;
+    gate.waiting.delete(ws);
+    this.releaseIfReady(ws.i);
+  }
+
+  /**
+   * Starts the waiting track once no screen is still loading it. A wait that no longer applies
+   * (another track, a seek, a pause, or its time is up) is dropped.
+   * @param {string} instanceId
+   */
+  releaseIfReady(instanceId) {
+    const player = this.videoPlayers[instanceId];
+    const gate = player && player.readyGate;
+    if (!gate) return;
+    const now = new Date().getTime() / 1000;
+    const track = player.playlist[player.currentTrack];
+    if (!track || track.link !== gate.link || player.paused || player.lastStartTime !== gate.start || now >= gate.start) {
+      player.readyGate = null;
+      return;
+    }
+    if (gate.waiting.size) return;
+    player.readyGate = null;
+    const start = now + READY_LEAD_S;
+    if (start >= player.lastStartTime) return;
+    player.lastStartTime = start;
+    player.currentTime = now - start;
+    console.log(`[READY] Every screen loaded "${track.title || track.link}" in ${(now - gate.since).toFixed(1)}s; starting it for ${instanceId}.`);
+    player.sockets.forEach(socket => {
+      this.send(socket, Commands.READY_START, {
+        link: track.link, newLastStartTime: player.lastStartTime, newCurrentTime: player.currentTime
+      });
+    });
+  }
+
+  /**
    * Takes a screen's report of where a live video's live point is: YouTube's position in the
    * stream (seconds), read by a screen that opened it there. The first one sets `liveStart`, the
    * server time the stream's position was 0, so the live point is always now - liveStart; and
@@ -860,6 +964,7 @@ class App {
     track.live = true;
     track.liveStart = now - position;
     player.liveTrack = track; // already at the live point (see tickAllInstances)
+    player.readyGate = null; // the room goes to the live point, not to a start everyone waits for
     // The room is where the screens are (live), unless the host has paused it.
     if (!player.paused) {
       player.lastStartTime = now - position;
@@ -1038,6 +1143,7 @@ class App {
         if (!player.paused) {
           player.currentTime = now - player.lastStartTime;
         }
+        if (player.readyGate) this.releaseIfReady(instanceId); // drops a wait that's over
 
         // A live video whose live point is known, just made the current track (Previous, a loop,
         // a pick from the list), starts at the live point, not at its stream's start.
@@ -1105,10 +1211,11 @@ class App {
                   player.currentTrack = 0;
                   player.lastStartTime = new Date().getTime() / 1000;
                   player.currentTime = 0; // Reset for the new track.
+                  this.holdForReady(player);
 
                   // Broadcast the change to all clients, including the updated playlist.
                   player.sockets.forEach(socket => {
-                    this.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, playlist: player.playlist });
+                    this.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, newCurrentTime: player.currentTime, playlist: player.playlist });
                   });
                   await this.savePlayerState(instanceId);
                 }
@@ -1118,8 +1225,10 @@ class App {
                 player.lastStartTime += trackDuration;
                 player.currentTrack = (player.currentTrack + 1) % player.playlist.length;
                 this.resetBrowserIfNeedBe(player, player.currentTrack);
+                // Just now, not tracks run through while the server was asleep: it waits for the screens.
+                if (player.currentTime < 1) this.holdForReady(player);
                 player.sockets.forEach(socket => {
-                  this.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime });
+                  this.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, newCurrentTime: player.currentTime });
                 });
                 await this.savePlayerState(instanceId);
               }
@@ -1231,8 +1340,10 @@ class App {
         const wasCurrentTrack = (videoIndex === player.currentTrack);
         if (wasCurrentTrack) {
           player.lastStartTime = new Date().getTime() / 1000;
+          player.currentTime = 0;
+          this.holdForReady(player);
           player.sockets.forEach(socket => {
-            this.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, playlist: player.playlist });
+            this.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, newCurrentTime: player.currentTime, playlist: player.playlist });
           });
         } else {
           player.sockets.forEach(socket => {

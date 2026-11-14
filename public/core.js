@@ -388,7 +388,7 @@ var Core = class {
     if (this.wantsNativeScreen(link)) {
       if (this.nativeScreen && this.nativeScreen.link === link) {
         // The same file again (a restart, a one-song playlist), or the host moved it.
-        if (path === Commands.TRACK_CHANGED || path === Commands.HOST_SEEK) this.nativeScreen.resync();
+        if (path === Commands.TRACK_CHANGED || path === Commands.HOST_SEEK || path === Commands.READY_START) this.nativeScreen.resync();
         return;
       }
       this.removeBrowser();
@@ -2444,6 +2444,8 @@ var Core = class {
     // The world video player's size for files (native-video.js); empty matches the browser.
     this.setOrDefault("native-screen-size", '');
     this.setOrDefault("one-for-each-instance", "false");
+    // The longest a new playlist track waits for every screen to load it, in seconds (0: no wait).
+    this.setOrDefault("ready-delay", '5');
     // The room. Pages the player opens get the finished room in their address (?instance=). Only
     // those pages (on the player's own server) take it from there: a space's own address can have
     // ?instance= too (a private copy of the space), and that's already part of the room.
@@ -2879,6 +2881,18 @@ var Core = class {
           (this.player.playlist || []).forEach(v => {
             if (v.link === json.data.link) { v.live = true; v.liveStart = json.data.liveStart; }
           });
+        }
+        break;
+      case Commands.READY_START:
+        // Every screen has loaded the new track, so it starts sooner than its wait said.
+        if (this.player && json.data) {
+          const track = this.player.playlist && this.player.playlist[this.player.currentTrack];
+          if (track && track.link === json.data.link && !this.player.paused) {
+            this.player.lastStartTime = json.data.newLastStartTime;
+            this.player.currentTime = json.data.newCurrentTime;
+            const left = -Number(json.data.newCurrentTime);
+            this.countdownUntil = left > 0 ? performance.now() + left * 1000 : 0;
+          }
         }
         break;
     }

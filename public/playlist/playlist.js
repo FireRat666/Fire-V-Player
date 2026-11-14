@@ -249,6 +249,16 @@ var Playlist = class {
           }
         }
         break;
+      case Commands.READY_START:
+        // Every screen has loaded the new track, so it starts sooner than its wait said.
+        if (this.core.player && json.data && !this.core.player.paused) {
+          const track = this.core.player.playlist && this.core.player.playlist[this.core.player.currentTrack];
+          if (track && track.link === json.data.link) {
+            this.core.player.lastStartTime = json.data.newLastStartTime;
+            this.core.player.currentTime = json.data.newCurrentTime;
+          }
+        }
+        break;
       case Commands.LIVE_POSITION:
         // A live video's live point is known: the room's time is now the stream's own (see core.liveEnd).
         if (this.core.player && json.data) {

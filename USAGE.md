@@ -101,6 +101,7 @@ In a Creator SDK world (`Assets/WebRoot/index.html`), add the player as a snippe
   mute="false"
   captions="true"
   untrusted-links="false"
+  ready-delay="5"
   hand-controls="true"
   position="0 1.5 2"
   rotation="0 0 0"
@@ -384,6 +385,7 @@ All parameters are optional unless marked as **(Required)**.
 | `volume` | The initial volume, from `0` to `100`. | `40` |
 | `mute` | Whether the player should start muted. | `false` |
 | `untrusted-links` | Whether links from any site (video files, `.m3u8` and `.mpd` streams, VRCDN, VDO.Ninja, screen.sdq.st screen shares) can be played, as well as YouTube, Twitch, Vimeo, Tubi, NASA+, the Internet Archive, the Library of Congress and ESO. Off by default, as those links aren't moderated. Each viewer's own world must allow them for them to play on their screen. See [Links from other sites](#links-from-other-sites). | `false` |
+| `ready-delay` | The longest, in seconds, a new playlist song waits for everyone's screen to load it before it starts. It starts as soon as every screen has loaded it, so a room of PCs hardly waits, and a slow screen (a Quest) no longer starts the song late and then jumps ahead to catch up. A screen that takes longer than this catches up as before. `0` starts songs at once. Up to `15`. Karaoke has its own countdown, and live videos start at their live point, so neither waits. | `5` |
 | `captions` | Whether closed captions start on. Each viewer can turn them on or off in the panel's More view, and their choice is remembered on their device. | `true` |
 | `resolution` | The width in pixels of the screen's page, which is 16:9 (`1600` is 1600 x 900). Higher is sharper, and YouTube and Twitch lay out as for a bigger window, but each frame costs more to draw, especially on Quest. The screen stays the same size in the world whatever the resolution. Each viewer can pick another for their own screen in the panel's More view. From 640 to 3840. | `1600` |
 | `space-screen` | Altspace (SideQuest Creator SDK) only. `auto`: the screen draws the space page's own browser, with the player page laid over that page, so no second browser is opened. It's used when the client can resize the space page (its `SetWorldBrowserSize` call or the `!swbs!` command) and the page really takes the size within 5 seconds; otherwise, and for a second player in the same space (only one can have the space page), the screen is a browser as before. The space page goes back to its own size when the player is removed. This screen can't be clicked, so Twitch links, which need clicks to start playing, always get a browser screen instead. `false`: always open a browser for the screen. Banter is unaffected. | `auto` |

@@ -986,7 +986,8 @@ class App {
    * Transmits `SEARCH_RESULTS` back to the requesting WebSocket client.
    *
    * The SEARCH message's data is either a plain string (a YouTube search or a link) or
-   * `{ term: string, source: 'youtube' | 'archive' | 'tubi' | 'nasa' | 'eso' | 'esodome', searchId?: string|number }`;
+   * `{ term: string, source: 'youtube' | 'archive' | 'tubi' | 'nasa' | 'eso' | 'esodome' | 'screen', searchId?: string|number }`;
+   * 'screen' takes a screen.sdq.st room code (or its link) and gives that room's screen share.
    * 'archive' searches the Internet Archive's public-domain movies and TV, 'tubi' the titles in Tubi's
    * categories, 'nasa' NASA+ (see server/streaming.js), and 'eso' ESO's videos and 'esodome' its fulldome ones (server/eso.js). A pasted link is looked up whichever source
    * is picked. A `searchId` comes back on the SEARCH_RESULTS reply (and on the search's ERROR), so
@@ -998,8 +999,12 @@ class App {
    */
   async search(data, ws) {
     const isObject = data && typeof data === 'object';
-    const term = String((isObject ? data.term : data) || '').trim().slice(0, 500);
-    const source = isObject && ['archive', 'tubi', 'nasa', 'eso', 'esodome'].includes(data.source) ? data.source : 'youtube';
+    let term = String((isObject ? data.term : data) || '').trim().slice(0, 500);
+    const source = isObject && ['archive', 'tubi', 'nasa', 'eso', 'esodome', 'screen'].includes(data.source) ? data.source : 'youtube';
+    // A screen share's room code is its watch link; a pasted link (watch or publish) is used as it is.
+    if (source === 'screen' && term && !/^(https?:\/\/|www\.)/i.test(term)) {
+      term = `https://screen.sdq.st:8443/?room=${encodeURIComponent(term.slice(0, 100))}`;
+    }
     const rawId = isObject ? data.searchId : undefined;
     const tag = (typeof rawId === 'number' && Number.isFinite(rawId)) || (typeof rawId === 'string' && rawId.length <= 64)
       ? { searchId: rawId } : undefined;

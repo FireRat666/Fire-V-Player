@@ -69,7 +69,10 @@ var SEARCH_SOURCES = {
   tubi: { label: 'Tubi', color: '#5e35b1', status: 'Searching Tubi. The first search takes a few seconds.' },
   nasa: { label: 'NASA+', color: '#0b3d91', status: 'Searching NASA+.' },
   eso: { label: 'ESO', color: '#00695c', status: "Searching ESO's videos." },
-  esodome: { label: 'ESO Fulldome', color: '#004d40', status: "Searching ESO's fulldome videos, for domes." }
+  esodome: { label: 'ESO Fulldome', color: '#004d40', status: "Searching ESO's fulldome videos, for domes." },
+  // A room on screen.sdq.st, by its code or a link to it. Only with untrusted-links, as screen
+  // shares can't play without it (see searchSources).
+  screen: { label: 'Screen Share', color: '#1565c0', status: 'Searching screen.sdq.st: type a room code, or paste its link.' }
 };
 var LIST_PREVIEWS_AT_ONCE = 3;
 // A list preview older than this is loaded again when it's next shown (the server re-reads lists
@@ -397,7 +400,7 @@ var FirePlaylistPanel = class {
     this.searchResults = hit.results;
     this.searchQuery = hit.query || '';
     const source = newest.split(':')[0];
-    if (SEARCH_SOURCES[source]) this.searchSource = source;
+    if (SEARCH_SOURCES[source] && this.searchSources().includes(source)) this.searchSource = source;
   }
 
   // ---- lists saved from a link (Lists tab), kept on this device for this world
@@ -859,7 +862,7 @@ var FirePlaylistPanel = class {
     const searchHint = this.karaoke ? 'Search for a song to sing, or paste a video link' : 'Search YouTube, or paste a YouTube / Twitch / Vimeo / video link';
     this.searchField = await this.textField(this.searchRow, searchHint, v => { this.searchQuery = v; }, () => this.doSearch());
     if (!this.searchField) await this.label(this.searchRow, 'Search needs text input, which this client does not have.', { color: '#bbbbbb', flexGrow: 1 });
-    // What to search: YouTube, Internet Archive films and TV, Tubi, NASA+ or ESO (not for karaoke).
+    // What to search: YouTube, Internet Archive films and TV, Tubi, NASA+, ESO or a screen share (not for karaoke).
     // Without a text field it still picks where words sent from a phone are searched.
     if (!this.karaoke) this.sourceBtn = await this.button(this.searchRow, 'YouTube', () => this.toggleSearchSource(), { backgroundColor: '#c62828', width: '170px' });
     if (this.searchField) {
@@ -987,7 +990,7 @@ var FirePlaylistPanel = class {
       ['♛ Host', 'Runs the karaoke. Press the host name at the top to see who can start songs, or to take over.'],
       ['☚ Hand', 'Your hand controls: move them in More (the green button). The orange button folds them away to one button.']
     ] : [
-      ['+ Search & Add', 'Search YouTube, Internet Archive, Tubi, NASA+ or ESO (the button beside the box picks), or paste a link.'],
+      ['+ Search & Add', `Search YouTube, Internet Archive, Tubi, NASA+ or ESO${this.core.allowUntrusted === true ? ', or find a screen share by its room code' : ''} (the button beside the box picks), or paste a link.`],
       ['☎ Phone', 'Shows a code. Send a link from your phone into your search, no typing in VR.'],
       ['☰ Lists', 'Saved playlists for this room. + All puts a whole list on the end.'],
       ['♛ Host', 'Runs the player for everyone. Press the host name at the top to see who else can control it, or to take over.'],
@@ -1954,13 +1957,17 @@ var FirePlaylistPanel = class {
     this.render();
   }
 
-  // Switches the search to the next source (YouTube, Archive films, Tubi, NASA+, ESO, ESO Fulldome). It only searches
+  // Switches the search to the next source (YouTube, Archive films, Tubi, NASA+, ESO, ESO Fulldome, Screen Share). It only searches
   // when Search is pressed, so clicking through the sources doesn't start one each time.
   toggleSearchSource() {
-    const order = Object.keys(SEARCH_SOURCES);
+    const order = this.searchSources();
     this.searchSource = order[(order.indexOf(this.searchSource) + 1) % order.length];
     this.showSearchSource();
     this.setStatus(SEARCH_SOURCES[this.searchSource].status.replace(/^Searching/, 'Search will look on'), 4000);
+  }
+  // The sources this world can use: a screen share needs links from other sites (untrusted-links).
+  searchSources() {
+    return Object.keys(SEARCH_SOURCES).filter(k => k !== 'screen' || this.core.allowUntrusted === true);
   }
   showSearchSource() {
     if (!this.sourceBtn) return;
@@ -1997,7 +2004,8 @@ var FirePlaylistPanel = class {
     this.tab = 'search';
     // A search made recently on this device shows its kept results straight away. Links are
     // always looked up again (a stream may have gone live or offline).
-    const isLink = /^(https?|rtspt?):\/\//i.test(q) || !!this.core.getId(q);
+    // A screen share room is looked up each time too, as it's a link made from the code.
+    const isLink = /^(https?|rtspt?):\/\//i.test(q) || !!this.core.getId(q) || this.searchSource === 'screen';
     const key = this.searchKey(q, this.searchSource);
     const kept = !isLink && this.cachedSearch(key);
     if (kept) {

@@ -489,8 +489,10 @@ async function togglePause(app, ws) {
     if (player.paused) {
       player.currentTime = now - player.lastStartTime;
     } else {
-      // A live video paused for long may have fallen out of what YouTube keeps: it goes on from the oldest point.
-      player.currentTime = Math.max(trackStart(player, now), player.currentTime || 0);
+      // A live video paused for long may have fallen out of what YouTube keeps: it goes on from the
+      // oldest point. Only a live one: a countdown's time is below 0 (karaoke, a ready wait) and stays so.
+      const track = player.playlist[player.currentTrack] || {};
+      if (track.live && track.liveStart) player.currentTime = Math.max(trackStart(player, now), player.currentTime || 0);
       player.lastStartTime = now - player.currentTime;
     }
 

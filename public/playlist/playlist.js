@@ -94,7 +94,8 @@ var Playlist = class {
         this.core.player = Object.assign(this.core.player || {}, json.data.video);
         // Estimate the clock skew whenever we get a full update with a playing track.
         // This ensures the UI's timer is aligned with the server's time.
-        if (this.core.player.lastStartTime && Number.isFinite(Number(this.core.player.currentTime))) {
+        // Not while paused: the time is held then, so this would count the pause as clock difference.
+        if (this.core.player.lastStartTime && Number.isFinite(Number(this.core.player.currentTime)) && !this.core.player.paused) {
             const serverNow = this.core.player.lastStartTime + this.core.player.currentTime;
             const clientNow = Date.now() / 1000;
             this.clockSkew = clientNow - serverNow;

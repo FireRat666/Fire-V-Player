@@ -562,6 +562,11 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
     reportLivePosition() {
       const video = this.currentVideo;
       if (!video || this.previewVideo || video.liveStart || this.livePending !== video.link || !this.isLiveTrack(video)) return;
+      // Only once YouTube has this video loaded: until then its time is the last video's. Still
+      // pending, so its PLAYING reports it.
+      let loaded = null;
+      try { const d = this.yt.getVideoData(); loaded = d && d.video_id; } catch (e) {}
+      if (loaded !== this.core.getId(video.link)) return;
       let position = 0;
       try { position = this.yt.getCurrentTime(); } catch (e) {}
       if (!(position > 0)) return;

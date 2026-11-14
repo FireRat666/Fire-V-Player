@@ -304,7 +304,8 @@ var Playlist = class {
           this.core.player.lastStartTime = json.data.lastStartTime;
           this.updatePlaylist(this.core.player);
           this.core.showToast(`Playback ${json.data.paused ? 'Paused' : 'Resumed'}`, 3000);
-          if (this.core.player.paused) {
+          // A paused live video's live point still moves on, so its display keeps updating.
+          if (this.core.player.paused && !(this.core.liveEnd((Date.now() / 1000) - this.clockSkew) > 0)) {
             if (this.uiUpdateInterval) {
               clearInterval(this.uiUpdateInterval);
               this.uiUpdateInterval = null;

@@ -47,6 +47,10 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
 // the YouTube player is replaced with a new one, as reloading the page would.
 const STALL_CHECK_MS = 2000;
 const STALL_RELOAD_MS = 15000;
+// A live point report the server didn't take (it couldn't confirm the video is live) is sent again
+// this long after, up to this many times in all (see reportLivePosition). The server waits 20 s between checks.
+const LIVE_REPORT_RETRY_MS = 30000;
+const LIVE_REPORT_TRIES = 3;
 const STALL_REBUILD_MS = 15000;
 const STALL_RETRY_MS = 60000; // after a new player, the wait before trying again from the start
 // YouTube errors that mean the video can't play here at all, so waiting or reloading won't help.
@@ -561,6 +565,19 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       this.livePending = null;
       console.log(`[PLAYER] Live point of ${video.link}: ${Math.round(position)}s into the stream.`);
       this.core.sendMessage({ path: Commands.LIVE_POSITION, data: { link: video.link, position } });
+      // The server checks with YouTube first, which can fail: with no live point back, this screen
+      // reports again, LIVE_REPORT_TRIES times in all for this video, LIVE_REPORT_RETRY_MS apart.
+      if (this.liveReports && this.liveReports.link === video.link) this.liveReports.count++;
+      else this.liveReports = { link: video.link, count: 1 };
+      clearTimeout(this.liveRetryTimer);
+      if (this.liveReports.count < LIVE_REPORT_TRIES) {
+        this.liveRetryTimer = setTimeout(() => {
+          const v = this.currentVideo;
+          if (!v || v.link !== video.link || v.liveStart) return;
+          this.livePending = v.link;
+          this.reportLivePosition();
+        }, LIVE_REPORT_RETRY_MS);
+      }
     }
 
     worldTime() {
@@ -924,9 +941,15 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
             const list = pending.playlist || this.playerData.playlist || [];
             const link = (pending.track && pending.track.link) || (list[pending.newTrackIndex] || {}).link;
             const paused = typeof pending.paused === 'boolean' ? pending.paused : this.playerData.paused;
-            if (link === json.data.link && !paused) {
-              pending.newLastStartTime = json.data.newLastStartTime;
-              pending.newCurrentTime = json.data.newCurrentTime;
+            if (link === json.data.link) {
+              // Its own copies of the track get the live details, as applyTrackChange plays from them.
+              [pending.track, list[pending.newTrackIndex]].forEach(v => {
+                if (v && v.link === json.data.link) { v.live = true; v.liveStart = json.data.liveStart; }
+              });
+              if (!paused) {
+                pending.newLastStartTime = json.data.newLastStartTime;
+                pending.newCurrentTime = json.data.newCurrentTime;
+              }
             }
           }
           if (this.currentVideo && this.currentVideo.link === json.data.link && !this.previewVideo && !this.playerData.paused) this.syncAfterLoad();

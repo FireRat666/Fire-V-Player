@@ -41,6 +41,9 @@ const READY_DELAY_DEFAULT_S = 5;
 const READY_DELAY_MAX_S = 15;
 /** How far ahead a track starts once every screen has loaded it, so the message reaches them first. */
 const READY_LEAD_S = 0.3;
+// How many times YouTube is asked whether a reported live video is live, and how far apart.
+const LIVE_CHECK_TRIES = 3;
+const LIVE_CHECK_GAP_S = 20;
 
 /**
  * Main application coordinator managing server lifecycle, active room instances,
@@ -962,29 +965,36 @@ class App {
     if (!player || !data || typeof data.link !== 'string' || !(position > 0 && position < 10 * 365 * 24 * 3600)) return;
     const track = player.playlist[player.currentTrack];
     if (!track || track.link !== data.link || !this.getYoutubeId(track.link) || track.duration || track.liveStart) return;
-    // A screen's say-so doesn't make a track live: YouTube is asked, once per track.
+    // The position is YouTube's as the report came: the time is taken before YouTube is asked.
+    const now = new Date().getTime() / 1000;
+    // A screen's say-so doesn't make a track live: YouTube is asked. A no (or no answer) is asked
+    // again on a later report, LIVE_CHECK_GAP_S apart and LIVE_CHECK_TRIES times in all.
     if (!track.live) {
       // Kept beside the track, not on it, as tracks are sent to the clients.
       if (!this.liveChecks) this.liveChecks = new WeakMap();
-      if (!this.liveChecks.has(track)) {
-        this.liveChecks.set(track, videoById(this.getYoutubeId(track.link)).then(v => !!(v && v.live === true), () => false));
+      let check = this.liveChecks.get(track);
+      if (!check || (check.done && !check.live && check.tries < LIVE_CHECK_TRIES && now - check.at >= LIVE_CHECK_GAP_S)) {
+        const c = check = { tries: (check ? check.tries : 0) + 1, at: now, done: false, live: false };
+        c.result = videoById(this.getYoutubeId(track.link)).then(v => v && v.live === true, () => false)
+          .then(live => { c.done = true; c.live = !!live; return c.live; });
+        this.liveChecks.set(track, c);
       }
-      const live = await this.liveChecks.get(track);
+      const live = await check.result;
       if (!live) {
-        console.log(`[LIVE] ${track.link} was reported live, but YouTube doesn't say it is.`);
+        console.log(`[LIVE] ${track.link} was reported live, but YouTube doesn't say it is (check ${check.tries} of ${LIVE_CHECK_TRIES}).`);
         return;
       }
       if (player.playlist[player.currentTrack] !== track || track.liveStart) return; // changed meanwhile
     }
-    const now = new Date().getTime() / 1000;
     track.live = true;
     track.liveStart = now - position;
     player.liveTrack = track; // already at the live point (see tickAllInstances)
     player.readyGate = null; // the room goes to the live point, not to a start everyone waits for
     // The room is where the screens are (live), unless the host has paused it.
+    // Its time now is the report's position plus the time YouTube took to answer.
     if (!player.paused) {
-      player.lastStartTime = now - position;
-      player.currentTime = position;
+      player.lastStartTime = track.liveStart;
+      player.currentTime = new Date().getTime() / 1000 - track.liveStart;
     }
     player.sockets.forEach(socket => {
       this.send(socket, Commands.LIVE_POSITION, {

@@ -6,6 +6,10 @@ var ADMIN_STATE_KEY = 'fire-v-player-admin';
 // While blacklisted, how often the full volume is put back (in case the page reloaded).
 var BLOCKED_VOLUME_MS = 5000;
 var CAPTIONS_PREF_KEY = 'fire-v-player-captions';
+// A live YouTube video goes back only 12 hours (the server keeps seeks inside it, see hostHandler's
+// LIVE_WINDOW_S), and within LIVE_NEAR_S of its live point it counts as at it.
+var LIVE_WINDOW_S = 12 * 3600;
+var LIVE_NEAR_S = 15;
 // SDK layers: clicks only reach colliders on UI (5). UserLayer9 (13) is ignored by teleport, the
 // grapple and the ground, but players still touch it, which is what a trigger zone needs.
 var LAYER_UI = 5;
@@ -36,15 +40,18 @@ var HAND_COLLAPSED_PREF_KEY = 'fire-v-player-hand-collapsed';
 // rotation are in that attachment's own Unity axes. On a hand, -X is the back of the left hand
 // (+X the right's) and Z runs toward the fingers. "front" isn't attached: it's put in the world
 // in front of the player when chosen.
+// desktop: false and vr: false leave a place out for viewers who couldn't see it there: a wrist
+// on desktop, where the hands can't be turned to look at, and a corner of the window in VR, which
+// a headset has no edges for (see handPlaceFits).
 var HAND_PLACES = {
-  left: { label: 'Left Wrist', attach: 2, position: [0, 0.046, 0.07], rotation: [0, 90, 180], scale: 0.1 },
-  right: { label: 'Right Wrist', attach: 3, position: [0, 0.046, 0.07], rotation: [0, 270, 180], scale: 0.1 },
+  left: { label: 'Left Wrist', attach: 2, position: [0, 0.046, 0.07], rotation: [0, 90, 180], scale: 0.1, desktop: false },
+  right: { label: 'Right Wrist', attach: 3, position: [0, 0.046, 0.07], rotation: [0, 270, 180], scale: 0.1, desktop: false },
   // The bottom right of what the player sees, for desktop players, whose hands don't turn.
   view: { label: 'In View', attach: 0, position: [0.2, -0.16, 0.5], rotation: [0, 0, 0], scale: 0.1 },
   // The bottom right corner of a desktop window (16:10 or wider): big (the desktop default), or
   // small and out of the way. Both keep the same right and bottom edges.
-  'big-corner': { label: 'Big View Corner', attach: 0, position: [0.565, -0.34, 0.5], rotation: [0, 0, 0], scale: 0.12 },
-  corner: { label: 'View Corner', attach: 0, position: [0.6, -0.35, 0.5], rotation: [0, 0, 0], scale: 0.075 },
+  'big-corner': { label: 'Big View Corner', attach: 0, position: [0.565, -0.34, 0.5], rotation: [0, 0, 0], scale: 0.12, vr: false },
+  corner: { label: 'View Corner', attach: 0, position: [0.6, -0.35, 0.5], rotation: [0, 0, 0], scale: 0.075, vr: false },
   front: { label: 'In Front', scale: 0.15 },
   off: { label: 'Off' }
 };
@@ -388,7 +395,7 @@ var Core = class {
     if (this.wantsNativeScreen(link)) {
       if (this.nativeScreen && this.nativeScreen.link === link) {
         // The same file again (a restart, a one-song playlist), or the host moved it.
-        if (path === Commands.TRACK_CHANGED || path === Commands.HOST_SEEK) this.nativeScreen.resync();
+        if (path === Commands.TRACK_CHANGED || path === Commands.HOST_SEEK || path === Commands.READY_START) this.nativeScreen.resync();
         return;
       }
       this.removeBrowser();
@@ -919,6 +926,16 @@ var Core = class {
       return /Android|Quest|OculusBrowser|Pico|Mobile/i.test(navigator.userAgent || '')
         || /Android|aarch64|arm/i.test(navigator.platform || '')
         || !!(data && /Android/i.test(data.platform || ''));
+    } catch (e) { return false; }
+  }
+  // A standalone headset (Quest, Pico), not a phone. The Quest app's browser gives a Windows user
+  // agent on an ARM Linux platform, which no phone does: a phone says Android or Mobile.
+  isStandaloneHeadset() {
+    try {
+      const ua = navigator.userAgent || '';
+      if (/Quest|OculusBrowser|Pico/i.test(ua)) return true;
+      const data = navigator.userAgentData;
+      return !/Android|Mobile/i.test(ua) && (/aarch64|arm/i.test(navigator.platform || '') || !!(data && /Android/i.test(data.platform || '')));
     } catch (e) { return false; }
   }
   // The highest resolution a viewer can pick for themselves on this device (the snippet's own
@@ -2136,6 +2153,8 @@ var Core = class {
   // The snippet's hand-controls-place is the default; "auto" is the left wrist in VR and the big view corner
   // on desktop, where the hands can't be turned to see the buttons.
   async isVR() {
+    // A standalone headset is always in VR, whatever the client says or doesn't. A phone asks the client.
+    if (this.isStandaloneHeadset()) return true;
     if (this.vrCheck === undefined) {
       const scene = this.banterScene();
       this.vrCheck = (async () => {
@@ -2161,14 +2180,28 @@ var Core = class {
     const p = String(this.params['hand-controls-place'] || 'auto').trim().toLowerCase();
     return HAND_PLACES[p] ? p : 'auto';
   }
+  // Whether a place can be seen by this kind of viewer (see HAND_PLACES).
+  handPlaceFits(place, vr) {
+    const p = HAND_PLACES[place];
+    return !!p && (vr ? p.vr !== false : p.desktop !== false);
+  }
+  // The places this viewer can choose, in the panel button's order. A client that doesn't say
+  // whether it's in VR is taken to be (see isVR).
+  async handPlaces() {
+    const vr = await this.isVR();
+    return Object.keys(HAND_PLACES).filter(p => this.handPlaceFits(p, vr));
+  }
   async handPlace() {
     const choice = this.handPlaceChoice();
-    if (choice !== 'auto') return choice;
-    return (await this.isVR()) ? 'left' : 'big-corner';
+    const vr = await this.isVR();
+    // A choice this viewer can't see (the snippet's, or one saved on desktop and now in VR) is
+    // the default for them instead.
+    if (choice !== 'auto' && this.handPlaceFits(choice, vr)) return choice;
+    return vr ? 'left' : 'big-corner';
   }
-  // Steps to the next place, remembered on this device, and moves the buttons there.
+  // Steps to the next place this viewer can see, remembered on this device, and moves the buttons there.
   async nextHandPlace() {
-    const order = Object.keys(HAND_PLACES);
+    const order = await this.handPlaces();
     const now = this.currentHandPlace || await this.handPlace();
     this.setHandPlace(order[(order.indexOf(now) + 1) % order.length]);
   }
@@ -2444,6 +2477,8 @@ var Core = class {
     // The world video player's size for files (native-video.js); empty matches the browser.
     this.setOrDefault("native-screen-size", '');
     this.setOrDefault("one-for-each-instance", "false");
+    // The longest a new playlist track waits for every screen to load it, in seconds (0: no wait).
+    this.setOrDefault("ready-delay", '5');
     // The room. Pages the player opens get the finished room in their address (?instance=). Only
     // those pages (on the player's own server) take it from there: a space's own address can have
     // ?instance= too (a private copy of the space), and that's already part of the room.
@@ -2471,6 +2506,7 @@ var Core = class {
     this.setOrDefault("hand-controls", 'false');
     // Where the hand buttons start: auto (left wrist in VR, big view corner on desktop), left, right,
     // view, big-corner, corner, front or off. Each viewer can choose another in the panel (HAND_PLACES).
+    // The wrists are for VR and the corners for desktop: a place the viewer can't see is auto for them.
     this.setOrDefault("hand-controls-place", 'auto');
     // Fine-tunes where the hand buttons sit on the wrist, in the left hand's own Unity axes
     // (mirrored for the right): "x y z" metres and "x y z" degrees. Empty uses the built-in layout.
@@ -2871,12 +2907,65 @@ var Core = class {
           if (typeof json.data.paused === 'boolean') this.player.paused = json.data.paused;
         }
         break;
+      case Commands.LIVE_POSITION:
+        // A live video's live point is known: the room's time is now the stream's own (see liveEnd).
+        if (this.player && json.data) {
+          this.player.lastStartTime = json.data.newLastStartTime;
+          this.player.currentTime = json.data.newCurrentTime;
+          (this.player.playlist || []).forEach(v => {
+            if (v.link === json.data.link) { v.live = true; v.liveStart = json.data.liveStart; }
+          });
+        }
+        break;
+      case Commands.READY_START:
+        // Every screen has loaded the new track, so it starts sooner than its wait said.
+        if (this.player && json.data) {
+          const track = this.player.playlist && this.player.playlist[this.player.currentTrack];
+          if (track && track.link === json.data.link && !this.player.paused) {
+            this.player.lastStartTime = json.data.newLastStartTime;
+            this.player.currentTime = json.data.newCurrentTime;
+            const left = -Number(json.data.newCurrentTime);
+            this.countdownUntil = left > 0 ? performance.now() + left * 1000 : 0;
+          }
+        }
+        break;
     }
     // A file track needs the world's video player in place of the browser, and back again after.
     try { this.updateScreen(json); } catch (e) { console.error('[Core] Could not switch screens:', e); }
     try { this.updateScreenButtons(); } catch (e) { console.error('[Core] Could not update the screen buttons:', e); }
     this.notifyListeners(json);
   }
+  /**
+   * Where the current track's live point is, in its own time, when it's a live video whose live
+   * point is known: what the progress bar runs to and seeks can reach. 0 otherwise.
+   * @param {number} serverNow - The server's clock now (seconds), as the caller reckons it.
+   * @returns {number}
+   */
+  liveEnd(serverNow) {
+    const p = this.player;
+    const v = p && p.playlist && p.playlist[p.currentTrack];
+    return v && v.live && v.liveStart ? Math.max(0, serverNow - v.liveStart) : 0;
+  }
+  /**
+   * The part of the current live video a seek can reach: from LIVE_WINDOW_S before its live point
+   * (or its start) to the live point. Null when it isn't a live video whose live point is known.
+   * @param {number} serverNow - The server's clock now (seconds), as the caller reckons it.
+   * @returns {{start: number, end: number}|null}
+   */
+  liveRange(serverNow) {
+    const end = this.liveEnd(serverNow);
+    return end > 0 ? { start: Math.max(0, end - LIVE_WINDOW_S), end } : null;
+  }
+  /**
+   * A live video's time as how far behind its live point it is: "LIVE" at the live point, else
+   * "-1:23:45 / LIVE" (in the caller's timeCode). Months into a stream, its own time means nothing.
+   */
+  liveTimeText(t, range, timeCode) {
+    const behind = range.end - t;
+    return behind < LIVE_NEAR_S ? 'LIVE' : `-${timeCode(behind)} / LIVE`;
+  }
+  /** Whether a live video's time is at its live point (see liveTimeText). */
+  atLivePoint(t, range) { return !!range && range.end - t < LIVE_NEAR_S; }
   // Passes a message to the panel and the other listeners, as if it came from the server.
   notifyListeners(json) {
     if (this.messageListeners) {

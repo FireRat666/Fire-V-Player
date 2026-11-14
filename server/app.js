@@ -32,6 +32,20 @@ const traffic = require('./traffic.js');
 const SkipJumpTimePlaylist = 5;
 /** Seek skip increment in seconds for karaoke mode (250ms). */
 const SkipJumpTimeKaraoke = 0.25;
+/**
+ * The longest a new playlist track waits for the room's screens to load it before it starts,
+ * unless the snippet's ready-delay says otherwise (see holdForReady).
+ */
+const READY_DELAY_DEFAULT_S = 5;
+/** The most ready-delay can be. */
+const READY_DELAY_MAX_S = 15;
+/** How far ahead a track starts once every screen has loaded it, so the message reaches them first. */
+const READY_LEAD_S = 0.3;
+// How many times YouTube is asked whether a reported live video is live, and how far apart.
+const LIVE_CHECK_TRIES = 3;
+/** The shortest length a screen may report for a track (see setMediaDuration). */
+const MIN_MEDIA_DURATION_S = 1;
+const LIVE_CHECK_GAP_S = 20;
 
 /**
  * Main application coordinator managing server lifecycle, active room instances,
@@ -98,7 +112,11 @@ class App {
           title: video.title,
           duration: video.duration,
           link: video.link,
-          userId: video.user ? video.user.id : null
+          userId: video.user ? video.user.id : null,
+          // A live video, and where its stream's position 0 was (see setLivePosition), so the
+          // room's saved time still means the same point in it.
+          ...(video.live ? { live: true } : {}),
+          ...(video.live && video.liveStart ? { liveStart: video.liveStart } : {})
         };
       });
       const leanPlaylist = lean(player.playlist);
@@ -322,6 +340,11 @@ class App {
 
     // Remove the disconnected socket
     videoPlayer.sockets = videoPlayer.sockets.filter(_ws => _ws !== ws);
+    // A screen that left can't load the track the room is waiting on.
+    if (videoPlayer.readyGate) {
+      videoPlayer.readyGate.waiting.delete(ws);
+      this.releaseIfReady(instanceId);
+    }
 
     // Handle host disconnection. This logic is specifically for when the host leaves the 3D space.
     // A host with only a playlist UI open is not considered "present" for retaining control.
@@ -421,6 +444,10 @@ class App {
           // The space and player pages also name the room its code used before (core.js setRoom),
           // so the old room is copied whichever of them joins first.
           await this.createVideoPlayer(msg.data, msg.u, ws, typeof msg.legacy === 'string' ? msg.legacy : null);
+          // The snippet's ready-delay, from the space page (see holdForReady). The latest one to
+          // join sets it; a world's copies of the snippet normally agree.
+          const readyDelay = App.readyDelay(msg.readyDelay);
+          if (readyDelay !== null && this.videoPlayers[msg.data]) this.videoPlayers[msg.data].readyDelay = readyDelay;
           this.blacklist.seen(msg.u, msg.data);
           // Always, so a player that missed an unblock while disconnected is unfrozen.
           this.blacklist.tell(ws);
@@ -598,6 +625,12 @@ class App {
       case Commands.MEDIA_DURATION:
         await this.setMediaDuration(ws, msg.data);
         break;
+      case Commands.LIVE_POSITION:
+        await this.setLivePosition(ws, msg.data);
+        break;
+      case Commands.TRACK_READY:
+        this.trackReady(ws, msg.data);
+        break;
     }
   }
   /**
@@ -638,7 +671,9 @@ class App {
       link: videoData.link,
       votes: 0,
       user: userObject,
-      is_youtube_website: isYoutubeWebsite
+      is_youtube_website: isYoutubeWebsite,
+      // Streaming now: the screens play it from the live point, not the room's time (see player.js).
+      ...(videoData.live === true ? { live: true } : {})
     };
   }
 
@@ -799,13 +834,20 @@ class App {
   async setMediaDuration(ws, data) {
     const player = this.videoPlayers[ws.i];
     const seconds = data && Number(data.duration);
-    if (!player || !data || typeof data.link !== 'string' || !(seconds > 0 && seconds < 24 * 3600)) return;
-    if (this.getYoutubeId(data.link)) return; // YouTube lengths come from YouTube itself
+    // Under a second is a player that hadn't loaded it yet, not a length: the track would end at once.
+    if (!player || !data || typeof data.link !== 'string' || !(seconds >= MIN_MEDIA_DURATION_S && seconds < 24 * 3600)) return;
+    // Only a screen, for the track it's playing (as it reports it, see player.js reportMediaDuration):
+    // the length ends the track for everyone.
+    const playing = player.playlist[player.currentTrack];
+    if (ws.type !== 'player' || !playing || playing.link !== data.link) return;
+    // A YouTube video's length normally comes with it from YouTube. One looked up while YouTube
+    // refused the server (oEmbed has no lengths) gets it from the screen, so it ends. A live
+    // video has none, and plays until someone moves on.
     let changed = false;
     const current = player.playlist[player.currentTrack];
-    const currentWasUnknown = !!current && current.link === data.link && !current.duration;
+    const currentWasUnknown = !!current && current.link === data.link && !current.duration && !current.live;
     player.playlist.forEach(v => {
-      if (v.link === data.link && !v.duration) { v.duration = Math.round(seconds * 1000); changed = true; }
+      if (v.link === data.link && !v.duration && !v.live) { v.duration = Math.round(seconds * 1000); changed = true; }
     });
     if (!changed) return;
     // The track's time ran on while its length wasn't known (in an empty room, say), so it may be
@@ -827,11 +869,169 @@ class App {
     await this.savePlayerState(ws.i);
   }
   /**
+   * A snippet's ready-delay: seconds from 0 (no wait) to READY_DELAY_MAX_S, or null when it
+   * doesn't say (an older page), so the room keeps what it has.
+   * @param {*} value
+   * @returns {number|null}
+   */
+  static readyDelay(value) {
+    if (value === undefined || value === null || String(value).trim() === '') return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.min(READY_DELAY_MAX_S, Math.max(0, n)) : null;
+  }
+
+  /**
+   * Holds a new playlist track at its start until the room's screens have loaded it, for at most
+   * the room's ready-delay. Without this the clock starts at once and a slow screen (a Quest)
+   * plays from 0:00 seconds after the others, then jumps ahead to catch up.
+   *
+   * Call it right after making a track current at 0:00, before sending TRACK_CHANGED with
+   * newCurrentTime: the track's start is put ready-delay seconds ahead, which every screen already
+   * waits at 0:00 for (as for karaoke's countdown). Each screen says when it has loaded the track
+   * (TRACK_READY); once all have, it starts at once (READY_START). A screen that never says only
+   * holds the room for the delay, and then catches up as before.
+   *
+   * Karaoke has its own countdown, a paused track waits for the host anyway, and a live video
+   * starts at its live point, so none of them wait. Nor does a room with no screen.
+   * @param {Object} player - The room.
+   */
+  holdForReady(player) {
+    player.readyGate = null;
+    // A track start, even of the same track again: the next tick takes a live one to its live
+    // point (see tickAllInstances), and a seek made before it no longer counts.
+    player.liveTrack = null;
+    player.seekedTrack = null;
+    if (player.isKaraoke || player.paused) return;
+    const track = player.playlist[player.currentTrack];
+    if (!track || track.live) return;
+    const wait = player.readyDelay != null ? player.readyDelay : READY_DELAY_DEFAULT_S;
+    const screens = player.sockets.filter(s => s.type === 'player');
+    if (!(wait > 0) || !screens.length) return;
+    const now = new Date().getTime() / 1000;
+    player.lastStartTime = now + wait;
+    player.currentTime = -wait;
+    player.readyGate = { link: track.link, start: player.lastStartTime, since: now, waiting: new Set(screens) };
+  }
+
+  /**
+   * A screen has loaded the track the room is waiting on (see holdForReady).
+   * @param {Object} ws - The screen's WebSocket.
+   * @param {{link: string}} data
+   */
+  trackReady(ws, data) {
+    const player = this.videoPlayers[ws.i];
+    const gate = player && player.readyGate;
+    if (!gate || !data || data.link !== gate.link) return;
+    gate.waiting.delete(ws);
+    this.releaseIfReady(ws.i);
+  }
+
+  /**
+   * Starts the waiting track once no screen is still loading it. A wait that no longer applies
+   * (another track, a seek, a pause, or its time is up) is dropped.
+   * @param {string} instanceId
+   */
+  releaseIfReady(instanceId) {
+    const player = this.videoPlayers[instanceId];
+    const gate = player && player.readyGate;
+    if (!gate) return;
+    const now = new Date().getTime() / 1000;
+    const track = player.playlist[player.currentTrack];
+    if (!track || track.link !== gate.link || player.paused || player.lastStartTime !== gate.start || now >= gate.start) {
+      player.readyGate = null;
+      return;
+    }
+    if (gate.waiting.size) return;
+    player.readyGate = null;
+    const start = now + READY_LEAD_S;
+    if (start >= player.lastStartTime) return;
+    player.lastStartTime = start;
+    player.currentTime = now - start;
+    console.log(`[READY] Every screen loaded "${track.title || track.link}" in ${(now - gate.since).toFixed(1)}s; starting it for ${instanceId}.`);
+    player.sockets.forEach(socket => {
+      this.send(socket, Commands.READY_START, {
+        link: track.link, newLastStartTime: player.lastStartTime, newCurrentTime: player.currentTime
+      });
+    });
+    // The saved start was the wait's end (see holdForReady), so a restart would be that far out.
+    this.savePlayerState(instanceId).catch(e => console.error(`[READY] Could not save ${instanceId}:`, e));
+  }
+
+  /**
+   * Takes a screen's report of where a live video's live point is: YouTube's position in the
+   * stream (seconds), read by a screen that opened it there. The first one sets `liveStart`, the
+   * server time the stream's position was 0, so the live point is always now - liveStart; and
+   * the room's time becomes that position, so seeks, skips and the progress bar are in the
+   * stream's own time, the same on every screen. Later reports are ignored.
+   * A track without a length that a screen finds live (a link oEmbed answered for) becomes live.
+   *
+   * @param {Object} ws - The reporting screen's WebSocket.
+   * @param {{link: string, position: number}} data
+   * @returns {Promise<void>}
+   */
+  async setLivePosition(ws, data) {
+    const player = this.videoPlayers[ws.i];
+    const position = data && Number(data.position);
+    // A 24/7 stream can be months in: YouTube put one at 86 days. 10 years only keeps out nonsense.
+    if (!player || !data || typeof data.link !== 'string' || !(position > 0 && position < 10 * 365 * 24 * 3600)) return;
+    // It sets the room's time for everyone, so only a screen of someone not blocked reports it
+    // (YouTube saying the video is live says nothing about the position). The blacklist drops a
+    // blocked person's report already; this is in case it's let through.
+    if (ws.type !== 'player' || !ws.u || this.blacklist.has(ws.u.id)) return;
+    const track = player.playlist[player.currentTrack];
+    if (!track || track.link !== data.link || !this.getYoutubeId(track.link) || track.duration || track.liveStart) return;
+    // The position is YouTube's as the report came: the time is taken before YouTube is asked,
+    // as is the room's time then, which that position is (to move the room's time into the stream's).
+    const now = new Date().getTime() / 1000;
+    const roomAt = player.paused ? (player.currentTime || 0) : now - player.lastStartTime;
+    // A screen's say-so doesn't make a track live: YouTube is asked. A no (or no answer) is asked
+    // again on a later report, LIVE_CHECK_GAP_S apart and LIVE_CHECK_TRIES times in all.
+    if (!track.live) {
+      // Kept beside the track, not on it, as tracks are sent to the clients.
+      if (!this.liveChecks) this.liveChecks = new WeakMap();
+      let check = this.liveChecks.get(track);
+      if (!check || (check.done && !check.live && check.tries < LIVE_CHECK_TRIES && now - check.at >= LIVE_CHECK_GAP_S)) {
+        const c = check = { tries: (check ? check.tries : 0) + 1, at: now, done: false, live: false };
+        c.result = videoById(this.getYoutubeId(track.link)).then(v => v && v.live === true, () => false)
+          .then(live => { c.done = true; c.live = !!live; return c.live; });
+        this.liveChecks.set(track, c);
+      }
+      const live = await check.result;
+      if (!live) {
+        console.log(`[LIVE] ${track.link} was reported live, but YouTube doesn't say it is (check ${check.tries} of ${LIVE_CHECK_TRIES}).`);
+        return;
+      }
+      if (player.playlist[player.currentTrack] !== track || track.liveStart) return; // changed meanwhile
+    }
+    track.live = true;
+    track.liveStart = now - position;
+    player.liveTrack = track; // already at the live point (see tickAllInstances)
+    player.readyGate = null; // the room goes to the live point, not to a start everyone waits for
+    // The room's time moves into the stream's: by as much as the report's position is from the
+    // room's time when the report came. Untouched since, that puts it at the live point plus the
+    // time YouTube took to answer. A seek or skip by the host meanwhile, or a pause (which stays
+    // paused, so a resume goes on from there and not from near the stream's start), moves with it
+    // and isn't undone. Never past the live point.
+    const later = new Date().getTime() / 1000;
+    const roomNow = player.paused ? (player.currentTime || 0) : later - player.lastStartTime;
+    player.currentTime = Math.min(later - track.liveStart, Math.max(0, roomNow + position - roomAt));
+    player.lastStartTime = later - player.currentTime;
+    player.sockets.forEach(socket => {
+      this.send(socket, Commands.LIVE_POSITION, {
+        link: track.link, liveStart: track.liveStart, paused: !!player.paused,
+        newLastStartTime: player.lastStartTime, newCurrentTime: player.currentTime
+      });
+    });
+    await this.savePlayerState(ws.i);
+  }
+
+  /**
    * Searches YouTube or the Internet Archive, or looks up a pasted media link.
    * Transmits `SEARCH_RESULTS` back to the requesting WebSocket client.
    *
    * The SEARCH message's data is either a plain string (a YouTube search or a link) or
-   * `{ term: string, source: 'youtube' | 'archive' | 'tubi' | 'nasa' | 'eso' | 'esodome', searchId?: string|number }`;
+   * `{ term: string, source: 'youtube' | 'archive' | 'tubi' | 'nasa' | 'eso' | 'esodome' | 'screen', searchId?: string|number }`;
+   * 'screen' takes a screen.sdq.st room code (or its link) and gives that room's screen share.
    * 'archive' searches the Internet Archive's public-domain movies and TV, 'tubi' the titles in Tubi's
    * categories, 'nasa' NASA+ (see server/streaming.js), and 'eso' ESO's videos and 'esodome' its fulldome ones (server/eso.js). A pasted link is looked up whichever source
    * is picked. A `searchId` comes back on the SEARCH_RESULTS reply (and on the search's ERROR), so
@@ -843,8 +1043,12 @@ class App {
    */
   async search(data, ws) {
     const isObject = data && typeof data === 'object';
-    const term = String((isObject ? data.term : data) || '').trim().slice(0, 500);
-    const source = isObject && ['archive', 'tubi', 'nasa', 'eso', 'esodome'].includes(data.source) ? data.source : 'youtube';
+    let term = String((isObject ? data.term : data) || '').trim().slice(0, 500);
+    const source = isObject && ['archive', 'tubi', 'nasa', 'eso', 'esodome', 'screen'].includes(data.source) ? data.source : 'youtube';
+    // A screen share's room code is its watch link; a pasted link (watch or publish) is used as it is.
+    if (source === 'screen' && term && !/^(https?:\/\/|www\.)/i.test(term)) {
+      term = `https://screen.sdq.st:8443/?room=${encodeURIComponent(term.slice(0, 100))}`;
+    }
     const rawId = isObject ? data.searchId : undefined;
     const tag = (typeof rawId === 'number' && Number.isFinite(rawId)) || (typeof rawId === 'string' && rawId.length <= 64)
       ? { searchId: rawId } : undefined;
@@ -990,6 +1194,30 @@ class App {
         if (!player.paused) {
           player.currentTime = now - player.lastStartTime;
         }
+        if (player.readyGate) this.releaseIfReady(instanceId); // drops a wait that's over
+
+        // A live video whose live point is known, just made the current track (Previous, a loop,
+        // a pick from the list), starts at the live point, not at its stream's start.
+        const track = player.playlist[player.currentTrack];
+        // Not the first tick of a room just loaded, whose saved time is already right, nor a track
+        // the host has seeked in since it was made current (see hostHandler's seekedTrack).
+        // A start of the same track again clears liveTrack (see holdForReady), so it counts too.
+        if (track !== player.liveTrack) {
+          const changed = player.liveTrack !== undefined;
+          const seeked = player.seekedTrack === track;
+          player.liveTrack = track; // not saved (see _performSave), nor is seekedTrack
+          player.seekedTrack = null;
+          if (changed && !seeked && track && track.live && track.liveStart && !player.paused) {
+            player.lastStartTime = track.liveStart;
+            player.currentTime = now - track.liveStart;
+            player.sockets.forEach(socket => {
+              this.send(socket, Commands.LIVE_POSITION, {
+                link: track.link, liveStart: track.liveStart, paused: false,
+                newLastStartTime: player.lastStartTime, newCurrentTime: player.currentTime
+              });
+            });
+          }
+        }
 
         // --- Periodic Time Synchronization ---
         // To prevent client drift over time, the server periodically sends an authoritative
@@ -1040,10 +1268,11 @@ class App {
                   player.currentTrack = 0;
                   player.lastStartTime = new Date().getTime() / 1000;
                   player.currentTime = 0; // Reset for the new track.
+                  this.holdForReady(player);
 
                   // Broadcast the change to all clients, including the updated playlist.
                   player.sockets.forEach(socket => {
-                    this.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, playlist: player.playlist });
+                    this.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, newCurrentTime: player.currentTime, playlist: player.playlist });
                   });
                   await this.savePlayerState(instanceId);
                 }
@@ -1053,8 +1282,10 @@ class App {
                 player.lastStartTime += trackDuration;
                 player.currentTrack = (player.currentTrack + 1) % player.playlist.length;
                 this.resetBrowserIfNeedBe(player, player.currentTrack);
+                // Just now, not tracks run through while the server was asleep: it waits for the screens.
+                if (player.currentTime < 1) this.holdForReady(player);
                 player.sockets.forEach(socket => {
-                  this.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime });
+                  this.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, newCurrentTime: player.currentTime });
                 });
                 await this.savePlayerState(instanceId);
               }
@@ -1166,8 +1397,10 @@ class App {
         const wasCurrentTrack = (videoIndex === player.currentTrack);
         if (wasCurrentTrack) {
           player.lastStartTime = new Date().getTime() / 1000;
+          player.currentTime = 0;
+          this.holdForReady(player);
           player.sockets.forEach(socket => {
-            this.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, playlist: player.playlist });
+            this.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, newCurrentTime: player.currentTime, playlist: player.playlist });
           });
         } else {
           player.sockets.forEach(socket => {

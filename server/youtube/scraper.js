@@ -8,6 +8,44 @@ const Util = require('./util.js');
 const { getInnertube } = require('./youtubeiService.js');
 
 /**
+ * Until when (ms) YouTube is taken to be refusing youtubei.js's /next and /player requests, as it
+ * does a server it takes for a bot (a 403 or 429). Meanwhile lookups skip what it would refuse:
+ * each try costs seconds, and the 20 s youtubei.js startup the first time.
+ */
+const refused = { next: 0, player: 0 };
+const REFUSED_PAUSE_MS = 10 * 60 * 1000;
+const isRefusal = err => /status code (403|429)\b/.test(String(err && err.message));
+
+/**
+ * A video's title, channel and thumbnail from YouTube's public oEmbed page, which answers when
+ * youtubei.js is refused. It has no length: 0, until the screen playing it reports one (see
+ * setMediaDuration in app.js). A private or missing video gets an error there, so null.
+ *
+ * @param {string} videoId - YouTube video id.
+ * @returns {Promise<VideoLookup|null>}
+ */
+async function oembedVideo(videoId) {
+  const link = `https://www.youtube.com/watch?v=${videoId}`;
+  try {
+    const res = await fetch(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(link)}`, { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) return null;
+    const info = await res.json();
+    if (!info || !info.title) return null;
+    const channelId = /\/channel\/([\w-]+)/.exec(info.author_url || '');
+    return {
+      title: String(info.title),
+      link,
+      thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+      duration: 0,
+      id: videoId,
+      channel: { name: info.author_name || 'Unknown Channel', id: channelId ? channelId[1] : '' }
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
  * @typedef {Object} ScrapedVideo
  * @property {string} id - 11-character YouTube video ID.
  * @property {string} title - Video title.
@@ -210,8 +248,35 @@ class Scraper {
         throw new Error("Invalid YouTube URL");
       }
 
+      // YouTube refusing the player request too: oEmbed alone, without waiting on youtubei.js.
+      if (Date.now() < refused.player) {
+        const fromOembed = await oembedVideo(videoId);
+        if (fromOembed) return fromOembed;
+        throw new Error('not found by oEmbed, and YouTube is refusing the player request');
+      }
       const yt = await getInnertube();
-      const videoInfo = await yt.getInfo(videoId);
+      let videoInfo;
+      try {
+        // getInfo also asks /next (related videos, the owner), which YouTube refuses on its own when
+        // it takes the server for a bot. /player alone has what's needed, and oEmbed the rest.
+        if (Date.now() < refused.next) videoInfo = await yt.getBasicInfo(videoId);
+        else videoInfo = await yt.getInfo(videoId);
+      } catch (err) {
+        if (isRefusal(err)) refused.next = Date.now() + REFUSED_PAUSE_MS;
+        console.warn(`[YT] Video lookup failed for ${videoId} (${err.message}); trying the player request alone.`);
+        try {
+          videoInfo = await yt.getBasicInfo(videoId);
+        } catch (err2) {
+          if (isRefusal(err2)) {
+            refused.player = Date.now() + REFUSED_PAUSE_MS;
+            console.warn(`[YT] YouTube is refusing the player request; video lookups use oEmbed alone for ${REFUSED_PAUSE_MS / 60000} minutes.`);
+          }
+          console.warn(`[YT] getBasicInfo failed for ${videoId} (${err2.message}); trying oEmbed.`);
+          const fromOembed = await oembedVideo(videoId);
+          if (fromOembed) return fromOembed;
+          throw err;
+        }
+      }
       const details = videoInfo.basic_info || {};
 
       // Extract thumbnail
@@ -230,7 +295,9 @@ class Scraper {
       }
 
       let title = details.title || videoInfo.primary_info?.title?.toString();
-      let duration = (details.duration || 0) * 1000;
+      // A live stream has no length (it's where its live point is), whatever YouTube reports.
+      const live = details.is_live === true;
+      let duration = live ? 0 : (details.duration || 0) * 1000;
 
       let channelName = details.channel?.name || videoInfo.secondary_info?.owner?.author?.name?.toString() || 'Unknown Channel';
       let channelId = details.channel?.id || details.channelId || videoInfo.secondary_info?.owner?.author?.id || '';
@@ -243,7 +310,7 @@ class Scraper {
             if (!title || title === 'Unknown Title') {
               title = found.title?.toString();
             }
-            if (duration === 0) {
+            if (duration === 0 && !live) {
               const seconds = found.duration?.seconds || found.duration;
               if (typeof seconds === 'number') {
                 duration = seconds * 1000;
@@ -263,6 +330,7 @@ class Scraper {
 
       return {
         title: title,
+        live,
         link: `https://www.youtube.com/watch?v=${videoId}`,
         thumbnail: thumbnail_url,
         duration: duration,

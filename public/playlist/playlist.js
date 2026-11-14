@@ -94,7 +94,8 @@ var Playlist = class {
         this.core.player = Object.assign(this.core.player || {}, json.data.video);
         // Estimate the clock skew whenever we get a full update with a playing track.
         // This ensures the UI's timer is aligned with the server's time.
-        if (this.core.player.lastStartTime && Number.isFinite(Number(this.core.player.currentTime))) {
+        // Not while paused: the time is held then, so this would count the pause as clock difference.
+        if (this.core.player.lastStartTime && Number.isFinite(Number(this.core.player.currentTime)) && !this.core.player.paused) {
             const serverNow = this.core.player.lastStartTime + this.core.player.currentTime;
             const clientNow = Date.now() / 1000;
             this.clockSkew = clientNow - serverNow;
@@ -239,14 +240,28 @@ var Playlist = class {
           this.togglePause.className = this.core.player.paused ? 'button green' : 'button red';
           // The UI updater will pick up the new lastStartTime on its next interval.
           // To make the change immediate, we can manually update the relevant elements.
-          const currentTimeBar = document.querySelector('.currentTime');
-          if (currentTimeBar && this.core.player.duration > 0) {
-            currentTimeBar.style.width = `${(this.core.player.currentTime / this.core.player.duration) * 100}%`;
+          this.renderTime();
+        }
+        break;
+      case Commands.READY_START:
+        // Every screen has loaded the new track, so it starts sooner than its wait said.
+        if (this.core.player && json.data && !this.core.player.paused) {
+          const track = this.core.player.playlist && this.core.player.playlist[this.core.player.currentTrack];
+          if (track && track.link === json.data.link) {
+            this.core.player.lastStartTime = json.data.newLastStartTime;
+            this.core.player.currentTime = json.data.newCurrentTime;
           }
-          const currentTimeText = document.querySelector('.currentTimeText');
-          if (currentTimeText) {
-            currentTimeText.innerText = `${this.timeCode(this.core.player.currentTime)} / ${this.durationCode(this.core.player.duration)}`;
-          }
+        }
+        break;
+      case Commands.LIVE_POSITION:
+        // A live video's live point is known: the room's time is now the stream's own (see core.liveEnd).
+        if (this.core.player && json.data) {
+          this.core.player.lastStartTime = json.data.newLastStartTime;
+          this.core.player.currentTime = json.data.newCurrentTime;
+          (this.core.player.playlist || []).forEach(v => {
+            if (v.link === json.data.link) { v.live = true; v.liveStart = json.data.liveStart; }
+          });
+          this.startUiUpdater();
         }
         break;
       case Commands.SHOW_REPLACE_PROMPT:
@@ -283,7 +298,8 @@ var Playlist = class {
           this.core.player.lastStartTime = json.data.lastStartTime;
           this.updatePlaylist(this.core.player);
           this.core.showToast(`Playback ${json.data.paused ? 'Paused' : 'Resumed'}`, 3000);
-          if (this.core.player.paused) {
+          // A paused live video's live point still moves on, so its display keeps updating.
+          if (this.core.player.paused && !(this.core.liveEnd((Date.now() / 1000) - this.clockSkew) > 0)) {
             if (this.uiUpdateInterval) {
               clearInterval(this.uiUpdateInterval);
               this.uiUpdateInterval = null;
@@ -306,9 +322,20 @@ var Playlist = class {
       return;
     }
 
-    let updateCount = 0;
-    this.uiUpdateInterval = setInterval(() => {
-      let { lastStartTime, duration } = this.core.player;
+    this.uiUpdateInterval = setInterval(() => this.renderTime(), 1000); // Update every second
+  }
+
+  // The playing video's time and progress bar. A live video's bar is the part a seek can reach
+  // (its last 12 hours, see core.liveRange), up to its live point, and its time is how far behind that.
+  renderTime() {
+    if (!this.core.player) return;
+    {
+      const { lastStartTime } = this.core.player;
+      const duration = this.trackLength();
+      const range = this.liveRange();
+      if (this.goLiveBtn) {
+        this.goLiveBtn.style.display = range && this.isHostHere ? 'inline-block' : 'none';
+      }
       if (!(duration > 0)) {
         // No known length (some files): just how far in it is.
         const t = this.core.player.paused ? (this.core.player.currentTime || 0) : ((Date.now() / 1000) - this.clockSkew) - lastStartTime;
@@ -320,25 +347,45 @@ var Playlist = class {
       }
 
       // By subtracting the estimated clock skew, we align the client's 'now' with the server's 'now'.
-      let calculatedTime = ((Date.now() / 1000) - this.clockSkew) - lastStartTime;
-      updateCount++;
-      if (updateCount <= 5) { // Log the first 5 updates
-        console.log(`UI Update #${updateCount}: clockSkew=${this.clockSkew.toFixed(3)}s, calculatedTime=${calculatedTime.toFixed(3)}s, lastStartTime=${lastStartTime}, duration=${duration}`);
-      }
+      // Paused, the time is held in currentTime (a live video's live point still moves on).
+      let calculatedTime = this.core.player.paused ? (Number(this.core.player.currentTime) || 0)
+        : ((Date.now() / 1000) - this.clockSkew) - lastStartTime;
 
       // Clamp the calculated time to ensure it's within the valid range.
-      calculatedTime = Math.max(0, Math.min(calculatedTime, duration)); // Clamp to valid range.
+      calculatedTime = Math.max(range ? range.start : 0, Math.min(calculatedTime, duration));
 
       // Update the progress bar width.
       const currentTimeBar = document.querySelector('.currentTime');
       if (currentTimeBar) {
-        currentTimeBar.style.width = `${(calculatedTime / duration) * 100}%`;
+        currentTimeBar.style.width = `${this.barPercent(calculatedTime, range, duration)}%`;
+      }
+      if (this.goLiveBtn && range) {
+        const live = this.core.atLivePoint(calculatedTime, range);
+        this.goLiveBtn.innerText = live ? 'LIVE' : 'Go Live';
+        this.goLiveBtn.className = live ? 'button grey' : 'button red';
       }
       const currentTimeText = document.querySelector('.currentTimeText');
       if (currentTimeText) {
-        currentTimeText.innerText = `${this.timeCode(calculatedTime)} / ${this.timeCode(duration)}`;
+        currentTimeText.innerText = range ? this.core.liveTimeText(calculatedTime, range, t => this.timeCode(t))
+          : `${this.timeCode(calculatedTime)} / ${this.timeCode(duration)}`;
       }
-    }, 1000); // Update every second
+    }
+  }
+  // The current live video's seekable part (see core.liveRange), or null.
+  liveRange() { return this.core.liveRange((Date.now() / 1000) - this.clockSkew); }
+  // How far along the bar a time is: a live video's from its range's start (see liveRange).
+  barPercent(t, range, duration) {
+    if (range) {
+      const span = range.end - range.start;
+      return span > 0 ? ((Math.min(range.end, Math.max(range.start, t)) - range.start) / span) * 100 : 100;
+    }
+    return duration > 0 ? (t / duration) * 100 : 0;
+  }
+
+  // How long the current track is, or for a live video how far its live point is (see core.liveEnd).
+  trackLength() {
+    const p = this.core.player;
+    return this.core.liveEnd((Date.now() / 1000) - this.clockSkew) || (p && p.duration) || 0;
   }
 
   setupCoreScript() {
@@ -386,6 +433,8 @@ var Playlist = class {
     this.skipForward.style.display = isMe ? 'inline-block' : 'none';
     this.takeOver.innerText = player.canTakeOver ? (isMe ? 'Take Over: On' : 'Take Over') : 'Take Over: Off';
     this.seekVideoBtn.style.display = (isMe && player.playlist.length > 0) ? 'block' : 'none';
+    this.isHostHere = !!isMe; // for Go Live (see renderTime)
+    this.renderTime();
     this.takeOver.className = player.canTakeOver ? (isMe ? 'button red' : 'button teal') : 'button teal';
     this.voting.style.display = !isMe ? 'none' : 'inline-block';
     this.voting.innerText = player.canVote ? 'Voting: On' : 'Voting: Off';
@@ -827,6 +876,14 @@ var Playlist = class {
     container.scrollTop = scroll;
   }
 
+  // The seek box's time in the video's own time. For a live video it says how far back from the
+  // live point (a "-" in front or not).
+  seekInputTime() {
+    const range = this.liveRange();
+    const t = this.parseTimeToSeconds(range ? String(this.seekTimeInput.value || '').trim().replace(/^-/, '') : this.seekTimeInput.value);
+    if (t === null || !range) return t;
+    return range.end - t;
+  }
   parseTimeToSeconds(timeString) {
     if (!timeString) return null;
     timeString = timeString.trim();
@@ -849,8 +906,12 @@ var Playlist = class {
 
     return totalSeconds;
   }
+  // h:mm:ss, with as many hours as it has: a live stream can be months in.
   timeCode(seconds) {
-    return new Date(seconds * 1000).toISOString().substring(11, 19);
+    seconds = Math.max(0, Math.floor(Number(seconds) || 0));
+    const h = Math.floor(seconds / 3600), m = Math.floor((seconds % 3600) / 60), s = seconds % 60;
+    const pad = n => String(n).padStart(2, '0');
+    return `${pad(h)}:${pad(m)}:${pad(s)}`;
   }
   // A track's length, or --:-- when it isn't known (some files).
   durationCode(seconds) {
@@ -1037,6 +1098,13 @@ var Playlist = class {
     
     this.skipForward.addEventListener('click', () => {
         this.core.sendMessage({ path: Commands.HOST_SKIP_FORWARD });
+    });
+
+    // A live video: everyone to its live point. A time past it, which the server brings back to
+    // the live point as it is when it gets there.
+    this.goLiveBtn = document.querySelector('#go-live-btn');
+    this.goLiveBtn.addEventListener('click', () => {
+      if (this.liveRange()) this.core.sendMessage({ path: Commands.SET_TIME, data: 1e9 });
     });
     
     this.addPlaylistOverlay = document.querySelector('.add-playlist-overlay');
@@ -1232,18 +1300,24 @@ var Playlist = class {
     this.seekSliderContainer = document.querySelector('#seek-slider-container');
     this.seekSliderProgress = document.querySelector('#seek-slider-progress');
     this.seekSliderThumb = document.querySelector('#seek-slider-thumb');
+    this.seekHint = document.querySelector('#seek-hint');
 
     this.seekVideoBtn.addEventListener('click', () => {
       this.seekOverlay.style.display = 'flex';
       this.seekTimeInput.focus();
 
-      // Update the slider and input to reflect the current video time
-      if (this.core.player && this.core.player.duration > 0) {
-        const { currentTime, duration } = this.core.player;
-        const progressPercent = (currentTime / duration) * 100;
+      // Update the slider and input to reflect the current video time. A live video's is how far
+      // back from its live point (see seekInputTime).
+      const range = this.liveRange();
+      this.seekHint.innerText = range ? 'A live video: how far back from live, in seconds (e.g., 95) or hours:minutes:seconds (e.g., 1:30:00). It goes back 12 hours at most.'
+        : 'Enter time in seconds (e.g., 95) or minutes:seconds (e.g., 1:35).';
+      if (this.core.player && this.trackLength() > 0) {
+        const p = this.core.player;
+        const currentTime = p.paused ? (Number(p.currentTime) || 0) : ((Date.now() / 1000) - this.clockSkew) - p.lastStartTime;
+        const progressPercent = this.barPercent(currentTime, range, this.trackLength());
         this.seekSliderProgress.style.width = `${progressPercent}%`;
         this.seekSliderThumb.style.left = `${progressPercent}%`;
-        this.seekTimeInput.value = this.timeCode(currentTime);
+        this.seekTimeInput.value = this.timeCode(range ? Math.max(0, range.end - currentTime) : currentTime);
       } else {
         // Reset slider and input if no video is playing
         this.seekSliderProgress.style.width = '0%';
@@ -1254,12 +1328,13 @@ var Playlist = class {
 
     // Clicking the slider updates the time input without seeking.
     this.seekSliderContainer.addEventListener('click', (event) => {
-      if (this.core.player && this.core.player.duration > 0) {
+      if (this.core.player && this.trackLength() > 0) {
         const sliderWidth = this.seekSliderContainer.clientWidth;
         const clickPosition = event.offsetX;
-        const seekRatio = clickPosition / sliderWidth;
-        const newTime = seekRatio * this.core.player.duration;
-        // Update the input field with the new time.
+        const seekRatio = Math.min(1, Math.max(0, clickPosition / sliderWidth));
+        const range = this.liveRange();
+        const newTime = range ? (1 - seekRatio) * (range.end - range.start) : seekRatio * this.trackLength();
+        // Update the input field with the new time (a live video's: how far back from live).
         this.seekTimeInput.value = this.timeCode(newTime);
         // Trigger the input event to update the slider's visual state.
         this.seekTimeInput.dispatchEvent(new Event('input'));
@@ -1273,7 +1348,7 @@ var Playlist = class {
     });
 
     this.submitSeekBtn.addEventListener('click', () => {
-      const timeInSeconds = this.parseTimeToSeconds(this.seekTimeInput.value);
+      const timeInSeconds = this.seekInputTime();
       if (timeInSeconds !== null) {
         this.core.sendMessage({ path: Commands.SET_TIME, data: timeInSeconds });
         closeSeekOverlay();
@@ -1291,10 +1366,10 @@ var Playlist = class {
 
     // Update the slider position as the user types in the input box.
     this.seekTimeInput.addEventListener('input', () => {
-      if (this.core.player && this.core.player.duration > 0) {
-        const timeInSeconds = this.parseTimeToSeconds(this.seekTimeInput.value);
+      if (this.core.player && this.trackLength() > 0) {
+        const timeInSeconds = this.seekInputTime();
         if (timeInSeconds !== null) {
-          const progressPercent = (timeInSeconds / this.core.player.duration) * 100;
+          const progressPercent = this.barPercent(timeInSeconds, this.liveRange(), this.trackLength());
           const clampedPercent = Math.max(0, Math.min(100, progressPercent));
           this.seekSliderProgress.style.width = `${clampedPercent}%`;
           this.seekSliderThumb.style.left = `${clampedPercent}%`;

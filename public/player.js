@@ -47,6 +47,13 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
 // the YouTube player is replaced with a new one, as reloading the page would.
 const STALL_CHECK_MS = 2000;
 const STALL_RELOAD_MS = 15000;
+// A live point report the server didn't take (it couldn't confirm the video is live) is sent again
+// this long after, up to this many times in all (see reportLivePosition). The server waits 20 s between checks.
+const LIVE_REPORT_RETRY_MS = 30000;
+// After a retry goes back to the live point, how long YouTube is given to get there before the
+// screen reports from it, if its PLAYING hasn't already.
+const LIVE_EDGE_SETTLE_MS = 3000;
+const LIVE_REPORT_TRIES = 3;
 const STALL_REBUILD_MS = 15000;
 const STALL_RETRY_MS = 60000; // after a new player, the wait before trying again from the start
 // YouTube errors that mean the video can't play here at all, so waiting or reloading won't help.
@@ -391,6 +398,33 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       if (event.data === YT.PlayerState.PLAYING) {
         this.applyCaptions(); // each new video loads with the player's caption default
         this.startPlaying();
+        const video = this.currentVideo;
+        // A video added without its length (YouTube refused the server's lookup): YouTube's player
+        // knows it, and the server takes it from the screen, so the track ends (see setMediaDuration).
+        if (video && !video.duration && !this.isLiveTrack(video)) {
+          // Only the track's own length: the player may still be on another video (the default one).
+          let length = 0;
+          try {
+            const data = this.yt.getVideoData();
+            if (data && data.video_id === this.core.getId(video.link)) length = this.yt.getDuration();
+          } catch (e) {}
+          if (length > 0) this.reportMediaDuration(video.link, length);
+        }
+        // A live video the server couldn't tell was live was loaded at the room's time, deep in
+        // its past: once YouTube says it's live, it goes to the live point, once per load, and
+        // reports where that is when it has got there.
+        if (video && !video.live && !this.previewVideo && this.liveJumped !== video.link && this.isLiveTrack(video)) {
+          this.liveJumped = video.link;
+          console.log('[PLAYER] This is a live video; going to its live point.');
+          this.seekLiveEdge();
+          clearTimeout(this.liveReportTimer);
+          this.liveReportTimer = setTimeout(() => this.reportLivePosition(), 3000);
+        } else {
+          this.reportLivePosition();
+        }
+        // Held for the room's start (holdStart): it has loaded, so it waits here at 0:00, paused at
+        // once rather than at the hold's next check. A live video isn't held (holdStart ends it).
+        if (this.holdTimer && this.holdLoaded && !this.isLiveTrack(video)) this.holdLoaded();
       } // The aggressive `playVideo()` call on non-playing states has been removed.
         // The auto-sync logic is the robust way to handle unexpected pauses or buffering
         // by correcting the resulting time drift.
@@ -440,6 +474,9 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         && !document.hidden && (!p.isYouTube || p.isYouTube()) && video.link !== this.unplayableLink;
       let t, state;
       try { t = p.getCurrentTime(); state = p.getPlayerState(); } catch (e) { t = null; }
+      // YouTube can answer undefined while it loads. Kept as the last time, nothing after it would
+      // count as moving, and a video playing fine would be reloaded again and again.
+      if (!Number.isFinite(t)) t = null;
       if (!watching || t === null || state === YT.PlayerState.ENDED) {
         s.lastTime = null; s.lastProgress = now; s.stage = 0;
         return;
@@ -461,7 +498,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         const at = this.worldTime();
         console.log(`[PLAYER] YouTube hasn't moved for ${Math.round(stalled / 1000)}s (at ${t.toFixed(1)}s, state ${state}), loading it again at ${at.toFixed(1)}s.`);
         this.core.showToast("YouTube stopped, reloading the video...");
-        p.loadVideoById(id, at);
+        p.loadVideoById(id, this.startAt(video, at));
         p.playVideo();
       } else if (s.stage === 1 && stalled > STALL_REBUILD_MS) {
         s.stage = 2; s.lastProgress = now;
@@ -473,7 +510,93 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       }
     }
 
-    /** Where the world's playing track is now, in seconds. */
+    /**
+     * Whether a track is streaming live: the server found it so, or YouTube's player says so of
+     * the video it has loaded (a link added while the server couldn't tell). Until the server
+     * knows where its live point is (liveStart, see reportLivePosition), a live video plays from
+     * its live point and isn't synced; after, the room's time is the stream's own, and it's synced
+     * like any video.
+     * @param {Object} [video] - The track.
+     * @returns {boolean}
+     */
+    isLiveTrack(video) {
+      if (!video) return false;
+      if (video.live) return true;
+      try {
+        const p = this.player;
+        if (!p || (p.isYouTube && !p.isYouTube())) return false;
+        const d = p.getVideoData && p.getVideoData();
+        return !!(d && d.isLive && d.video_id && d.video_id === this.core.getId(video.link));
+      } catch (e) {
+        return false;
+      }
+    }
+
+    /** A live video whose live point the server doesn't know yet: played live, not synced. */
+    liveUnsynced(video) {
+      return this.isLiveTrack(video) && !video.liveStart;
+    }
+
+    /**
+     * Where a track starts: `t`, or nothing, which YouTube opens a live video at its live point:
+     * a live video whose live point isn't known yet, or one just made current (t is near 0, the
+     * stream's start; the server moves the room to its live point, see tickAllInstances).
+     */
+    startAt(video, t) {
+      if (!this.isLiveTrack(video)) return t;
+      if (video.liveStart && t >= 10) return t;
+      this.livePending = video.link; // at the live point: reportLivePosition can say where that is
+      return undefined;
+    }
+
+    /** Puts a live YouTube video at its live point (its length so far). */
+    seekLiveEdge() {
+      try {
+        const end = this.yt && this.yt.getDuration();
+        if (end > 0) this.yt.seekTo(end, true);
+        if (this.currentVideo) this.livePending = this.currentVideo.link;
+      } catch (e) {}
+    }
+
+    /**
+     * Tells the server YouTube's position at a live video's live point, from a screen that is
+     * there (it opened the video there, or went there), once per load, until the server knows it.
+     */
+    reportLivePosition() {
+      const video = this.currentVideo;
+      if (!video || this.previewVideo || video.liveStart || this.livePending !== video.link || !this.isLiveTrack(video)) return;
+      // Only once YouTube has this video loaded: until then its time is the last video's. Still
+      // pending, so its PLAYING reports it.
+      let loaded = null;
+      try { const d = this.yt.getVideoData(); loaded = d && d.video_id; } catch (e) {}
+      if (loaded !== this.core.getId(video.link)) return;
+      let position = 0;
+      try { position = this.yt.getCurrentTime(); } catch (e) {}
+      if (!(position > 0)) return;
+      this.livePending = null;
+      console.log(`[PLAYER] Live point of ${video.link}: ${Math.round(position)}s into the stream.`);
+      this.core.sendMessage({ path: Commands.LIVE_POSITION, data: { link: video.link, position } });
+      // The server checks with YouTube first, which can fail: with no live point back, this screen
+      // reports again, LIVE_REPORT_TRIES times in all for this video, LIVE_REPORT_RETRY_MS apart.
+      if (this.liveReports && this.liveReports.link === video.link) this.liveReports.count++;
+      else this.liveReports = { link: video.link, count: 1 };
+      clearTimeout(this.liveRetryTimer);
+      if (this.liveReports.count < LIVE_REPORT_TRIES) {
+        this.liveRetryTimer = setTimeout(() => {
+          const v = this.currentVideo;
+          if (!v || v.link !== video.link || v.liveStart || this.previewVideo) return;
+          // Back to the live point first (the viewer may have skipped back meanwhile): its PLAYING
+          // reports from there, or this does once YouTube has had time to get there.
+          this.seekLiveEdge();
+          setTimeout(() => {
+            let state = null;
+            try { state = this.yt.getPlayerState(); } catch (e) {}
+            if (state === 1) this.reportLivePosition(); // paused, its time isn't the live point's now
+          }, LIVE_EDGE_SETTLE_MS);
+        }, LIVE_REPORT_RETRY_MS);
+      }
+    }
+
     worldTime() {
       const d = this.playerData;
       const live = (Date.now() / 1000) - (this.clockSkew || 0) - Number(d.lastStartTime);
@@ -492,6 +615,15 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       const parent = (oldFrame && oldFrame.parentNode) || document.getElementById('stage') || document.body;
       const el = document.createElement('div');
       Object.assign(el.style, { position: 'absolute', top: '0', left: '0', width: '100%', height: '100%', border: '0', visibility: 'hidden' });
+      // destroy() puts back the element a player replaced, so each is removed after it.
+      const destroy = player => {
+        let frame = null;
+        try { frame = player.getIframe(); } catch (e) {}
+        const next = frame && frame.nextSibling, parentNode = frame && frame.parentNode;
+        try { player.destroy(); } catch (e) {}
+        const back = parentNode && (next ? next.previousSibling : parentNode.lastChild);
+        if (back && back !== frame && back.tagName === 'DIV' && !back.childNodes.length) back.remove();
+      };
       parent.insertBefore(el, oldFrame ? oldFrame.nextSibling : parent.firstChild);
       const yt = this.pendingYt = new YT.Player(el, {
         height: window.innerHeight,
@@ -503,7 +635,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
           onReady: () => {
             if (this.pendingYt !== yt) return;
             this.pendingYt = null;
-            try { old.destroy(); } catch (e) {}
+            destroy(old);
             const frame = yt.getIframe();
             const left = document.getElementById('player'); // anything the old player left behind
             if (left && left !== frame) left.remove();
@@ -525,8 +657,8 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
             const d = this.playerData;
             const video = this.currentVideo;
             if (!video || !d) return;
-            if (d.paused) yt.cueVideoById(this.core.getId(video.link), Number(d.currentTime) || 0);
-            else yt.loadVideoById(this.core.getId(video.link), this.worldTime());
+            if (d.paused) yt.cueVideoById(this.core.getId(video.link), this.startAt(video, Number(d.currentTime) || 0));
+            else yt.loadVideoById(this.core.getId(video.link), this.startAt(video, this.worldTime()));
             console.log('[PLAYER] The new YouTube player is ready.');
           }
         }
@@ -536,7 +668,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         if (this.pendingYt !== yt) return;
         this.pendingYt = null;
         console.log('[PLAYER] The new YouTube player never got ready, keeping the old one.');
-        try { yt.destroy(); } catch (e) {}
+        destroy(yt);
       }, 20000);
     }
 
@@ -795,6 +927,56 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
           this.pendingTrackChange = json.data;
         }
         break;
+      case Commands.READY_START: {
+        // Every screen has loaded the new track (see holdStart), so the wait ends sooner.
+        const d = json.data;
+        if (!d || !this.playerData) break;
+        const track = this.playerData.playlist && this.playerData.playlist[this.playerData.currentTrack];
+        if (!track || track.link !== d.link || this.playerData.paused) break;
+        this.playerData.lastStartTime = d.newLastStartTime;
+        this.playerData.currentTime = d.newCurrentTime;
+        // Not applied yet (the player wasn't ready): it starts from these times when it is.
+        if (this.pendingTrackChange) {
+          this.pendingTrackChange.newLastStartTime = d.newLastStartTime;
+          this.pendingTrackChange.newCurrentTime = d.newCurrentTime;
+          break;
+        }
+        if (this.previewVideo) break;
+        const left = Math.max(0, -Number(d.newCurrentTime) || 0);
+        console.log(`[PLAYER] Every screen has loaded the track; starting in ${left.toFixed(1)}s.`);
+        if (this.holdTimer) this.holdUntil = Date.now() + left * 1000;
+        else if (left > 0) this.holdStart(left);
+        break;
+      }
+      case Commands.LIVE_POSITION:
+        // The live video's live point is known: the room's time is the stream's own from now on,
+        // and this screen is synced to it (it's at the live point already, or goes there).
+        if (this.holdTimer) this.endHold(); // not a start to wait for: the live point
+        if (this.playerData && json.data) {
+          // Paused too: the held time is moved into the stream's time (see the server's setLivePosition).
+          this.playerData.lastStartTime = json.data.newLastStartTime;
+          this.playerData.currentTime = json.data.newCurrentTime;
+          [...(this.playerData.playlist || []), this.currentVideo].forEach(v => {
+            if (v && v.link === json.data.link) { v.live = true; v.liveStart = json.data.liveStart; }
+          });
+          // A track change not applied yet (the player wasn't ready) starts at the live point too,
+          // not at the times it came with.
+          const pending = this.pendingTrackChange;
+          if (pending) {
+            const list = pending.playlist || this.playerData.playlist || [];
+            const link = (pending.track && pending.track.link) || (list[pending.newTrackIndex] || {}).link;
+            if (link === json.data.link) {
+              // Its own copies of the track get the live details, as applyTrackChange plays from them.
+              [pending.track, list[pending.newTrackIndex]].forEach(v => {
+                if (v && v.link === json.data.link) { v.live = true; v.liveStart = json.data.liveStart; }
+              });
+              pending.newLastStartTime = json.data.newLastStartTime;
+              pending.newCurrentTime = json.data.newCurrentTime;
+            }
+          }
+          if (this.currentVideo && this.currentVideo.link === json.data.link && !this.previewVideo && !this.playerData.paused) this.syncAfterLoad();
+        }
+        break;
       case Commands.HOST_SEEK:
         // A seek during a countdown ends it, or its timer would pause and rewind the seek.
         if (this.holdTimer) {
@@ -852,6 +1034,12 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
             try { this.player.seekTo(0); } catch (e) {}
             this.holdStart(-Number(currentTime));
             this.core.showToast("Host resumed playback.");
+          } else if (this.liveUnsynced(this.currentVideo)) {
+            // A live video with no known live point resumes live, not where it was paused.
+            console.log("[PLAYER] Resuming a live video at its live point");
+            this.seekLiveEdge();
+            this.player.playVideo();
+            this.core.showToast("Host resumed playback.");
           } else {
             console.log("[PLAYER] Resuming YouTube at", currentTime);
             // Everyone goes to the point the host resumed at (whatever they skipped to while
@@ -885,8 +1073,14 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       case Commands.SYNC_TIME:
         this.currentTime = json.data.currentTime;
         if (this.previewVideo) break;
-        // A live stream (Twitch channel, live .m3u8) has no shared position to keep in sync.
-        if (this.player && this.player.isLive && this.player.isLive()) break;
+        // A live stream (Twitch channel, live .m3u8, live YouTube video) has no shared position
+        // to keep in sync: each screen plays it live.
+        if (this.player && ((this.player.isLive && this.player.isLive()) || this.liveUnsynced(this.currentVideo))) {
+          this.isResumingFromPassthrough = false;
+          this.resumeSyncPending = false;
+          this.startSyncPasses = 0;
+          break;
+        }
         if(this.player && this.readyToPlay) {
           // Calculate latency on-the-fly from the echoed timestamp
           const roundTripTime = Date.now() - json.data.clientTimestamp;
@@ -1198,20 +1392,42 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
      */
     holdStart(seconds) {
       clearTimeout(this.resumeSyncTimer);
-      const until = Date.now() + seconds * 1000;
+      this.holdUntil = Date.now() + seconds * 1000;
       console.log(`[PLAYER] Holding the new track for ${seconds.toFixed(1)}s so everyone starts together.`);
       let shown = 0;
       const video = this.currentVideo || {};
-      this.showCountdown(null, video.user && video.user.name, video.title);
-      try { this.player.pauseVideo(); } catch (e) {}
+      // Karaoke counts down over the whole screen; a playlist track just waits at its first frame.
+      const countdown = this.core.isKaraoke === true;
+      if (countdown) this.showCountdown(null, video.user && video.user.name, video.title);
+      // Told once, when this screen has loaded the track: the room starts it when every screen has
+      // (see App.holdForReady). Karaoke's countdown doesn't wait for it, which does no harm.
+      let readySent = false;
+      const ready = () => {
+        if (readySent || !video.link) return;
+        readySent = true;
+        this.core.sendMessage({ path: Commands.TRACK_READY, data: { link: video.link } });
+      };
+      // Held at its start once it plays (see onYouTubeState, and below). A video that hasn't
+      // started loading is left to load: paused then, YouTube may never load it at all.
+      this.holdLoaded = () => {
+        try {
+          this.player.pauseVideo();
+          if (this.player.getCurrentTime() > 0.2) this.player.seekTo(0);
+        } catch (e) {}
+        ready();
+      };
+      try { if (this.player.getPlayerState() === YT.PlayerState.PLAYING) this.holdLoaded(); } catch (e) {}
       clearInterval(this.holdTimer);
       this.holdTimer = setInterval(() => {
         const paused = this.playerData && this.playerData.paused;
-        if (Date.now() >= until || this.previewVideo || paused) {
-          clearInterval(this.holdTimer);
-          this.holdTimer = null;
-          this.hideCountdown();
+        // A live video the server didn't know was live goes to its live point instead (see
+        // onYouTubeState), so it isn't held at its start.
+        let live = false;
+        try { live = this.isLiveTrack(video); } catch (e) {}
+        if (Date.now() >= this.holdUntil || this.previewVideo || paused || live) {
+          this.endHold();
           if (this.previewVideo || paused) return;
+          if (live) { ready(); try { this.player.playVideo(); } catch (e) {} return; }
           let state;
           try { state = this.player.getPlayerState(); } catch (e) {}
           console.log(`[PLAYER] Countdown over, playing (the player's state was ${state}).`);
@@ -1220,15 +1436,41 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
           return;
         }
         // A new number each second, over the whole screen.
-        const left = Math.ceil((until - Date.now()) / 1000);
-        if (left !== shown) { shown = left; this.showCountdown(left); }
+        const left = Math.ceil((this.holdUntil - Date.now()) / 1000);
+        if (countdown && left !== shown) { shown = left; this.showCountdown(left); }
         try {
-          if (this.player.getPlayerState() === YT.PlayerState.PLAYING) {
-            this.player.pauseVideo();
-            if (this.player.getCurrentTime() > 0.2) this.player.seekTo(0);
+          const state = this.player.getPlayerState();
+          if (state === YT.PlayerState.PLAYING) {
+            // It has loaded enough to play: held here until the start.
+            this.holdLoaded();
+          } else if (state === YT.PlayerState.PAUSED && this.loadedSome()) {
+            ready();
           }
         } catch (e) {}
       }, 150);
+    }
+
+    /** Ends a hold (holdStart) without playing. */
+    endHold() {
+      clearInterval(this.holdTimer);
+      this.holdTimer = null;
+      this.holdLoaded = null;
+      this.hideCountdown();
+    }
+
+    /**
+     * Whether the paused track has some of itself loaded, so it can start at once. A YouTube
+     * video says how much; another source, paused by the hold, has loaded its start.
+     * @returns {boolean}
+     */
+    loadedSome() {
+      try {
+        if (this.player.isYouTube && !this.player.isYouTube()) return true;
+        const yt = this.yt || this.player;
+        return typeof yt.getVideoLoadedFraction === 'function' && yt.getVideoLoadedFraction() > 0 && yt.getDuration() > 0;
+      } catch (e) {
+        return false;
+      }
     }
 
     /**
@@ -1394,8 +1636,10 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
           return;
         }
         if(this.lastUrl !== video.link || force) {
-          if (this.player.loadMedia) this.player.loadMedia(video.link, currentTime);
-          else this.player.loadVideoById(this.core.getId(video.link), currentTime);
+          const start = this.startAt(video, currentTime);
+          this.liveJumped = null; // see onYouTubeState
+          if (this.player.loadMedia) this.player.loadMedia(video.link, start);
+          else this.player.loadVideoById(this.core.getId(video.link), start);
           if (this.playerData.paused) {
             this.player.pauseVideo();
           } else {

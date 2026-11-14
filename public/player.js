@@ -944,10 +944,9 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         // and this screen is synced to it (it's at the live point already, or goes there).
         if (this.holdTimer) this.endHold(); // not a start to wait for: the live point
         if (this.playerData && json.data) {
-          if (!this.playerData.paused) {
-            this.playerData.lastStartTime = json.data.newLastStartTime;
-            this.playerData.currentTime = json.data.newCurrentTime;
-          }
+          // Paused too: the held time is moved into the stream's time (see the server's setLivePosition).
+          this.playerData.lastStartTime = json.data.newLastStartTime;
+          this.playerData.currentTime = json.data.newCurrentTime;
           [...(this.playerData.playlist || []), this.currentVideo].forEach(v => {
             if (v && v.link === json.data.link) { v.live = true; v.liveStart = json.data.liveStart; }
           });
@@ -957,16 +956,13 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
           if (pending) {
             const list = pending.playlist || this.playerData.playlist || [];
             const link = (pending.track && pending.track.link) || (list[pending.newTrackIndex] || {}).link;
-            const paused = typeof pending.paused === 'boolean' ? pending.paused : this.playerData.paused;
             if (link === json.data.link) {
               // Its own copies of the track get the live details, as applyTrackChange plays from them.
               [pending.track, list[pending.newTrackIndex]].forEach(v => {
                 if (v && v.link === json.data.link) { v.live = true; v.liveStart = json.data.liveStart; }
               });
-              if (!paused) {
-                pending.newLastStartTime = json.data.newLastStartTime;
-                pending.newCurrentTime = json.data.newCurrentTime;
-              }
+              pending.newLastStartTime = json.data.newLastStartTime;
+              pending.newCurrentTime = json.data.newCurrentTime;
             }
           }
           if (this.currentVideo && this.currentVideo.link === json.data.link && !this.previewVideo && !this.playerData.paused) this.syncAfterLoad();

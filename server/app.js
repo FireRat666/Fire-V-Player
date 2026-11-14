@@ -890,6 +890,10 @@ class App {
    */
   holdForReady(player) {
     player.readyGate = null;
+    // A track start, even of the same track again: the next tick takes a live one to its live
+    // point (see tickAllInstances), and a seek made before it no longer counts.
+    player.liveTrack = null;
+    player.seekedTrack = null;
     if (player.isKaraoke || player.paused) return;
     const track = player.playlist[player.currentTrack];
     if (!track || track.live) return;
@@ -963,10 +967,16 @@ class App {
     const position = data && Number(data.position);
     // A 24/7 stream can be months in: YouTube put one at 86 days. 10 years only keeps out nonsense.
     if (!player || !data || typeof data.link !== 'string' || !(position > 0 && position < 10 * 365 * 24 * 3600)) return;
+    // It sets the room's time for everyone, so only a screen of someone not blocked reports it
+    // (YouTube saying the video is live says nothing about the position). The blacklist drops a
+    // blocked person's report already; this is in case it's let through.
+    if (ws.type !== 'player' || !ws.u || this.blacklist.has(ws.u.id)) return;
     const track = player.playlist[player.currentTrack];
     if (!track || track.link !== data.link || !this.getYoutubeId(track.link) || track.duration || track.liveStart) return;
-    // The position is YouTube's as the report came: the time is taken before YouTube is asked.
+    // The position is YouTube's as the report came: the time is taken before YouTube is asked,
+    // as is the room's time then, which that position is (to move a paused room's held time).
     const now = new Date().getTime() / 1000;
+    const roomAt = player.paused ? (player.currentTime || 0) : now - player.lastStartTime;
     // A screen's say-so doesn't make a track live: YouTube is asked. A no (or no answer) is asked
     // again on a later report, LIVE_CHECK_GAP_S apart and LIVE_CHECK_TRIES times in all.
     if (!track.live) {
@@ -995,6 +1005,12 @@ class App {
     if (!player.paused) {
       player.lastStartTime = track.liveStart;
       player.currentTime = new Date().getTime() / 1000 - track.liveStart;
+    } else {
+      // Paused, it stays paused, at the same point in the stream's time: its held time moves by
+      // as much as the report's position is from the room's time then, so a resume (togglePause)
+      // goes on from there and not from near the stream's start.
+      player.currentTime = Math.max(0, (player.currentTime || 0) + position - roomAt);
+      player.lastStartTime = new Date().getTime() / 1000 - player.currentTime;
     }
     player.sockets.forEach(socket => {
       this.send(socket, Commands.LIVE_POSITION, {
@@ -1181,6 +1197,7 @@ class App {
         const track = player.playlist[player.currentTrack];
         // Not the first tick of a room just loaded, whose saved time is already right, nor a track
         // the host has seeked in since it was made current (see hostHandler's seekedTrack).
+        // A start of the same track again clears liveTrack (see holdForReady), so it counts too.
         if (track !== player.liveTrack) {
           const changed = player.liveTrack !== undefined;
           const seeked = player.seekedTrack === track;

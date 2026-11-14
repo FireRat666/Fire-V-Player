@@ -924,6 +924,16 @@ var Core = class {
         || !!(data && /Android/i.test(data.platform || ''));
     } catch (e) { return false; }
   }
+  // A standalone headset (Quest, Pico), not a phone. The Quest app's browser gives a Windows user
+  // agent on an ARM Linux platform, which no phone does: a phone says Android or Mobile.
+  isStandaloneHeadset() {
+    try {
+      const ua = navigator.userAgent || '';
+      if (/Quest|OculusBrowser|Pico/i.test(ua)) return true;
+      const data = navigator.userAgentData;
+      return !/Android|Mobile/i.test(ua) && (/aarch64|arm/i.test(navigator.platform || '') || !!(data && /Android/i.test(data.platform || '')));
+    } catch (e) { return false; }
+  }
   // The highest resolution a viewer can pick for themselves on this device (the snippet's own
   // `resolution` still goes up to SCREEN_MAX_RESOLUTION for everyone).
   viewerMaxResolution() { return this.isStandaloneDevice() ? SCREEN_STANDALONE_MAX_RESOLUTION : SCREEN_MAX_RESOLUTION; }
@@ -2139,8 +2149,8 @@ var Core = class {
   // The snippet's hand-controls-place is the default; "auto" is the left wrist in VR and the big view corner
   // on desktop, where the hands can't be turned to see the buttons.
   async isVR() {
-    // A standalone headset is always in VR, whatever the client says or doesn't.
-    if (this.isStandaloneDevice()) return true;
+    // A standalone headset is always in VR, whatever the client says or doesn't. A phone asks the client.
+    if (this.isStandaloneHeadset()) return true;
     if (this.vrCheck === undefined) {
       const scene = this.banterScene();
       this.vrCheck = (async () => {

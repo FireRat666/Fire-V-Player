@@ -36,15 +36,18 @@ var HAND_COLLAPSED_PREF_KEY = 'fire-v-player-hand-collapsed';
 // rotation are in that attachment's own Unity axes. On a hand, -X is the back of the left hand
 // (+X the right's) and Z runs toward the fingers. "front" isn't attached: it's put in the world
 // in front of the player when chosen.
+// desktop: false and vr: false leave a place out for viewers who couldn't see it there: a wrist
+// on desktop, where the hands can't be turned to look at, and a corner of the window in VR, which
+// a headset has no edges for (see handPlaceFits).
 var HAND_PLACES = {
-  left: { label: 'Left Wrist', attach: 2, position: [0, 0.046, 0.07], rotation: [0, 90, 180], scale: 0.1 },
-  right: { label: 'Right Wrist', attach: 3, position: [0, 0.046, 0.07], rotation: [0, 270, 180], scale: 0.1 },
+  left: { label: 'Left Wrist', attach: 2, position: [0, 0.046, 0.07], rotation: [0, 90, 180], scale: 0.1, desktop: false },
+  right: { label: 'Right Wrist', attach: 3, position: [0, 0.046, 0.07], rotation: [0, 270, 180], scale: 0.1, desktop: false },
   // The bottom right of what the player sees, for desktop players, whose hands don't turn.
   view: { label: 'In View', attach: 0, position: [0.2, -0.16, 0.5], rotation: [0, 0, 0], scale: 0.1 },
   // The bottom right corner of a desktop window (16:10 or wider): big (the desktop default), or
   // small and out of the way. Both keep the same right and bottom edges.
-  'big-corner': { label: 'Big View Corner', attach: 0, position: [0.565, -0.34, 0.5], rotation: [0, 0, 0], scale: 0.12 },
-  corner: { label: 'View Corner', attach: 0, position: [0.6, -0.35, 0.5], rotation: [0, 0, 0], scale: 0.075 },
+  'big-corner': { label: 'Big View Corner', attach: 0, position: [0.565, -0.34, 0.5], rotation: [0, 0, 0], scale: 0.12, vr: false },
+  corner: { label: 'View Corner', attach: 0, position: [0.6, -0.35, 0.5], rotation: [0, 0, 0], scale: 0.075, vr: false },
   front: { label: 'In Front', scale: 0.15 },
   off: { label: 'Off' }
 };
@@ -2136,6 +2139,8 @@ var Core = class {
   // The snippet's hand-controls-place is the default; "auto" is the left wrist in VR and the big view corner
   // on desktop, where the hands can't be turned to see the buttons.
   async isVR() {
+    // A standalone headset is always in VR, whatever the client says or doesn't.
+    if (this.isStandaloneDevice()) return true;
     if (this.vrCheck === undefined) {
       const scene = this.banterScene();
       this.vrCheck = (async () => {
@@ -2161,14 +2166,28 @@ var Core = class {
     const p = String(this.params['hand-controls-place'] || 'auto').trim().toLowerCase();
     return HAND_PLACES[p] ? p : 'auto';
   }
+  // Whether a place can be seen by this kind of viewer (see HAND_PLACES).
+  handPlaceFits(place, vr) {
+    const p = HAND_PLACES[place];
+    return !!p && (vr ? p.vr !== false : p.desktop !== false);
+  }
+  // The places this viewer can choose, in the panel button's order. A client that doesn't say
+  // whether it's in VR is taken to be (see isVR).
+  async handPlaces() {
+    const vr = await this.isVR();
+    return Object.keys(HAND_PLACES).filter(p => this.handPlaceFits(p, vr));
+  }
   async handPlace() {
     const choice = this.handPlaceChoice();
-    if (choice !== 'auto') return choice;
-    return (await this.isVR()) ? 'left' : 'big-corner';
+    const vr = await this.isVR();
+    // A choice this viewer can't see (the snippet's, or one saved on desktop and now in VR) is
+    // the default for them instead.
+    if (choice !== 'auto' && this.handPlaceFits(choice, vr)) return choice;
+    return vr ? 'left' : 'big-corner';
   }
-  // Steps to the next place, remembered on this device, and moves the buttons there.
+  // Steps to the next place this viewer can see, remembered on this device, and moves the buttons there.
   async nextHandPlace() {
-    const order = Object.keys(HAND_PLACES);
+    const order = await this.handPlaces();
     const now = this.currentHandPlace || await this.handPlace();
     this.setHandPlace(order[(order.indexOf(now) + 1) % order.length]);
   }
@@ -2473,6 +2492,7 @@ var Core = class {
     this.setOrDefault("hand-controls", 'false');
     // Where the hand buttons start: auto (left wrist in VR, big view corner on desktop), left, right,
     // view, big-corner, corner, front or off. Each viewer can choose another in the panel (HAND_PLACES).
+    // The wrists are for VR and the corners for desktop: a place the viewer can't see is auto for them.
     this.setOrDefault("hand-controls-place", 'auto');
     // Fine-tunes where the hand buttons sit on the wrist, in the left hand's own Unity axes
     // (mirrored for the right): "x y z" metres and "x y z" degrees. Empty uses the built-in layout.

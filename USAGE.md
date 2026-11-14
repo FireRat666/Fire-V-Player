@@ -197,15 +197,17 @@ Whoever runs the karaoke should take over the player first, as only the host can
 
 With `hand-controls="true"`, each player gets seven buttons that go with them: mute, volume down and up, reload (see [Reloading your screen](#reloading-your-screen)), skip back and forward, and the Playlist (or Singers) panel. **☰ > ☚** (hand controls) in the panel moves them, one place per click, and your choice is remembered on your device:
 
-- **Left Wrist**: on the back of the left wrist (the default in VR).
-- **Right Wrist**: the same on the right wrist, for when another menu is on your left hand.
+- **Left Wrist**: on the back of the left wrist (the default in VR). VR only.
+- **Right Wrist**: the same on the right wrist, for when another menu is on your left hand. VR only.
 - **In View**: at the bottom right of what you see, wherever you look.
-- **Big View Corner**: big, in the bottom right corner of what you see (the default on desktop, where you can't turn your hand to see the buttons).
-- **View Corner**: the same corner, but smaller and out of the way.
+- **Big View Corner**: big, in the bottom right corner of your window (the default on desktop, where you can't turn your hand to see the buttons). Desktop only.
+- **View Corner**: the same corner, but smaller and out of the way. Desktop only.
 - **In Front**: left in the world just in front of you, facing you. Choose it again later to bring them to where you are now.
 - **Off**: no hand buttons.
 
-`hand-controls-place` sets where they start for players who haven't chosen.
+The button only offers the places you can see: in VR the wrists but not the window's corners, which a headset has no edges for, and on desktop the corners but not the wrists. A client that doesn't say whether it's in VR gets the VR places, as does a standalone headset (Quest, Pico) whatever it says.
+
+`hand-controls-place` sets where they start for players who haven't chosen. A place a player can't see starts them at the default for their device instead.
 
 The volume buttons are on the top row and Reload is at the far end of the bottom row, so reaching for the volume doesn't reload your screen. The orange button on the left folds the others away, leaving just that one button, and brings them back. Folded or not is remembered on your device.
 
@@ -430,7 +432,7 @@ Whether the sound gets quieter with distance is the separate `spatial` setting, 
 | Attribute | Description | Default Value |
 | :--- | :--- | :--- |
 | `hand-controls` | Set to `true` to give each player seven buttons: mute, volume down and up, reload (your screen only), skip back and forward (your player only), and the Playlist / Singers panel, which opens in front of you. They start on the back of the left wrist in VR and at the bottom right of the view on desktop, and each player can move them (see [Hand controls](#hand-controls)). They come back if you leave and rejoin the space. | `false` |
-| `hand-controls-place` | Where the hand buttons start, until a player picks somewhere else: `auto` (left wrist in VR, big view corner on desktop), `left`, `right`, `view`, `big-corner`, `corner`, `front` or `off`. | `auto` |
+| `hand-controls-place` | Where the hand buttons start, until a player picks somewhere else: `auto` (left wrist in VR, big view corner on desktop), `left`, `right`, `view`, `big-corner`, `corner`, `front` or `off`. The wrists are only for VR and the corners only for desktop: a player who can't see the place starts at their own default. | `auto` |
 | `hand-controls-position` | Moves the hand buttons on the wrist: `x y z` in metres, in the left hand's own Unity axes (mirrored on the right hand) (not converted, in a snippet or a script tag). Empty uses the built-in layout. `z` slides them along the hand, away from the wrist toward the fingers (bigger) or toward the wrist (smaller); `x` lifts them off the back of the hand (more negative). | `0 0.046 0.07` |
 | `hand-controls-rotation` | Turns the hand buttons on the wrist: `x y z` in degrees, in the left hand's own Unity axes (mirrored on the right hand). For example add `180` to `y` if they face into the wrist, add `180` to `z` if they're upside down, or change `z` by `90` to turn them on the wrist. | `0 90 180` |
 | `button-position` | The `x y z` position of the in-world UI buttons, relative to the player screen. | `0 0 0` |

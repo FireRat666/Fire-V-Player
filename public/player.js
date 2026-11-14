@@ -395,8 +395,12 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         // A video added without its length (YouTube refused the server's lookup): YouTube's player
         // knows it, and the server takes it from the screen, so the track ends (see setMediaDuration).
         if (video && !video.duration && !this.isLiveTrack(video)) {
+          // Only the track's own length: the player may still be on another video (the default one).
           let length = 0;
-          try { length = this.yt.getDuration(); } catch (e) {}
+          try {
+            const data = this.yt.getVideoData();
+            if (data && data.video_id === this.core.getId(video.link)) length = this.yt.getDuration();
+          } catch (e) {}
           if (length > 0) this.reportMediaDuration(video.link, length);
         }
         // A live video the server couldn't tell was live was loaded at the room's time, deep in

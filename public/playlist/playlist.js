@@ -249,6 +249,17 @@ var Playlist = class {
           }
         }
         break;
+      case Commands.LIVE_POSITION:
+        // A live video's live point is known: the room's time is now the stream's own (see core.liveEnd).
+        if (this.core.player && json.data) {
+          this.core.player.lastStartTime = json.data.newLastStartTime;
+          this.core.player.currentTime = json.data.newCurrentTime;
+          (this.core.player.playlist || []).forEach(v => {
+            if (v.link === json.data.link) { v.live = true; v.liveStart = json.data.liveStart; }
+          });
+          this.startUiUpdater();
+        }
+        break;
       case Commands.SHOW_REPLACE_PROMPT:
         // By cloning the alternative video object, we prevent it from being accidentally
         // mutated if the same video appears in a later search result. This is a defensive
@@ -857,8 +868,12 @@ var Playlist = class {
 
     return totalSeconds;
   }
+  // h:mm:ss, with as many hours as it has: a live stream can be months in.
   timeCode(seconds) {
-    return new Date(seconds * 1000).toISOString().substring(11, 19);
+    seconds = Math.max(0, Math.floor(Number(seconds) || 0));
+    const h = Math.floor(seconds / 3600), m = Math.floor((seconds % 3600) / 60), s = seconds % 60;
+    const pad = n => String(n).padStart(2, '0');
+    return `${pad(h)}:${pad(m)}:${pad(s)}`;
   }
   // A track's length, or --:-- when it isn't known (some files).
   durationCode(seconds) {

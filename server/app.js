@@ -98,7 +98,11 @@ class App {
           title: video.title,
           duration: video.duration,
           link: video.link,
-          userId: video.user ? video.user.id : null
+          userId: video.user ? video.user.id : null,
+          // A live video, and where its stream's position 0 was (see setLivePosition), so the
+          // room's saved time still means the same point in it.
+          ...(video.live ? { live: true } : {}),
+          ...(video.live && video.liveStart ? { liveStart: video.liveStart } : {})
         };
       });
       const leanPlaylist = lean(player.playlist);

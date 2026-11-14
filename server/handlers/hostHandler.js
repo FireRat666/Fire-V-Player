@@ -194,6 +194,23 @@ function trackEnd(player, now) {
   return (track.duration || 0) / 1000;
 }
 
+/**
+ * How far back a live YouTube video goes: YouTube keeps only its last 12 hours, so a seek before
+ * that plays from the oldest point it has, on every screen alike, and not where the room says.
+ * The same as LIVE_WINDOW_S in public/core.js.
+ */
+const LIVE_WINDOW_S = 12 * 3600;
+
+/**
+ * The earliest point the current track can be at, in seconds: 0, or for a live video whose live
+ * point is known, LIVE_WINDOW_S before its live point.
+ */
+function trackStart(player, now) {
+  const track = player.playlist[player.currentTrack] || {};
+  if (track.live && track.liveStart) return Math.max(0, trackEnd(player, now) - LIVE_WINDOW_S);
+  return 0;
+}
+
 async function hostSkip(app, ws, isForward) {
   app.onlyIfHost(ws, async () => {
     const player = app.videoPlayers[ws.i];
@@ -207,10 +224,11 @@ async function hostSkip(app, ws, isForward) {
     const oldTime = player.paused ? (player.currentTime || 0) : now - player.lastStartTime;
     let newCurrentTime;
     const end = trackEnd(player, now);
+    const start = trackStart(player, now);
     const track = player.playlist[player.currentTrack] || {};
     if (player.paused) {
       // Paused stays paused, at the new point (the time is held in currentTime while paused).
-      newCurrentTime = Math.max(0, (player.currentTime || 0) + delta);
+      newCurrentTime = Math.max(start, (player.currentTime || 0) + delta);
       if (end > 0) newCurrentTime = Math.min(newCurrentTime, end);
       player.lastStartTime = now - newCurrentTime;
     } else {
@@ -221,6 +239,11 @@ async function hostSkip(app, ws, isForward) {
       if (track.live && end > 0 && newCurrentTime > end) {
         newCurrentTime = end;
         player.lastStartTime = now - end;
+      }
+      // Nor further back than YouTube keeps of it.
+      if (newCurrentTime < start) {
+        newCurrentTime = start;
+        player.lastStartTime = now - start;
       }
     }
     player.currentTime = newCurrentTime; // Keep server state consistent.
@@ -385,11 +408,12 @@ async function setVideoTime(app, ws, time) {
 
     const now = new Date().getTime() / 1000;
     // Clamp the time to be within the video's duration (when it's known: a file may not have
-    // one), or a live video's live point.
+    // one), or for a live video between the oldest point YouTube keeps and the live point (Go Live
+    // sends a time past it, to land on it).
     const trackDuration = trackEnd(player, now);
     const t = Number(time);
     if (!Number.isFinite(t)) return;
-    const newTime = Math.max(0, trackDuration > 0 ? Math.min(t, trackDuration) : t);
+    const newTime = Math.max(trackStart(player, now), trackDuration > 0 ? Math.min(t, trackDuration) : t);
 
     const oldTime = player.paused ? (player.currentTime || 0) : now - player.lastStartTime;
     player.lastStartTime = now - newTime;
@@ -465,6 +489,8 @@ async function togglePause(app, ws) {
     if (player.paused) {
       player.currentTime = now - player.lastStartTime;
     } else {
+      // A live video paused for long may have fallen out of what YouTube keeps: it goes on from the oldest point.
+      player.currentTime = Math.max(trackStart(player, now), player.currentTime || 0);
       player.lastStartTime = now - player.currentTime;
     }
 

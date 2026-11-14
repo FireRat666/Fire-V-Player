@@ -31,7 +31,7 @@
               <div class="button teal" id="localSkipBack">&lt;&lt;</div><div class="button teal" id="localSkipForward">&gt;&gt;</div>
             </div>
             <div class="dropdown-button-row">
-              <div class="button teal" id="skipBackwards" style="display: none;">Host &lt;&lt;</div><div class="button teal" id="skipForward" style="display: none;">Host &gt;&gt;</div>
+              <div class="button teal" id="skipBackwards" style="display: none;">Host &lt;&lt;</div><div class="button teal" id="skipForward" style="display: none;">Host &gt;&gt;</div><div class="button red" id="go-live-btn" style="display: none; white-space: nowrap;">Go Live</div>
             </div>
             <div class="dropdown-button-row">
               <div class="button teal" id="seek-video-btn" style="display: none;">Seek Video</div>
@@ -127,7 +127,7 @@
     <div id="seek-overlay" class="search-overlay" style="display: none;">
       <div class="search-overlay-box">
         <h3 style="margin-top: 0; margin-bottom: 0; text-align: center; color: #ccc;">Seek to Time</h3>
-        <div style="text-align: center; font-size: 0.9em; color: #ccc;">Enter time in seconds (e.g., 95) or minutes:seconds (e.g., 1:35).</div>
+        <div id="seek-hint" style="text-align: center; font-size: 0.9em; color: #ccc;">Enter time in seconds (e.g., 95) or minutes:seconds (e.g., 1:35).</div>
         <!-- The new clickable seek slider -->
         <div id="seek-slider-container">
           <div id="seek-slider-progress"></div>

@@ -6,6 +6,10 @@ var ADMIN_STATE_KEY = 'fire-v-player-admin';
 // While blacklisted, how often the full volume is put back (in case the page reloaded).
 var BLOCKED_VOLUME_MS = 5000;
 var CAPTIONS_PREF_KEY = 'fire-v-player-captions';
+// A live YouTube video goes back only 12 hours (the server keeps seeks inside it, see hostHandler's
+// LIVE_WINDOW_S), and within LIVE_NEAR_S of its live point it counts as at it.
+var LIVE_WINDOW_S = 12 * 3600;
+var LIVE_NEAR_S = 15;
 // SDK layers: clicks only reach colliders on UI (5). UserLayer9 (13) is ignored by teleport, the
 // grapple and the ground, but players still touch it, which is what a trigger zone needs.
 var LAYER_UI = 5;
@@ -2942,6 +2946,26 @@ var Core = class {
     const v = p && p.playlist && p.playlist[p.currentTrack];
     return v && v.live && v.liveStart ? Math.max(0, serverNow - v.liveStart) : 0;
   }
+  /**
+   * The part of the current live video a seek can reach: from LIVE_WINDOW_S before its live point
+   * (or its start) to the live point. Null when it isn't a live video whose live point is known.
+   * @param {number} serverNow - The server's clock now (seconds), as the caller reckons it.
+   * @returns {{start: number, end: number}|null}
+   */
+  liveRange(serverNow) {
+    const end = this.liveEnd(serverNow);
+    return end > 0 ? { start: Math.max(0, end - LIVE_WINDOW_S), end } : null;
+  }
+  /**
+   * A live video's time as how far behind its live point it is: "LIVE" at the live point, else
+   * "-1:23:45 / LIVE" (in the caller's timeCode). Months into a stream, its own time means nothing.
+   */
+  liveTimeText(t, range, timeCode) {
+    const behind = range.end - t;
+    return behind < LIVE_NEAR_S ? 'LIVE' : `-${timeCode(behind)} / LIVE`;
+  }
+  /** Whether a live video's time is at its live point (see liveTimeText). */
+  atLivePoint(t, range) { return !!range && range.end - t < LIVE_NEAR_S; }
   // Passes a message to the panel and the other listeners, as if it came from the server.
   notifyListeners(json) {
     if (this.messageListeners) {

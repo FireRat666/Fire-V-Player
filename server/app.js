@@ -837,9 +837,11 @@ class App {
     // Under a second is a player that hadn't loaded it yet, not a length: the track would end at once.
     if (!player || !data || typeof data.link !== 'string' || !(seconds >= MIN_MEDIA_DURATION_S && seconds < 24 * 3600)) return;
     // Only a screen, for the track it's playing (as it reports it, see player.js reportMediaDuration):
-    // the length ends the track for everyone.
+    // the length ends the track for everyone. That's the browser's screen, or for a file the world's
+    // own video player, whose report comes over the space page's socket (native-video.js reportDuration).
     const playing = player.playlist[player.currentTrack];
-    if (ws.type !== 'player' || !playing || playing.link !== data.link) return;
+    const screen = ws.type === 'player' || (ws.type === 'space' && data.native === true);
+    if (!screen || !playing || playing.link !== data.link) return;
     // A YouTube video's length normally comes with it from YouTube. One looked up while YouTube
     // refused the server (oEmbed has no lengths) gets it from the screen, so it ends. A live
     // video has none, and plays until someone moves on.

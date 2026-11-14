@@ -267,7 +267,8 @@ var FireNativeScreen = (() => {
       this.durationReported = true;
       const track = this.currentTrack();
       if (track && track.link === this.link && !track.duration) {
-        this.core.sendMessage({ path: Commands.MEDIA_DURATION, data: { link: this.link, duration: d } });
+        // native: from the world's video player, over the space page's socket (see the server's setMediaDuration).
+        this.core.sendMessage({ path: Commands.MEDIA_DURATION, data: { link: this.link, duration: d, native: true } });
       }
     }
 

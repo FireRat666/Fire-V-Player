@@ -939,6 +939,8 @@ class App {
         link: track.link, newLastStartTime: player.lastStartTime, newCurrentTime: player.currentTime
       });
     });
+    // The saved start was the wait's end (see holdForReady), so a restart would be that far out.
+    this.savePlayerState(instanceId).catch(e => console.error(`[READY] Could not save ${instanceId}:`, e));
   }
 
   /**

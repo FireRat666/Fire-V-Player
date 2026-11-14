@@ -43,6 +43,8 @@ const READY_DELAY_MAX_S = 15;
 const READY_LEAD_S = 0.3;
 // How many times YouTube is asked whether a reported live video is live, and how far apart.
 const LIVE_CHECK_TRIES = 3;
+/** The shortest length a screen may report for a track (see setMediaDuration). */
+const MIN_MEDIA_DURATION_S = 1;
 const LIVE_CHECK_GAP_S = 20;
 
 /**
@@ -832,7 +834,12 @@ class App {
   async setMediaDuration(ws, data) {
     const player = this.videoPlayers[ws.i];
     const seconds = data && Number(data.duration);
-    if (!player || !data || typeof data.link !== 'string' || !(seconds > 0 && seconds < 24 * 3600)) return;
+    // Under a second is a player that hadn't loaded it yet, not a length: the track would end at once.
+    if (!player || !data || typeof data.link !== 'string' || !(seconds >= MIN_MEDIA_DURATION_S && seconds < 24 * 3600)) return;
+    // Only a screen, for the track it's playing (as it reports it, see player.js reportMediaDuration):
+    // the length ends the track for everyone.
+    const playing = player.playlist[player.currentTrack];
+    if (ws.type !== 'player' || !playing || playing.link !== data.link) return;
     // A YouTube video's length normally comes with it from YouTube. One looked up while YouTube
     // refused the server (oEmbed has no lengths) gets it from the screen, so it ends. A live
     // video has none, and plays until someone moves on.
@@ -974,7 +981,7 @@ class App {
     const track = player.playlist[player.currentTrack];
     if (!track || track.link !== data.link || !this.getYoutubeId(track.link) || track.duration || track.liveStart) return;
     // The position is YouTube's as the report came: the time is taken before YouTube is asked,
-    // as is the room's time then, which that position is (to move a paused room's held time).
+    // as is the room's time then, which that position is (to move the room's time into the stream's).
     const now = new Date().getTime() / 1000;
     const roomAt = player.paused ? (player.currentTime || 0) : now - player.lastStartTime;
     // A screen's say-so doesn't make a track live: YouTube is asked. A no (or no answer) is asked
@@ -1000,18 +1007,15 @@ class App {
     track.liveStart = now - position;
     player.liveTrack = track; // already at the live point (see tickAllInstances)
     player.readyGate = null; // the room goes to the live point, not to a start everyone waits for
-    // The room is where the screens are (live), unless the host has paused it.
-    // Its time now is the report's position plus the time YouTube took to answer.
-    if (!player.paused) {
-      player.lastStartTime = track.liveStart;
-      player.currentTime = new Date().getTime() / 1000 - track.liveStart;
-    } else {
-      // Paused, it stays paused, at the same point in the stream's time: its held time moves by
-      // as much as the report's position is from the room's time then, so a resume (togglePause)
-      // goes on from there and not from near the stream's start.
-      player.currentTime = Math.max(0, (player.currentTime || 0) + position - roomAt);
-      player.lastStartTime = new Date().getTime() / 1000 - player.currentTime;
-    }
+    // The room's time moves into the stream's: by as much as the report's position is from the
+    // room's time when the report came. Untouched since, that puts it at the live point plus the
+    // time YouTube took to answer. A seek or skip by the host meanwhile, or a pause (which stays
+    // paused, so a resume goes on from there and not from near the stream's start), moves with it
+    // and isn't undone. Never past the live point.
+    const later = new Date().getTime() / 1000;
+    const roomNow = player.paused ? (player.currentTime || 0) : later - player.lastStartTime;
+    player.currentTime = Math.min(later - track.liveStart, Math.max(0, roomNow + position - roomAt));
+    player.lastStartTime = later - player.currentTime;
     player.sockets.forEach(socket => {
       this.send(socket, Commands.LIVE_POSITION, {
         link: track.link, liveStart: track.liveStart, paused: !!player.paused,

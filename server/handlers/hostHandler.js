@@ -224,8 +224,10 @@ async function hostSkip(app, ws, isForward) {
     const oldTime = player.paused ? (player.currentTime || 0) : now - player.lastStartTime;
     let newCurrentTime;
     const end = trackEnd(player, now);
-    const start = trackStart(player, now);
     const track = player.playlist[player.currentTrack] || {};
+    // How far back it can go: a live video's oldest point YouTube keeps (see trackStart), else 0,
+    // but not in a countdown (karaoke's, or a ready wait), whose time is below 0 and is nudged there.
+    const start = track.live && track.liveStart ? trackStart(player, now) : (oldTime < 0 ? -Infinity : 0);
     if (player.paused) {
       // Paused stays paused, at the new point (the time is held in currentTime while paused).
       newCurrentTime = Math.max(start, (player.currentTime || 0) + delta);
@@ -240,7 +242,7 @@ async function hostSkip(app, ws, isForward) {
         newCurrentTime = end;
         player.lastStartTime = now - end;
       }
-      // Nor further back than YouTube keeps of it.
+      // Nor further back than YouTube keeps of it, or than its start.
       if (newCurrentTime < start) {
         newCurrentTime = start;
         player.lastStartTime = now - start;

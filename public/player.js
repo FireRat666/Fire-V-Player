@@ -50,6 +50,9 @@ const STALL_RELOAD_MS = 15000;
 // A live point report the server didn't take (it couldn't confirm the video is live) is sent again
 // this long after, up to this many times in all (see reportLivePosition). The server waits 20 s between checks.
 const LIVE_REPORT_RETRY_MS = 30000;
+// After a retry goes back to the live point, how long YouTube is given to get there before the
+// screen reports from it, if its PLAYING hasn't already.
+const LIVE_EDGE_SETTLE_MS = 3000;
 const LIVE_REPORT_TRIES = 3;
 const STALL_REBUILD_MS = 15000;
 const STALL_RETRY_MS = 60000; // after a new player, the wait before trying again from the start
@@ -581,9 +584,15 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       if (this.liveReports.count < LIVE_REPORT_TRIES) {
         this.liveRetryTimer = setTimeout(() => {
           const v = this.currentVideo;
-          if (!v || v.link !== video.link || v.liveStart) return;
-          this.livePending = v.link;
-          this.reportLivePosition();
+          if (!v || v.link !== video.link || v.liveStart || this.previewVideo) return;
+          // Back to the live point first (the viewer may have skipped back meanwhile): its PLAYING
+          // reports from there, or this does once YouTube has had time to get there.
+          this.seekLiveEdge();
+          setTimeout(() => {
+            let state = null;
+            try { state = this.yt.getPlayerState(); } catch (e) {}
+            if (state === 1) this.reportLivePosition(); // paused, its time isn't the live point's now
+          }, LIVE_EDGE_SETTLE_MS);
         }, LIVE_REPORT_RETRY_MS);
       }
     }

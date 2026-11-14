@@ -101,6 +101,7 @@ In a Creator SDK world (`Assets/WebRoot/index.html`), add the player as a snippe
   mute="false"
   captions="true"
   untrusted-links="false"
+  ready-delay="5"
   hand-controls="true"
   position="0 1.5 2"
   rotation="0 0 0"
@@ -196,15 +197,17 @@ Whoever runs the karaoke should take over the player first, as only the host can
 
 With `hand-controls="true"`, each player gets seven buttons that go with them: mute, volume down and up, reload (see [Reloading your screen](#reloading-your-screen)), skip back and forward, and the Playlist (or Singers) panel. **☰ > ☚** (hand controls) in the panel moves them, one place per click, and your choice is remembered on your device:
 
-- **Left Wrist**: on the back of the left wrist (the default in VR).
-- **Right Wrist**: the same on the right wrist, for when another menu is on your left hand.
+- **Left Wrist**: on the back of the left wrist (the default in VR). VR only.
+- **Right Wrist**: the same on the right wrist, for when another menu is on your left hand. VR only.
 - **In View**: at the bottom right of what you see, wherever you look.
-- **Big View Corner**: big, in the bottom right corner of what you see (the default on desktop, where you can't turn your hand to see the buttons).
-- **View Corner**: the same corner, but smaller and out of the way.
+- **Big View Corner**: big, in the bottom right corner of your window (the default on desktop, where you can't turn your hand to see the buttons). Desktop only.
+- **View Corner**: the same corner, but smaller and out of the way. Desktop only.
 - **In Front**: left in the world just in front of you, facing you. Choose it again later to bring them to where you are now.
 - **Off**: no hand buttons.
 
-`hand-controls-place` sets where they start for players who haven't chosen.
+The button only offers the places you can see: in VR the wrists but not the window's corners, which a headset has no edges for, and on desktop the corners but not the wrists. A client that doesn't say whether it's in VR gets the VR places, as does a standalone headset (Quest, Pico) whatever it says.
+
+`hand-controls-place` sets where they start for players who haven't chosen. A place a player can't see starts them at the default for their device instead.
 
 The volume buttons are on the top row and Reload is at the far end of the bottom row, so reaching for the volume doesn't reload your screen. The orange button on the left folds the others away, leaving just that one button, and brings them back. Folded or not is remembered on your device.
 
@@ -384,6 +387,7 @@ All parameters are optional unless marked as **(Required)**.
 | `volume` | The initial volume, from `0` to `100`. | `40` |
 | `mute` | Whether the player should start muted. | `false` |
 | `untrusted-links` | Whether links from any site (video files, `.m3u8` and `.mpd` streams, VRCDN, VDO.Ninja, screen.sdq.st screen shares) can be played, as well as YouTube, Twitch, Vimeo, Tubi, NASA+, the Internet Archive, the Library of Congress and ESO. Off by default, as those links aren't moderated. Each viewer's own world must allow them for them to play on their screen. See [Links from other sites](#links-from-other-sites). | `false` |
+| `ready-delay` | The longest, in seconds, a new playlist song waits for everyone's screen to load it before it starts. It starts as soon as every screen has loaded it, so a room of PCs hardly waits, and a slow screen (a Quest) no longer starts the song late and then jumps ahead to catch up. A screen that takes longer than this catches up as before. `0` starts songs at once. Up to `15`. Karaoke has its own countdown, and live videos start at their live point, so neither waits. | `5` |
 | `captions` | Whether closed captions start on. Each viewer can turn them on or off in the panel's More view, and their choice is remembered on their device. | `true` |
 | `resolution` | The width in pixels of the screen's page, which is 16:9 (`1600` is 1600 x 900). Higher is sharper, and YouTube and Twitch lay out as for a bigger window, but each frame costs more to draw, especially on Quest. The screen stays the same size in the world whatever the resolution. Each viewer can pick another for their own screen in the panel's More view. From 640 to 3840. | `1600` |
 | `space-screen` | Altspace (SideQuest Creator SDK) only. `auto`: the screen draws the space page's own browser, with the player page laid over that page, so no second browser is opened. It's used when the client can resize the space page (its `SetWorldBrowserSize` call or the `!swbs!` command) and the page really takes the size within 5 seconds; otherwise, and for a second player in the same space (only one can have the space page), the screen is a browser as before. The space page goes back to its own size when the player is removed. This screen can't be clicked, so Twitch links, which need clicks to start playing, always get a browser screen instead. `false`: always open a browser for the screen. Banter is unaffected. | `auto` |
@@ -428,7 +432,7 @@ Whether the sound gets quieter with distance is the separate `spatial` setting, 
 | Attribute | Description | Default Value |
 | :--- | :--- | :--- |
 | `hand-controls` | Set to `true` to give each player seven buttons: mute, volume down and up, reload (your screen only), skip back and forward (your player only), and the Playlist / Singers panel, which opens in front of you. They start on the back of the left wrist in VR and at the bottom right of the view on desktop, and each player can move them (see [Hand controls](#hand-controls)). They come back if you leave and rejoin the space. | `false` |
-| `hand-controls-place` | Where the hand buttons start, until a player picks somewhere else: `auto` (left wrist in VR, big view corner on desktop), `left`, `right`, `view`, `big-corner`, `corner`, `front` or `off`. | `auto` |
+| `hand-controls-place` | Where the hand buttons start, until a player picks somewhere else: `auto` (left wrist in VR, big view corner on desktop), `left`, `right`, `view`, `big-corner`, `corner`, `front` or `off`. The wrists are only for VR and the corners only for desktop: a player who can't see the place starts at their own default. | `auto` |
 | `hand-controls-position` | Moves the hand buttons on the wrist: `x y z` in metres, in the left hand's own Unity axes (mirrored on the right hand) (not converted, in a snippet or a script tag). Empty uses the built-in layout. `z` slides them along the hand, away from the wrist toward the fingers (bigger) or toward the wrist (smaller); `x` lifts them off the back of the hand (more negative). | `0 0.046 0.07` |
 | `hand-controls-rotation` | Turns the hand buttons on the wrist: `x y z` in degrees, in the left hand's own Unity axes (mirrored on the right hand). For example add `180` to `y` if they face into the wrist, add `180` to `z` if they're upside down, or change `z` by `90` to turn them on the wrist. | `0 90 180` |
 | `button-position` | The `x y z` position of the in-world UI buttons, relative to the player screen. | `0 0 0` |

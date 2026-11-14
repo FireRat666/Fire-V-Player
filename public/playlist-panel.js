@@ -69,7 +69,10 @@ var SEARCH_SOURCES = {
   tubi: { label: 'Tubi', color: '#5e35b1', status: 'Searching Tubi. The first search takes a few seconds.' },
   nasa: { label: 'NASA+', color: '#0b3d91', status: 'Searching NASA+.' },
   eso: { label: 'ESO', color: '#00695c', status: "Searching ESO's videos." },
-  esodome: { label: 'ESO Fulldome', color: '#004d40', status: "Searching ESO's fulldome videos, for domes." }
+  esodome: { label: 'ESO Fulldome', color: '#004d40', status: "Searching ESO's fulldome videos, for domes." },
+  // A room on screen.sdq.st, by its code or a link to it. Only with untrusted-links, as screen
+  // shares can't play without it (see searchSources).
+  screen: { label: 'Screen Share', color: '#1565c0', status: 'Searching screen.sdq.st: type a room code, or paste its link.' }
 };
 var LIST_PREVIEWS_AT_ONCE = 3;
 // A list preview older than this is loaded again when it's next shown (the server re-reads lists
@@ -77,8 +80,10 @@ var LIST_PREVIEWS_AT_ONCE = 3;
 var LIST_FRESH_MS = 5 * 60 * 1000;
 var LIST_REPLY_MS = 120000;
 // The progress bar's width in pixels: the panel (W, 1100) minus its padding and borders (42), the
-// now-playing card's padding (28), the time label (190) and the gap before the bar (10).
+// now-playing card's padding (28), the time label (190) and the gap before the bar (10). A long
+// time (a live stream months in) widens the label and narrows the bar (see setTimeText).
 var PROGRESS_WIDTH = 820;
+var TIME_WIDTH = 190;
 // Added to thumbnail links, new each time the space loads. Unity keeps the pictures it has
 // downloaded for as long as the client runs (UIElementBridge's texture cache) and never checks one
 // is still there, so after a rejoin a cached link can show nothing and never download again.
@@ -397,7 +402,7 @@ var FirePlaylistPanel = class {
     this.searchResults = hit.results;
     this.searchQuery = hit.query || '';
     const source = newest.split(':')[0];
-    if (SEARCH_SOURCES[source]) this.searchSource = source;
+    if (SEARCH_SOURCES[source] && this.searchSources().includes(source)) this.searchSource = source;
   }
 
   // ---- lists saved from a link (Lists tab), kept on this device for this world
@@ -579,7 +584,7 @@ var FirePlaylistPanel = class {
     const p = this.core.player;
     if (!p) return;
     if (!this.isHost()) {
-      this.setStatus(p.canTakeOver ? 'Only the host can change this. Press Take Over to become the host.' : 'Only the host can change this.');
+      this.setStatus(p.canTakeOver ? 'Only the host can change this. Press Take Over to become the host.' : 'Only the host can change this. A space admin can press Admin Take Over to become the host.');
       return;
     }
     const locked = level === 'host';
@@ -726,7 +731,7 @@ var FirePlaylistPanel = class {
     // The server's build (see server/version.js), so people can tell an old version from a new one.
     this.versionLabel = await this.label(header, '', { fontSize: '18px', color: '#888888', marginLeft: '12px', flexGrow: 1 });
     // Who runs the player: the host (♛) and a padlock coloured by who may control it (see
-    // controlLevel). Pressing it opens More, where that's set, and Take Over.
+    // controlLevel). Pressing it opens More, where that's set, and Take Over and Admin Take Over.
     this.hostChip = await this.button(header, '', () => this.setView(this.view === 'more' ? 'main' : 'more'), {
       display: 'flex', flexDirection: 'row', alignItems: 'center', backgroundColor: '#2e7d32',
       paddingLeft: '12px', paddingRight: '14px', maxWidth: '380px', height: '52px'
@@ -750,10 +755,10 @@ var FirePlaylistPanel = class {
       fontSize: '26px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
     });
     const progRow = await this.div(nowCard, { display: 'flex', flexDirection: 'row', alignItems: 'center', marginTop: '4px' });
-    this.timeLabel = await this.label(progRow, '', { fontSize: '20px', color: '#cccccc', width: '190px', flexShrink: 0 });
+    this.timeLabel = await this.label(progRow, '', { fontSize: '20px', color: '#cccccc', width: `${TIME_WIDTH}px`, flexShrink: 0, whiteSpace: 'nowrap' });
     // The bar has a fixed width, as a mouse event only says where it is inside the element
     // (the panel is always W pixels wide). The taller clear box around it is easier to hit.
-    const progHit = await this.div(progRow, {
+    const progHit = this.progHit = await this.div(progRow, {
       width: `${PROGRESS_WIDTH}px`, height: '36px', flexShrink: 0, marginLeft: '10px',
       display: 'flex', flexDirection: 'column', justifyContent: 'center'
     });
@@ -778,6 +783,8 @@ var FirePlaylistPanel = class {
     if (this.karaoke) this.stopBtn = await symBtn('■', () => { this.stopPreview(true); this.send(Commands.STOP); }, { backgroundColor: '#c62828' });
     // Rebuilds only this viewer's screen, for a video that froze or didn't load for them.
     await symBtn('↻', () => this.core.reloadScreen(), { backgroundColor: '#5d4037' });
+    // A live video only: everyone to its live point (see goLive).
+    this.goLiveBtn = await symBtn('Go Live', () => this.goLive(), { backgroundColor: '#c62828', fontSize: '22px', display: 'none' });
     await this.div(controls, { flexGrow: 1 });
     // This viewer's volume: drawn speakers, as the UI font has none.
     const vol = { backgroundColor: GREY, height: '52px', paddingLeft: '12px', paddingRight: '14px', fontSize: '26px' };
@@ -859,7 +866,7 @@ var FirePlaylistPanel = class {
     const searchHint = this.karaoke ? 'Search for a song to sing, or paste a video link' : 'Search YouTube, or paste a YouTube / Twitch / Vimeo / video link';
     this.searchField = await this.textField(this.searchRow, searchHint, v => { this.searchQuery = v; }, () => this.doSearch());
     if (!this.searchField) await this.label(this.searchRow, 'Search needs text input, which this client does not have.', { color: '#bbbbbb', flexGrow: 1 });
-    // What to search: YouTube, Internet Archive films and TV, Tubi, NASA+ or ESO (not for karaoke).
+    // What to search: YouTube, Internet Archive films and TV, Tubi, NASA+, ESO or a screen share (not for karaoke).
     // Without a text field it still picks where words sent from a phone are searched.
     if (!this.karaoke) this.sourceBtn = await this.button(this.searchRow, 'YouTube', () => this.toggleSearchSource(), { backgroundColor: '#c62828', width: '170px' });
     if (this.searchField) {
@@ -987,7 +994,7 @@ var FirePlaylistPanel = class {
       ['♛ Host', 'Runs the karaoke. Press the host name at the top to see who can start songs, or to take over.'],
       ['☚ Hand', 'Your hand controls: move them in More (the green button). The orange button folds them away to one button.']
     ] : [
-      ['+ Search & Add', 'Search YouTube, Internet Archive, Tubi, NASA+ or ESO (the button beside the box picks), or paste a link.'],
+      ['+ Search & Add', `Search YouTube, Internet Archive, Tubi, NASA+ or ESO${this.core.allowUntrusted === true ? ', or find a screen share by its room code' : ''} (the button beside the box picks), or paste a link.`],
       ['☎ Phone', 'Shows a code. Send a link from your phone into your search, no typing in VR.'],
       ['☰ Lists', 'Saved playlists for this room. + All puts a whole list on the end.'],
       ['♛ Host', 'Runs the player for everyone. Press the host name at the top to see who else can control it, or to take over.'],
@@ -1018,6 +1025,7 @@ var FirePlaylistPanel = class {
       ['❚❚ ▶', 'Pause and play, for everyone (host)'],
       ['◀◀ ▶▶', this.karaoke ? 'Nudge your screen a little, to match the singer' : 'Skip back or forward, for you (the host: everyone)'],
       ['↻', 'Reload the video, for you only, if it froze'],
+      ['Go Live', 'A live video: everyone to where it is live now (host)'],
       this.karaoke ? ['♪', 'Sing: join the queue, or start your song'] : ['▲ ▼', 'Vote a video up or down, when voting is on'],
       [b => this.drawSpeaker(b, true, false), 'Your volume (only what you hear)'],
       [b => this.drawSpeaker(b, false, true), 'Mute or unmute, for you'],
@@ -1059,7 +1067,7 @@ var FirePlaylistPanel = class {
       await this.label(chip, name, { fontSize: '21px', marginLeft: '10px' });
       await this.label(line, this.controlText(level), { fontSize: '20px', whiteSpace: 'normal', flexGrow: 1, flexShrink: 1, marginLeft: '12px' });
     }
-    await colText(controlBox, 'When the host leaves the space, Take Over turns on after 42 seconds, so the player is never stuck.', { color: '#bbbbbb', fontSize: '19px' });
+    await colText(controlBox, 'When the host leaves the space, Take Over turns on after 42 seconds, so the player is never stuck. A space admin can become the host at any time: press the host button at the top, then Admin Take Over.', { color: '#bbbbbb', fontSize: '19px' });
 
     // ---- More view (☰): who controls the player, host controls, your own player, add by link,
     // space admins. It scrolls.
@@ -1082,6 +1090,9 @@ var FirePlaylistPanel = class {
     this.takeOverBtn = await this.button(hostLine, '♛ Take Over', () => {
       if (this.core.player && !this.isHost()) this.send(Commands.TAKE_OVER);
     }, { backgroundColor: '#2e7d32', fontSize: '22px' });
+    // Where Take Over would be when it's off: a space admin takes control even when locked (see
+    // Core.adminTakeOver). Shown to everyone, as the client can't always tell who is an admin.
+    this.adminTakeOverBtn = await this.button(hostLine, '♛ Admin Take Over', () => this.adminTakeOver(), { backgroundColor: '#ad1457', fontSize: '22px' });
     const choices = await row(controlSection, { marginTop: '4px', alignItems: 'stretch' });
     this.controlCards = {};
     for (const [level, open, color, name] of this.controlLevels()) {
@@ -1114,7 +1125,8 @@ var FirePlaylistPanel = class {
     }
     // Seek: moves everyone.
     const seekRow = await row(this.hostSection, { marginTop: '4px' });
-    await this.label(seekRow, 'Go to (everyone):', { fontSize: '20px', color: '#bbbbbb', marginLeft: '4px', marginRight: '8px' });
+    // A live video's time is how far back from the live point (see doSeek).
+    this.seekLabel = await this.label(seekRow, 'Go to (everyone):', { fontSize: '20px', color: '#bbbbbb', marginLeft: '4px', marginRight: '8px' });
     this.seekField = await this.textField(seekRow, 'e.g. 95 or 1:35', v => { this.seekQuery = v; }, () => this.doSeek());
     if (this.seekField) {
       this.seekField.SetStyles({ flexGrow: 0, flexBasis: '220px', width: '220px' });
@@ -1187,9 +1199,7 @@ var FirePlaylistPanel = class {
     this.modeLabel = await this.label(adminRow, '', { fontSize: '20px', marginLeft: '4px', marginRight: '12px' });
     this.modeSwitchBtn = await this.button(adminRow, '', () => this.switchMode(), { backgroundColor: '#6a1b9a' });
     this.modeDefaultBtn = await this.button(adminRow, 'Use Snippet Default', () => this.useDefaultMode(), { backgroundColor: GREY });
-    // Take control even when the player is locked (see Core.adminTakeOver).
-    this.adminTakeOverBtn = await this.button(adminRow, '♛ Admin Take Over', () => this.adminTakeOver(), { backgroundColor: '#ad1457' });
-    await this.label(this.adminSection, 'These only work for space admins (the world owner and community moderators). Admin Take Over makes you the host even when nobody may take over. The mode switches everyone in the space.', { fontSize: '16px', color: '#999999', marginLeft: '4px', marginTop: '4px', whiteSpace: 'normal' });
+    await this.label(this.adminSection, 'These only work for space admins (the world owner and community moderators). The mode switches everyone in the space. Admin Take Over is under Who controls the player, beside the host.', { fontSize: '16px', color: '#999999', marginLeft: '4px', marginTop: '4px', whiteSpace: 'normal' });
 
     // Footer
     const footer = await row(rootEl, { marginTop: '4px' });
@@ -1631,7 +1641,11 @@ var FirePlaylistPanel = class {
     const player = this.core.player;
     if (!player || !player.playlist || !player.playlist.length) return;
     const len = player.playlist.length;
-    this.send(Commands.SET_TRACK, (player.currentTrack + delta + len) % len);
+    const index = (player.currentTrack + delta + len) % len;
+    // next: with voting on, the server ends the current song instead (see setVideoTrack), and
+    // only if it is still the one named in current (not after a double press or a song's end).
+    const playing = player.playlist[player.currentTrack];
+    this.send(Commands.SET_TRACK, delta > 0 ? { index, next: true, current: playing && playing.link } : index);
   }
 
   setTab(tab) {
@@ -1700,6 +1714,12 @@ var FirePlaylistPanel = class {
     return t.split(':').map(Number).reduce((acc, n) => acc * 60 + n, 0);
   }
 
+  // How long the current track is, or for a live video how far its live point is (see core.liveEnd).
+  trackLength() {
+    const p = this.core.player;
+    return this.core.liveEnd(Date.now() / 1000 - this.clockSkew) || (p && p.duration) || 0;
+  }
+
   currentPlaybackTime() {
     const p = this.core.player;
     if (!p) return 0;
@@ -1708,10 +1728,29 @@ var FirePlaylistPanel = class {
 
   doSeek() {
     if (!this.isHost()) { this.setStatus('Only the host can seek.'); return; }
-    const t = this.parseTime(this.seekQuery);
+    // A live video: the time is how far back from the live point ("-" or not).
+    const range = this.liveRange();
+    const t = this.parseTime(range ? String(this.seekQuery || '').trim().replace(/^-/, '') : this.seekQuery);
     if (t === null) { this.setStatus('Enter a time in seconds (95) or mm:ss (1:35).'); return; }
+    if (range) {
+      this.send(Commands.SET_TIME, range.end - t);
+      this.setStatus(t < 15 ? 'Going live' : `Going to ${this.timeCode(t)} before live`);
+      return;
+    }
     this.send(Commands.SET_TIME, t);
     this.setStatus(`Seeking to ${this.timeCode(t)}`);
+  }
+
+  // The current live video's seekable part (see core.liveRange), or null.
+  liveRange() { return this.core.liveRange(Date.now() / 1000 - this.clockSkew); }
+
+  // Everyone to the live point: a time past it, which the server brings back to the live point
+  // as it is when it gets there.
+  goLive() {
+    if (!this.isHost()) { this.setStatus('Only the host can go to the live point.'); return; }
+    if (!this.liveRange()) return;
+    this.send(Commands.SET_TIME, 1e9);
+    this.setStatus('Going live');
   }
 
   seekBy(delta) {
@@ -1719,7 +1758,8 @@ var FirePlaylistPanel = class {
     const p = this.core.player;
     if (!p || !p.playlist || !p.playlist.length) return;
     // A file may have no known length; then only the start limits it.
-    const t = Math.max(0, p.duration > 0 ? Math.min(p.duration, this.currentPlaybackTime() + delta) : this.currentPlaybackTime() + delta);
+    const end = this.trackLength();
+    const t = Math.max(0, end > 0 ? Math.min(end, this.currentPlaybackTime() + delta) : this.currentPlaybackTime() + delta);
     this.send(Commands.SET_TIME, t);
   }
 
@@ -1729,7 +1769,7 @@ var FirePlaylistPanel = class {
     if (typeof el.OnMouseDown !== 'function') return; // an SDK without mouse events
     const canSeek = () => {
       const p = this.core.player;
-      return !this.core.blocked && this.isHost() && !!p && !!p.playlist && p.playlist.length > 0 && p.duration > 0;
+      return !this.core.blocked && this.isHost() && !!p && !!p.playlist && p.playlist.length > 0 && this.trackLength() > 0;
     };
     // The song the drag began on: if another starts meanwhile, the drag is dropped, as its time
     // was for the old song. The play count catches the same song starting again (a restart, a
@@ -1741,14 +1781,24 @@ var FirePlaylistPanel = class {
     };
     const stillOn = () => canSeek() && song() === this.dragSong;
     const cancel = () => { this.dragSeek = null; this.updateTime(); };
+    // A live video's bar is its last 12 hours (or less), up to the live point (see core.liveRange).
     const at = (e) => {
       const x = e && Number.isFinite(e.clientX) ? e.clientX : 0;
-      const d = this.core.player.duration;
-      return Math.min(Math.max(0, x / PROGRESS_WIDTH) * d, Math.max(0, d - 1)); // the very end would end the song
+      const f = Math.min(1, Math.max(0, x / this.progressWidth()));
+      const range = this.liveRange();
+      if (range) return range.start + f * (range.end - range.start);
+      const d = this.trackLength();
+      return Math.min(f * d, Math.max(0, d - 1)); // the very end would end the song
     };
     const show = (t) => {
-      const d = this.core.player.duration;
-      this.setText(this.timeLabel, `${this.timeCode(t)} / ${this.timeCode(d)}`);
+      const range = this.liveRange();
+      if (range) {
+        this.setTimeText(this.core.liveTimeText(t, range, s => this.timeCode(s)));
+        this.setStyle(this.progInner, 'width', `${this.livePercent(t, range)}%`);
+        return;
+      }
+      const d = this.trackLength();
+      this.setTimeText(`${this.timeCode(t)} / ${this.timeCode(d)}`);
       this.setStyle(this.progInner, 'width', `${Math.round((t / d) * 200) / 2}%`);
     };
     const finish = () => {
@@ -1756,8 +1806,10 @@ var FirePlaylistPanel = class {
       const t = this.dragSeek;
       if (!stillOn()) { cancel(); return; }
       this.dragSeek = null;
+      const range = this.liveRange();
+      if (range && this.core.atLivePoint(t, range)) { this.goLive(); return; } // its end: the live point as it is then
       this.send(Commands.SET_TIME, t);
-      this.setStatus(`Seeking to ${this.timeCode(t)}`);
+      this.setStatus(range ? `Going to ${this.timeCode(range.end - t)} before live` : `Seeking to ${this.timeCode(t)}`);
     };
     el.OnMouseDown(e => {
       if (e && e.button) return; // the main button / trigger only
@@ -1943,13 +1995,17 @@ var FirePlaylistPanel = class {
     this.render();
   }
 
-  // Switches the search to the next source (YouTube, Archive films, Tubi, NASA+, ESO, ESO Fulldome). It only searches
+  // Switches the search to the next source (YouTube, Archive films, Tubi, NASA+, ESO, ESO Fulldome, Screen Share). It only searches
   // when Search is pressed, so clicking through the sources doesn't start one each time.
   toggleSearchSource() {
-    const order = Object.keys(SEARCH_SOURCES);
+    const order = this.searchSources();
     this.searchSource = order[(order.indexOf(this.searchSource) + 1) % order.length];
     this.showSearchSource();
     this.setStatus(SEARCH_SOURCES[this.searchSource].status.replace(/^Searching/, 'Search will look on'), 4000);
+  }
+  // The sources this world can use: a screen share needs links from other sites (untrusted-links).
+  searchSources() {
+    return Object.keys(SEARCH_SOURCES).filter(k => k !== 'screen' || this.core.allowUntrusted === true);
   }
   showSearchSource() {
     if (!this.sourceBtn) return;
@@ -1986,7 +2042,8 @@ var FirePlaylistPanel = class {
     this.tab = 'search';
     // A search made recently on this device shows its kept results straight away. Links are
     // always looked up again (a stream may have gone live or offline).
-    const isLink = /^(https?|rtspt?):\/\//i.test(q) || !!this.core.getId(q);
+    // A screen share room is looked up each time too, as it's a link made from the code.
+    const isLink = /^(https?|rtspt?):\/\//i.test(q) || !!this.core.getId(q) || this.searchSource === 'screen';
     const key = this.searchKey(q, this.searchSource);
     const kept = !isLink && this.cachedSearch(key);
     if (kept) {
@@ -2419,27 +2476,61 @@ var FirePlaylistPanel = class {
 
   // ---------------------------------------------------------------- render
 
+  // The time beside the progress bar. A long one ("2089:00:17 / 2089:00:17 LIVE") would run under
+  // the bar, so the label is made wide enough for it and the bar that much narrower. Unity has no
+  // way to measure text, so it goes by characters: about 11 px each at 20 px.
+  setTimeText(text) {
+    this.setText(this.timeLabel, text);
+    const width = Math.min(380, Math.max(TIME_WIDTH, Math.ceil(text.length * 11)));
+    if (width === (this.timeWidth || TIME_WIDTH)) return;
+    this.timeWidth = width;
+    this.setStyle(this.timeLabel, 'width', `${width}px`);
+    if (this.progHit) this.setStyle(this.progHit, 'width', `${this.progressWidth()}px`);
+  }
+  progressWidth() { return PROGRESS_WIDTH - ((this.timeWidth || TIME_WIDTH) - TIME_WIDTH); }
+
   updateTime() {
     if (!this.built || this.dragSeek != null) return; // a drag on the bar shows its own time
     const p = this.core.player;
     if (!p || !p.playlist || !p.playlist.length) {
-      this.setText(this.timeLabel, '');
+      this.display(this.goLiveBtn, false);
+      this.setTimeText('');
       this.setStyle(this.progInner, 'width', '0%');
       return;
     }
-    const duration = p.duration;
+    const duration = this.trackLength();
+    const range = this.liveRange();
+    if (this.seekLabel) this.setText(this.seekLabel, range ? 'Go back from live (everyone):' : 'Go to (everyone):');
     if (!(duration > 0)) {
       // No known length (some files): just how far in it is.
       const t = Math.max(0, p.paused ? (p.currentTime || 0) : ((Date.now() / 1000 - this.clockSkew) - (p.lastStartTime || 0)));
-      this.setText(this.timeLabel, `${this.timeCode(t)} / --:--`);
+      this.display(this.goLiveBtn, false);
+      this.setTimeText(`${this.timeCode(t)} / --:--`);
       this.setStyle(this.progInner, 'width', '0%');
       return;
     }
     let t = p.paused ? (p.currentTime || 0) : ((Date.now() / 1000 - this.clockSkew) - (p.lastStartTime || 0));
     t = Math.max(0, Math.min(t, duration));
-    this.setText(this.timeLabel, `${this.timeCode(t)} / ${this.timeCode(duration)}`);
+    // A live video's bar is the part a seek can reach, up to its live point, which moves on with
+    // it; the time is how far behind that it is.
+    this.display(this.goLiveBtn, !!range);
+    if (range) {
+      const live = this.core.atLivePoint(t, range);
+      this.setText(this.goLiveBtn, live ? 'LIVE' : 'Go Live');
+      this.setStyle(this.goLiveBtn, 'backgroundColor', live ? '#5d2a2a' : '#c62828');
+      this.setTimeText(this.core.liveTimeText(t, range, s => this.timeCode(s)));
+      this.setStyle(this.progInner, 'width', `${this.livePercent(t, range)}%`);
+      return;
+    }
+    this.setTimeText(`${this.timeCode(t)} / ${this.timeCode(duration)}`);
     const pct = Math.round((t / duration) * 200) / 2; // half-percent steps
     this.setStyle(this.progInner, 'width', `${pct}%`);
+  }
+  // How far along a live video's bar a time is (see core.liveRange), in half-percent steps.
+  livePercent(t, range) {
+    const span = range.end - range.start;
+    const f = span > 0 ? (Math.min(range.end, Math.max(range.start, t)) - range.start) / span : 1;
+    return Math.round(f * 200) / 2;
   }
 
   render() {
@@ -2471,7 +2562,8 @@ var FirePlaylistPanel = class {
 
     // Controls
     this.display(this.prevTrackBtn, !this.karaoke && host && playlist.length > 1);
-    this.display(this.nextTrackBtn, !this.karaoke && host && playlist.length > 1);
+    // With voting on, Next ends the current song (see changeTrack), so it works on the last one too.
+    this.display(this.nextTrackBtn, !this.karaoke && host && playlist.length > (player.canVote ? 0 : 1));
     if (this.karaoke) {
       const singer = this.currentSinger();
       const canControlSong = hasPlaylist && (host || !!(singer && window.user && singer.id === window.user.id));
@@ -2524,7 +2616,6 @@ var FirePlaylistPanel = class {
     this.setText(this.resolutionBtn, `▣ ${resW} × ${resH}${this.core.viewerResolution ? '' : ' (default)'}`);
 
     // Space admins only, but shown to everyone
-    this.display(this.adminTakeOverBtn, !host);
     {
       const def = this.core.defaultMode || (this.karaoke ? 'karaoke' : 'playlist');
       const override = this.core.modeOverride;
@@ -2537,7 +2628,10 @@ var FirePlaylistPanel = class {
 
     // Who controls the player: the chosen card is in its colour with a white edge, the others grey.
     this.setText(this.controlHostLabel, player.host ? (host ? '♛ You are the host' : `♛ Host: ${player.host.name || 'Someone'}`) : 'Connecting...');
-    this.display(this.takeOverBtn, !host && !!player.host && !!player.canTakeOver);
+    const takeOverShown = !host && !!player.host && !!player.canTakeOver;
+    this.display(this.takeOverBtn, takeOverShown);
+    // With Take Over on, anyone (an admin too) can use that instead.
+    this.display(this.adminTakeOverBtn, !host && !takeOverShown);
     for (const [lvl, c] of Object.entries(this.controlCards || {})) {
       const on = lvl === level;
       this.setStyle(c.card, 'backgroundColor', on ? c.color : '#37404a');
@@ -2545,7 +2639,7 @@ var FirePlaylistPanel = class {
     }
     this.setText(this.controlNote, host
       ? 'Press one to change it. It shows on the padlock at the top for everyone.'
-      : player.canTakeOver ? 'Only the host can change this. Press Take Over to become the host.' : 'Only the host can change this.');
+      : player.canTakeOver ? 'Only the host can change this. Press Take Over to become the host.' : 'Only the host can change this. A space admin can press Admin Take Over to become the host.');
 
     // Host controls
     this.display(this.hostSection, host);

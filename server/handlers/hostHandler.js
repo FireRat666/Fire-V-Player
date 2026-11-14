@@ -184,6 +184,33 @@ async function adminTakeOver(app, ws) {
  * @param {boolean} isForward - True to skip forward, false to skip backward.
  * @returns {Promise<void>}
  */
+/**
+ * The latest point the current track can be at, in seconds: its length, or for a live video
+ * whose live point is known, the live point now. 0 when there's no limit.
+ */
+function trackEnd(player, now) {
+  const track = player.playlist[player.currentTrack] || {};
+  if (track.live && track.liveStart) return Math.max(0, now - track.liveStart);
+  return (track.duration || 0) / 1000;
+}
+
+/**
+ * How far back a live YouTube video goes: YouTube keeps only its last 12 hours, so a seek before
+ * that plays from the oldest point it has, on every screen alike, and not where the room says.
+ * The same as LIVE_WINDOW_S in public/core.js.
+ */
+const LIVE_WINDOW_S = 12 * 3600;
+
+/**
+ * The earliest point the current track can be at, in seconds: 0, or for a live video whose live
+ * point is known, LIVE_WINDOW_S before its live point.
+ */
+function trackStart(player, now) {
+  const track = player.playlist[player.currentTrack] || {};
+  if (track.live && track.liveStart) return Math.max(0, trackEnd(player, now) - LIVE_WINDOW_S);
+  return 0;
+}
+
 async function hostSkip(app, ws, isForward) {
   app.onlyIfHost(ws, async () => {
     const player = app.videoPlayers[ws.i];
@@ -196,18 +223,33 @@ async function hostSkip(app, ws, isForward) {
     const delta = isForward ? skipAmount : -skipAmount;
     const oldTime = player.paused ? (player.currentTime || 0) : now - player.lastStartTime;
     let newCurrentTime;
+    const end = trackEnd(player, now);
+    const track = player.playlist[player.currentTrack] || {};
+    // How far back it can go: a live video's oldest point YouTube keeps (see trackStart), else 0,
+    // but not in a countdown (karaoke's, or a ready wait), whose time is below 0 and is nudged there.
+    const start = track.live && track.liveStart ? trackStart(player, now) : (oldTime < 0 ? -Infinity : 0);
     if (player.paused) {
       // Paused stays paused, at the new point (the time is held in currentTime while paused).
-      const trackDuration = ((player.playlist[player.currentTrack] || {}).duration || 0) / 1000;
-      newCurrentTime = Math.max(0, (player.currentTime || 0) + delta);
-      if (trackDuration > 0) newCurrentTime = Math.min(newCurrentTime, trackDuration);
+      newCurrentTime = Math.max(start, (player.currentTime || 0) + delta);
+      if (end > 0) newCurrentTime = Math.min(newCurrentTime, end);
       player.lastStartTime = now - newCurrentTime;
     } else {
       // To skip forward in time, we subtract from the start timestamp.
       player.lastStartTime -= delta;
       newCurrentTime = now - player.lastStartTime;
+      // A live video can't go past its live point.
+      if (track.live && end > 0 && newCurrentTime > end) {
+        newCurrentTime = end;
+        player.lastStartTime = now - end;
+      }
+      // Nor further back than YouTube keeps of it, or than its start.
+      if (newCurrentTime < start) {
+        newCurrentTime = start;
+        player.lastStartTime = now - start;
+      }
     }
     player.currentTime = newCurrentTime; // Keep server state consistent.
+    player.seekedTrack = player.playlist[player.currentTrack]; // not taken to the live point (see tickAllInstances)
 
     // Broadcast a seek command to all clients.
     player.sockets.forEach(socket => {
@@ -282,6 +324,17 @@ async function setVideoTrack(app, ws, data) {
   }
 
   app.onlyIfHost(ws, async () => {
+    // Next with voting on: the current song is done, as when it ends by itself. It leaves the
+    // playlist and the top-voted song plays. Moving to the next index instead would play the
+    // song after it, and the vote sort puts the skipped one back second, so the next Next
+    // would only bring it back.
+    if (player.canVote && data && typeof data === 'object' && data.next === true) {
+      // Only the song the host saw playing: a double press, or a Next sent as it ended,
+      // would otherwise take off the song after it too.
+      const playing = player.playlist[player.currentTrack];
+      if (playing && playing.link === data.current) await skipVotedTrack(app, ws.i);
+      return;
+    }
     if(index < player.playlist.length && index > -1) {
       if(player.canVote) {
         const track = player.playlist[player.currentTrack];
@@ -291,16 +344,52 @@ async function setVideoTrack(app, ws, data) {
       player.currentTime = 0;
       player.lastStartTime = new Date().getTime() / 1000;
       player.paused = false; // Ensure playback resumes on track change
+      app.holdForReady(player);
       app.resetBrowserIfNeedBe(player, index);
       app.updateVotes(ws.i);
       player.sockets.forEach(socket => {
-        app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime });
+        app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, newCurrentTime: player.currentTime });
       });
       await app.savePlayerState(ws.i);
     } else {
       app.send(ws, Commands.OUT_OF_BOUNDS);
     }
   }); // the host's, even under Everyone (or with voting on)
+}
+
+/**
+ * Ends the current song in voting mode: takes it and its votes off the playlist and plays the
+ * top-voted song left, or stops when none is left.
+ *
+ * @param {Object} app - Express application and state controller.
+ * @param {string} instanceId - Room/instance identifier.
+ * @returns {Promise<void>}
+ */
+async function skipVotedTrack(app, instanceId) {
+  const player = app.videoPlayers[instanceId];
+  if (!player || !player.playlist.length) return;
+  const [finished] = player.playlist.splice(player.currentTrack, 1);
+  player.votes = player.votes.filter(v => v.video !== finished);
+  if (!player.playlist.length) {
+    await internalStop(app, instanceId);
+    return;
+  }
+  // Sorted with the old current song left out of the count, the top-voted song is first.
+  player.currentTrack = 0;
+  player.playlist.forEach(d => {
+    d.votes = player.votes.filter(v => v.video === d && !v.isDown).length
+      - player.votes.filter(v => v.video === d && v.isDown).length;
+  });
+  player.playlist.sort((a, b) => b.votes - a.votes);
+  player.currentTime = 0;
+  player.lastStartTime = new Date().getTime() / 1000;
+  player.paused = false;
+  app.holdForReady(player);
+  app.resetBrowserIfNeedBe(player, 0);
+  player.sockets.forEach(socket => {
+    app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: 0, track: player.playlist[0], paused: player.paused, newLastStartTime: player.lastStartTime, newCurrentTime: player.currentTime, playlist: player.playlist });
+  });
+  await app.savePlayerState(instanceId);
 }
 
 /**
@@ -319,16 +408,19 @@ async function setVideoTime(app, ws, time) {
   app.onlyIfHost(ws, async () => {
     if (!player.playlist.length) return;
 
-    const trackDuration = (player.playlist[player.currentTrack].duration || 0) / 1000;
-    // Clamp the time to be within the video's duration (when it's known: a file may not have one)
+    const now = new Date().getTime() / 1000;
+    // Clamp the time to be within the video's duration (when it's known: a file may not have
+    // one), or for a live video between the oldest point YouTube keeps and the live point (Go Live
+    // sends a time past it, to land on it).
+    const trackDuration = trackEnd(player, now);
     const t = Number(time);
     if (!Number.isFinite(t)) return;
-    const newTime = Math.max(0, trackDuration > 0 ? Math.min(t, trackDuration) : t);
+    const newTime = Math.max(trackStart(player, now), trackDuration > 0 ? Math.min(t, trackDuration) : t);
 
-    const now = new Date().getTime() / 1000;
     const oldTime = player.paused ? (player.currentTime || 0) : now - player.lastStartTime;
     player.lastStartTime = now - newTime;
     player.currentTime = newTime;
+    player.seekedTrack = player.playlist[player.currentTrack]; // not taken to the live point (see tickAllInstances)
 
     // Broadcast a seek command to all clients. This is the same command used by host skip.
     player.sockets.forEach(socket => {
@@ -399,6 +491,10 @@ async function togglePause(app, ws) {
     if (player.paused) {
       player.currentTime = now - player.lastStartTime;
     } else {
+      // A live video paused for long may have fallen out of what YouTube keeps: it goes on from the
+      // oldest point. Only a live one: a countdown's time is below 0 (karaoke, a ready wait) and stays so.
+      const track = player.playlist[player.currentTrack] || {};
+      if (track.live && track.liveStart) player.currentTime = Math.max(trackStart(player, now), player.currentTime || 0);
       player.lastStartTime = now - player.currentTime;
     }
 

@@ -78,6 +78,8 @@ function parseVideoRenderer(r) {
     && owner.navigationEndpoint.commandMetadata.webCommandMetadata && owner.navigationEndpoint.commandMetadata.webCommandMetadata.url;
   const badges = (r.ownerBadges || []).map(b => b && b.metadataBadgeRenderer && b.metadataBadgeRenderer.style);
   const snippet = r.detailedMetadataSnippets && r.detailedMetadataSnippets[0] && r.detailedMetadataSnippets[0].snippetText;
+  // Streaming now: YouTube marks it with a LIVE badge, and it has no length.
+  const live = (r.badges || []).some(b => b && b.metadataBadgeRenderer && b.metadataBadgeRenderer.style === 'BADGE_STYLE_TYPE_LIVE_NOW');
   return {
     description: text(snippet || r.descriptionSnippet),
     duration: seconds * 1000,
@@ -93,7 +95,8 @@ function parseVideoRenderer(r) {
     link: `https://www.youtube.com/watch?v=${id}`,
     thumbnail: thumbs.length ? thumbs[thumbs.length - 1].url : `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
     title: text(r.title) || 'Unknown Title',
-    shareLink: `https://youtu.be/${id}`
+    shareLink: `https://youtu.be/${id}`,
+    live
   };
 }
 
@@ -205,7 +208,8 @@ async function videoById(id) {
   try {
     const found = await cache.remember(`id:${id}`, CACHE_TTL_MS, async () => {
       const v = (await directSearch(id)).find(r => r.id === id);
-      if (!v || !v.duration) throw new Error('not found by search'); // live or missing: ask youtubei.js
+      // A live stream has no length: the search's LIVE badge says it is one. Without either, ask youtubei.js.
+      if (!v || (!v.duration && !v.live)) throw new Error('not found by search');
       return v;
     });
     return found;

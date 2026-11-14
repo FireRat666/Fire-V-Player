@@ -41,6 +41,9 @@ async function resolveVideoData(app, ws, v) {
   }
   
   if (v && typeof v === 'object') {
+    // Whether it's live comes from YouTube's answer here, never from the one adding it.
+    v = { ...v };
+    delete v.live;
     let link = v.link || v.url;
     // A Drive or Dropbox share link is kept as the address of the file itself (see media.detect).
     const detected = link ? media.detect(link) : null;
@@ -130,9 +133,10 @@ function appendVideo(app, instanceId, video, skipUpdate) {
   player.playlist.push(video);
   if (skipUpdate) return;
   if (wasEmpty) {
+    app.holdForReady(player);
     player.sockets.forEach(socket => app.send(socket, Commands.TRACK_CHANGED, {
       newTrackIndex: player.currentTrack, track: video, paused: player.paused,
-      newLastStartTime: player.lastStartTime, playlist: player.playlist
+      newLastStartTime: player.lastStartTime, newCurrentTime: player.currentTime, playlist: player.playlist
     }));
   } else {
     player.sockets.forEach(socket => app.send(socket, Commands.ITEM_APPENDED, { video }));
@@ -437,8 +441,9 @@ async function fromPlaylist(app, ws, data) {
         player.currentTrack = 0;
         player.currentTime = 0;
         player.lastStartTime = new Date().getTime() / 1000;
+        app.holdForReady(player);
         player.sockets.forEach(socket => {
-          app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, playlist: player.playlist });
+          app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, newCurrentTime: player.currentTime, playlist: player.playlist });
         });
       } else {
         player.sockets.forEach(socket => {
@@ -482,8 +487,10 @@ async function fromPlaylist(app, ws, data) {
 
     if (player.playlist.length > 0) {
       player.lastStartTime = new Date().getTime() / 1000;
+      player.currentTime = 0;
+      app.holdForReady(player);
       player.sockets.forEach(socket => {
-        app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, playlist: player.playlist });
+        app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, newCurrentTime: player.currentTime, playlist: player.playlist });
       });
     } else {
       app.updateClients(ws.i); // This is fine, sends an empty playlist.
@@ -692,11 +699,12 @@ async function addAndPlay(app, ws, v) {
       player.currentTrack = newIndex;
       player.currentTime = 0;
       player.lastStartTime = new Date().getTime() / 1000;
+      app.holdForReady(player);
       app.resetBrowserIfNeedBe(player, newIndex);
       dropWaiting(app, ws.i, newVideo.link);
       app.updateVotes(ws.i);
       player.sockets.forEach(socket => {
-        app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, playlist: player.playlist });
+        app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, newCurrentTime: player.currentTime, playlist: player.playlist });
       });
       await app.savePlayerState(ws.i);
       // Karaoke turns are checked above, so karaoke goes by the lock; in playlist mode it's the

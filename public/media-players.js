@@ -896,6 +896,11 @@ class VdoNinjaSource extends BaseMediaSource {
   }
 }
 
+/** What screen.sdq.st says when a room has nobody sharing into it (it has no room until someone does). */
+const ROOM_GONE = /room does not exist/i;
+/** How long after a screen share stops the player joins its room again, to hear of the next share. */
+const SDQ_REJOIN_MS = 3000;
+
 /**
  * Player adapter for a screen shared through screen.sdq.st, a mediasoup (WebRTC) server. It joins
  * the room as a watcher, as that site's own watch page does, with the site's copies of
@@ -981,7 +986,12 @@ class SdqSource extends BaseMediaSource {
           if (consumer && run.consumers[kind] === consumer) { delete run.consumers[kind]; this.showTracks(run); }
         };
         try {
-          const data = await request('consume', { rtpCapabilities: device.rtpCapabilities, kind }).catch(() => null);
+          // The room is gone (the sharer stopped and the server closed it): a sharer starting again
+          // makes a new room, which this connection isn't in and hears nothing from, so it joins again.
+          const data = await request('consume', { rtpCapabilities: device.rtpCapabilities, kind }).catch(e => {
+            if (ROOM_GONE.test(String(e && e.message || e))) this.retry(run, String(e && e.message || e));
+            return null;
+          });
           if (stale() || !data || !data.producerId) return;
           consumer = await transport.consume({ id: data.id, producerId: data.producerId, kind: data.kind, rtpParameters: data.rtpParameters });
           // Stopped while it was being taken: there's nothing to play, and the next start asks again.
@@ -999,7 +1009,7 @@ class SdqSource extends BaseMediaSource {
           run.busy[kind] = false;
         }
       };
-      socket.on('newProducer', m => { if (m && m.kind) consume(m.kind); });
+      socket.on('newProducer', m => { if (m && m.kind) { clearTimeout(run.rejoin); consume(m.kind); } });
       socket.on('producerClosed', m => {
         const kind = m && m.kind;
         if (kind && run.busy[kind]) run.closed[kind] = true;
@@ -1008,6 +1018,15 @@ class SdqSource extends BaseMediaSource {
         delete run.consumers[kind];
         console.log(`[Screen share] ${this.room}: ${kind} stopped`);
         this.showTracks(run);
+        // Nothing left: the sharer may have stopped for good, and the server then closes the room,
+        // so this connection would never hear of a new share. A fresh join a moment later waits
+        // for one (retry), as Reload would. A share that comes back meanwhile cancels it.
+        clearTimeout(run.rejoin);
+        if (!Object.keys(run.consumers).length) {
+          run.rejoin = setTimeout(() => {
+            if (!stale() && !Object.keys(run.consumers).length) this.retry(run, 'room does not exist (the sharing stopped)');
+          }, SDQ_REJOIN_MS);
+        }
       });
       this.ready = true;
       this.saidWaiting = false;
@@ -1035,7 +1054,7 @@ class SdqSource extends BaseMediaSource {
   retry(run, why) {
     if (this.destroyed || this.run !== run) return;
     // The server has no room until someone shares into it, so that's waiting, not a fault.
-    const waiting = /room does not exist/i.test(String(why));
+    const waiting = ROOM_GONE.test(String(why));
     if (!waiting || !this.saidWaiting) console.log(`[Screen share] ${this.room}: ${waiting ? 'nobody is sharing yet, checking every 5s' : why + ', joining again in 5s'}`);
     this.saidWaiting = waiting;
     this.leave();
@@ -1049,6 +1068,7 @@ class SdqSource extends BaseMediaSource {
     // Only the current run's leaving cancels a retry: an old run's must not stop a newer one's.
     if (this.run === run) { clearTimeout(this.retryTimer); this.run = null; this.el.srcObject = null; }
     clearInterval(run.poll);
+    clearTimeout(run.rejoin);
     Object.values(run.consumers).forEach(c => { try { c.close(); } catch (e) {} });
     run.consumers = {};
     try { if (run.transport) run.transport.close(); } catch (e) {}

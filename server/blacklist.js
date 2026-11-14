@@ -34,6 +34,7 @@ const ALLOWED_WHEN_BLOCKED = new Set([
   Commands.REQUEST_SYNC,
   Commands.USER_VIDEO_PLAYER,
   Commands.MEDIA_DURATION,        // a player reporting how long a file is
+  Commands.TRACK_READY,           // a player saying it has loaded the new track
   Commands.VIDEO_UNAVAILABLE,     // a player reporting it can't play the video
   Commands.CLICK_BROWSER,         // a player asking for a click on its own screen (Twitch)
   Commands.AUTO_SYNC_STATE_CHANGED

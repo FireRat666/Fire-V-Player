@@ -424,7 +424,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         }
         // Held for the room's start (holdStart): it has loaded, so it waits here at 0:00, paused at
         // once rather than at the hold's next check. A live video isn't held (holdStart ends it).
-        if (this.holdTimer && this.holdLoaded && !this.isLiveTrack(video)) this.holdLoaded();
+        if (this.holdTimer && this.holdLoaded && !this.isLiveTrack(video) && this.hasTrackLoaded(video)) this.holdLoaded();
       } // The aggressive `playVideo()` call on non-playing states has been removed.
         // The auto-sync logic is the robust way to handle unexpected pauses or buffering
         // by correcting the resulting time drift.
@@ -1416,7 +1416,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         } catch (e) {}
         ready();
       };
-      try { if (this.player.getPlayerState() === YT.PlayerState.PLAYING) this.holdLoaded(); } catch (e) {}
+      try { if (this.player.getPlayerState() === YT.PlayerState.PLAYING && this.hasTrackLoaded(video)) this.holdLoaded(); } catch (e) {}
       clearInterval(this.holdTimer);
       this.holdTimer = setInterval(() => {
         const paused = this.playerData && this.playerData.paused;
@@ -1440,7 +1440,9 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         if (countdown && left !== shown) { shown = left; this.showCountdown(left); }
         try {
           const state = this.player.getPlayerState();
-          if (state === YT.PlayerState.PLAYING) {
+          if (!this.hasTrackLoaded(video)) {
+            // Still the last video (or the default one): its playing says nothing of this track.
+          } else if (state === YT.PlayerState.PLAYING) {
             // It has loaded enough to play: held here until the start.
             this.holdLoaded();
           } else if (state === YT.PlayerState.PAUSED && this.loadedSome()) {
@@ -1448,6 +1450,25 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
           }
         } catch (e) {}
       }, 150);
+    }
+
+    /**
+     * Whether the player has this track's own video: YouTube's says which video it has, and may
+     * still have the last one (or the default one) while the track loads. Another source is
+     * loaded for the track itself.
+     * @param {Object} [video] - The track.
+     * @returns {boolean}
+     */
+    hasTrackLoaded(video) {
+      try {
+        if (this.player.isYouTube && !this.player.isYouTube()) return true;
+        if (!video || !video.link) return false;
+        const yt = this.yt || this.player;
+        const d = yt.getVideoData && yt.getVideoData();
+        return !!(d && d.video_id && d.video_id === this.core.getId(video.link));
+      } catch (e) {
+        return false;
+      }
     }
 
     /** Ends a hold (holdStart) without playing. */
@@ -1466,6 +1487,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
     loadedSome() {
       try {
         if (this.player.isYouTube && !this.player.isYouTube()) return true;
+        if (!this.hasTrackLoaded(this.currentVideo)) return false; // the last video's, not this one's
         const yt = this.yt || this.player;
         return typeof yt.getVideoLoadedFraction === 'function' && yt.getVideoLoadedFraction() > 0 && yt.getDuration() > 0;
       } catch (e) {

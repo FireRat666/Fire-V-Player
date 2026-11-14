@@ -295,7 +295,9 @@ class Scraper {
       }
 
       let title = details.title || videoInfo.primary_info?.title?.toString();
-      let duration = (details.duration || 0) * 1000;
+      // A live stream has no length (it's where its live point is), whatever YouTube reports.
+      const live = details.is_live === true;
+      let duration = live ? 0 : (details.duration || 0) * 1000;
 
       let channelName = details.channel?.name || videoInfo.secondary_info?.owner?.author?.name?.toString() || 'Unknown Channel';
       let channelId = details.channel?.id || details.channelId || videoInfo.secondary_info?.owner?.author?.id || '';
@@ -308,7 +310,7 @@ class Scraper {
             if (!title || title === 'Unknown Title') {
               title = found.title?.toString();
             }
-            if (duration === 0) {
+            if (duration === 0 && !live) {
               const seconds = found.duration?.seconds || found.duration;
               if (typeof seconds === 'number') {
                 duration = seconds * 1000;
@@ -328,7 +330,7 @@ class Scraper {
 
       return {
         title: title,
-        live: details.is_live === true,
+        live,
         link: `https://www.youtube.com/watch?v=${videoId}`,
         thumbnail: thumbnail_url,
         duration: duration,

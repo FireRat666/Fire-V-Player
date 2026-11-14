@@ -224,6 +224,7 @@ async function hostSkip(app, ws, isForward) {
       }
     }
     player.currentTime = newCurrentTime; // Keep server state consistent.
+    player.seekedTrack = player.playlist[player.currentTrack]; // not taken to the live point (see tickAllInstances)
 
     // Broadcast a seek command to all clients.
     player.sockets.forEach(socket => {
@@ -393,6 +394,7 @@ async function setVideoTime(app, ws, time) {
     const oldTime = player.paused ? (player.currentTime || 0) : now - player.lastStartTime;
     player.lastStartTime = now - newTime;
     player.currentTime = newTime;
+    player.seekedTrack = player.playlist[player.currentTrack]; // not taken to the live point (see tickAllInstances)
 
     // Broadcast a seek command to all clients. This is the same command used by host skip.
     player.sockets.forEach(socket => {

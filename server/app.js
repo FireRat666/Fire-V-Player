@@ -962,6 +962,20 @@ class App {
     if (!player || !data || typeof data.link !== 'string' || !(position > 0 && position < 10 * 365 * 24 * 3600)) return;
     const track = player.playlist[player.currentTrack];
     if (!track || track.link !== data.link || !this.getYoutubeId(track.link) || track.duration || track.liveStart) return;
+    // A screen's say-so doesn't make a track live: YouTube is asked, once per track.
+    if (!track.live) {
+      // Kept beside the track, not on it, as tracks are sent to the clients.
+      if (!this.liveChecks) this.liveChecks = new WeakMap();
+      if (!this.liveChecks.has(track)) {
+        this.liveChecks.set(track, videoById(this.getYoutubeId(track.link)).then(v => !!(v && v.live === true), () => false));
+      }
+      const live = await this.liveChecks.get(track);
+      if (!live) {
+        console.log(`[LIVE] ${track.link} was reported live, but YouTube doesn't say it is.`);
+        return;
+      }
+      if (player.playlist[player.currentTrack] !== track || track.liveStart) return; // changed meanwhile
+    }
     const now = new Date().getTime() / 1000;
     track.live = true;
     track.liveStart = now - position;
@@ -1155,9 +1169,14 @@ class App {
         // A live video whose live point is known, just made the current track (Previous, a loop,
         // a pick from the list), starts at the live point, not at its stream's start.
         const track = player.playlist[player.currentTrack];
+        // Not the first tick of a room just loaded, whose saved time is already right, nor a track
+        // the host has seeked in since it was made current (see hostHandler's seekedTrack).
         if (track !== player.liveTrack) {
-          player.liveTrack = track; // not saved (see _performSave)
-          if (track && track.live && track.liveStart && !player.paused && player.currentTime < 10) {
+          const changed = player.liveTrack !== undefined;
+          const seeked = player.seekedTrack === track;
+          player.liveTrack = track; // not saved (see _performSave), nor is seekedTrack
+          player.seekedTrack = null;
+          if (changed && !seeked && track && track.live && track.liveStart && !player.paused) {
             player.lastStartTime = track.liveStart;
             player.currentTime = now - track.liveStart;
             player.sockets.forEach(socket => {

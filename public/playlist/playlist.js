@@ -343,7 +343,9 @@ var Playlist = class {
       }
 
       // By subtracting the estimated clock skew, we align the client's 'now' with the server's 'now'.
-      let calculatedTime = ((Date.now() / 1000) - this.clockSkew) - lastStartTime;
+      // Paused, the time is held in currentTime (a live video's live point still moves on).
+      let calculatedTime = this.core.player.paused ? (Number(this.core.player.currentTime) || 0)
+        : ((Date.now() / 1000) - this.clockSkew) - lastStartTime;
       updateCount++;
       if (updateCount <= 5) { // Log the first 5 updates
         console.log(`UI Update #${updateCount}: clockSkew=${this.clockSkew.toFixed(3)}s, calculatedTime=${calculatedTime.toFixed(3)}s, lastStartTime=${lastStartTime}, duration=${duration}`);

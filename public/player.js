@@ -917,6 +917,18 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
           [...(this.playerData.playlist || []), this.currentVideo].forEach(v => {
             if (v && v.link === json.data.link) { v.live = true; v.liveStart = json.data.liveStart; }
           });
+          // A track change not applied yet (the player wasn't ready) starts at the live point too,
+          // not at the times it came with.
+          const pending = this.pendingTrackChange;
+          if (pending) {
+            const list = pending.playlist || this.playerData.playlist || [];
+            const link = (pending.track && pending.track.link) || (list[pending.newTrackIndex] || {}).link;
+            const paused = typeof pending.paused === 'boolean' ? pending.paused : this.playerData.paused;
+            if (link === json.data.link && !paused) {
+              pending.newLastStartTime = json.data.newLastStartTime;
+              pending.newCurrentTime = json.data.newCurrentTime;
+            }
+          }
           if (this.currentVideo && this.currentVideo.link === json.data.link && !this.previewVideo && !this.playerData.paused) this.syncAfterLoad();
         }
         break;

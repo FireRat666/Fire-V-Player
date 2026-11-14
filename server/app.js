@@ -834,14 +834,16 @@ class App {
   async setMediaDuration(ws, data) {
     const player = this.videoPlayers[ws.i];
     const seconds = data && Number(data.duration);
-    // Under a second is a player that hadn't loaded it yet, not a length: the track would end at once.
-    if (!player || !data || typeof data.link !== 'string' || !(seconds >= MIN_MEDIA_DURATION_S && seconds < 24 * 3600)) return;
+    if (!player || !data || typeof data.link !== 'string' || !(seconds > 0 && seconds < 24 * 3600)) return;
     // Only a screen, for the track it's playing (as it reports it, see player.js reportMediaDuration):
     // the length ends the track for everyone. That's the browser's screen, or for a file the world's
     // own video player, whose report comes over the space page's socket (native-video.js reportDuration).
     const playing = player.playlist[player.currentTrack];
-    const screen = ws.type === 'player' || (ws.type === 'space' && data.native === true);
-    if (!screen || !playing || playing.link !== data.link) return;
+    const native = ws.type === 'space' && data.native === true;
+    if (!(ws.type === 'player' || native) || !playing || playing.link !== data.link) return;
+    // From the browser, under a second is a player that hadn't loaded it yet, not a length: the track
+    // would end at once. The world's player has none until Unity knows the file's, so a short clip's is real.
+    if (!native && seconds < MIN_MEDIA_DURATION_S) return;
     // A YouTube video's length normally comes with it from YouTube. One looked up while YouTube
     // refused the server (oEmbed has no lengths) gets it from the screen, so it ends. A live
     // video has none, and plays until someone moves on.

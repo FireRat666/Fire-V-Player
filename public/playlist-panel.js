@@ -3486,9 +3486,10 @@ var FirePlaylistPanel = class {
     const open = this.openListId === list.id;
     this.setStyle(slot.row, 'backgroundColor', open ? '#283593' : '#37474f');
     const name = (data.state === 'ready' && data.title) || list.label;
-    const tagWord = list.isDefault ? 'default' : list.shared ? 'shared' : list.user ? 'mine' : '';
+    // Each in its own tr(), so scripts/translate-i18n.js finds them.
+    const tagWord = list.isDefault ? this.tr('default') : list.shared ? this.tr('shared') : list.user ? this.tr('mine') : '';
     // Open / Close beside it says whether it's open, so the name needs no marker.
-    const tag = tagWord ? ` (${this.tr(tagWord)})` : '';
+    const tag = tagWord ? ` (${tagWord})` : '';
     this.setText(slot.title, `${name}${tag}`, true);
     let sub;
     if (data.state === 'loading') sub = this.tr('Loading...');

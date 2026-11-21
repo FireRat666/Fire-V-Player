@@ -456,6 +456,8 @@ Whether the sound gets quieter with distance is the separate `spatial` setting, 
 | `data-reload-icon-url` | URL for a custom "Reload" button icon. | Default icon |
 | `data-skip-forward-icon-url` | URL for a custom "Skip Forward" button icon. | Default icon |
 | `data-skip-backward-icon-url` | URL for a custom "Skip Backward" button icon. | Default icon |
+| `data-controls-show-icon-url` | URL for a custom icon on the hand controls' show button (while they're folded away). `https://firer.at/files/fvp/ControlsShow.png` is the earlier dotted one. | Default icon |
+| `data-controls-hide-icon-url` | URL for a custom icon on the hand controls' hide button. `https://firer.at/files/fvp/ControlsHide.png` is the earlier dotted one. | Default icon |
 
 The default icons are Material icons on a round disc, in the UI Kit's colours. The earlier dotted icons are still hosted, so a snippet can switch back to them with these attributes: `https://firer.at/files/fvp/` followed by `Playlist.png`, `VolUp.png`, `VolDown.png`, `Mute.png`, `Unmute.png`, `Play.png`, `Pause.png`, `Reload.png`, `Forward.png` (skip forward), `Backwards.png` (skip backward), `ControlsShow.png` or `ControlsHide.png` (the hand controls' show and hide button).
 

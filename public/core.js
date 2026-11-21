@@ -284,7 +284,8 @@ var Core = class {
     await this.addColliderBox(go, new BS.Vector3(size, size, 0.01), true);
     go.On('click', () => {
       if (this.blocked) return;
-      this.pressLook(go);
+      // A swap button's pictures all take the look, so it shows on the one the press swaps to.
+      (go.fvpPressGroup || [go]).forEach(g => this.pressLook(g));
       callback();
     });
     return go;
@@ -1100,6 +1101,8 @@ var Core = class {
       button.icons[state] = go;
       this.setActive(go, false);
     }
+    const group = Object.values(button.icons);
+    group.forEach(go => { go.fvpPressGroup = group; });
     return button;
   }
   // Shows the picture for `state`, or hides the whole button when `shown` is false.
@@ -2692,7 +2695,9 @@ var Core = class {
     msg.u = window.user;
     if(this.connected()) {
       this.ws.send(JSON.stringify(msg));
+      return true;
     }
+    return false;
   }
   recieveBrowserMessage(msg) {
     if(msg.id && this.browserAcks && this.browserAcks[msg.id]) {

@@ -1470,8 +1470,10 @@ var Core = class {
         clearTimeout(timer);
         if (!waited) console.warn('[Core] i18n.js took over 8s to load: the panel stays in English.');
       }
+      if (this.destroyed) return; // cleaned up while waiting: make nothing new
       if (typeof FirePlaylistPanel === 'undefined') {
         await this.setupScript(null, "playlist-panel");
+        if (this.destroyed) return;
       }
       console.log('[Core] Creating the in-world playlist panel.');
       this.playlistPanel = new FirePlaylistPanel(this);

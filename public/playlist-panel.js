@@ -13,18 +13,16 @@
 // playlist button. It hides by moving out of view, because deactivating a UI Toolkit document
 // can drop the elements created at runtime. The hand's Playlist button puts it in
 // front of the player, and the pill under it can be grabbed to carry it.
-var PAGE_JUMP = 5; // pages the << and >> buttons move
-// The list scrolls (a UI Toolkit ScrollView) through this many rows at a time; the page buttons
+// The list scrolls (the kit's scroll view) through this many rows at a time; the page buttons
 // move this window through longer lists. Each row is about ten UI elements, and Unity is slow to
 // make hundreds of them, so the rows are a fixed pool, built a few at a time after the panel
-// opens, and refilled as the window moves. Without a scroll view, it's pages of rowsPerPage.
+// opens, and refilled as the window moves.
 var LIST_WINDOW = 20;
 var FIRST_ROWS = 8; // rows built with the panel; the rest follow in chunks of ROW_CHUNK
 var ROW_CHUNK = 4;
 // Successful searches kept on this device: how many, and for how long.
 var SEARCH_CACHE_SIZE = 10;
 var SEARCH_CACHE_MS = 6 * 60 * 60 * 1000;
-var SEARCH_COLOR = '#00897b';
 // The Speak button (speech to text). Off until Altspace supports it.
 var SPEAK_ENABLED = false;
 // The Info view's QR code: pixels per square, and the white border in squares.
@@ -61,28 +59,29 @@ var SETUP_GUIDE_QR = [
   '1000001011100010110001000',
   '1111111001110111111100011'
 ];
-// The server works on 3 list previews at a time per connection and refuses more, so the rest wait.
-// What Search & Add can search: the source button goes through them in this order.
+// What Search can search, in the order its dropdown lists them.
 var SEARCH_SOURCES = {
-  youtube: { label: 'YouTube', color: '#c62828', status: 'Searching YouTube.' },
-  archive: { label: 'Archive Films', color: '#6d4c41', status: 'Searching Internet Archive films and TV.' },
-  tubi: { label: 'Tubi', color: '#5e35b1', status: 'Searching Tubi. The first search takes a few seconds.' },
-  nasa: { label: 'NASA+', color: '#0b3d91', status: 'Searching NASA+.' },
-  eso: { label: 'ESO', color: '#00695c', status: "Searching ESO's videos." },
-  esodome: { label: 'ESO Fulldome', color: '#004d40', status: "Searching ESO's fulldome videos, for domes." },
+  youtube: { label: 'YouTube', status: 'Searching YouTube.' },
+  archive: { label: 'Archive Films', status: 'Searching Internet Archive films and TV.' },
+  tubi: { label: 'Tubi', status: 'Searching Tubi. The first search takes a few seconds.' },
+  nasa: { label: 'NASA+', status: 'Searching NASA+.' },
+  eso: { label: 'ESO', status: "Searching ESO's videos." },
+  esodome: { label: 'ESO Fulldome', status: "Searching ESO's fulldome videos, for domes." },
   // A room on screen.sdq.st, by its code or a link to it. Only with untrusted-links, as screen
   // shares can't play without it (see searchSources).
-  screen: { label: 'Screen Share', color: '#1565c0', status: 'Searching screen.sdq.st: type a room code, or paste its link.' }
+  screen: { label: 'Screen Share', status: 'Searching screen.sdq.st: type a room code, or paste its link.' }
 };
+// The server works on 3 list previews at a time per connection and refuses more, so the rest wait.
 var LIST_PREVIEWS_AT_ONCE = 3;
 // A list preview older than this is loaded again when it's next shown (the server re-reads lists
 // after 5 minutes too), and a request with no reply after LIST_REPLY_MS is given up on.
 var LIST_FRESH_MS = 5 * 60 * 1000;
 var LIST_REPLY_MS = 120000;
-// The progress bar's width in pixels: the panel (W, 1100) minus its padding and borders (42), the
-// now-playing card's padding (28), the time label (190) and the gap before the bar (10). A long
-// time (a live stream months in) widens the label and narrows the bar (see setTimeText).
-var PROGRESS_WIDTH = 820;
+// The progress bar's width in pixels is the panel's (W) less PROGRESS_SPARE: its padding and
+// borders (42), the now-playing card's padding (28), the time label (190) and the gap before the
+// bar (10). A long time (a live stream months in) widens the label and narrows the bar (see
+// setTimeText).
+var PROGRESS_SPARE = 270;
 var TIME_WIDTH = 190;
 // Added to thumbnail links, new each time the space loads. Unity keeps the pictures it has
 // downloaded for as long as the client runs (UIElementBridge's texture cache) and never checks one
@@ -96,13 +95,98 @@ var ICON_START = /^(\u275A\u275A|[\u2715\u265B\u2630\u25D4\u261A])\s?([\s\S]*)$/
 // What the panel shows for those symbols in the middle of a sentence, where a picture can't go:
 // pause bars, cross, crown (the host), menu, fade, pointing hand.
 var PLAIN_SYMBOLS = { '\u275A': '|', '\u2715': '\u00D7', '\u265B': '\u25C9', '\u2630': '=', '\u25D4': '~', '\u261A': '\u25C0' };
+
+// ---- The Altspace UI Kit (SDK 4.0.29 and an app that has it; see docs/components/ui-kit.md in the
+// creator SDK). Buttons are the kit's pill and round buttons, and the symbols that start a button's
+// text become the kit's icons. An app without the kit gets the menu page instead (see
+// Core.shouldUsePlaylistPanel).
+//
+// The symbol at the start of a button's text, and the icon it becomes: a name from the kit's icon
+// set, or 'fvp:name' for one of ours (public/assets/kit-icons, white Material icons like the kit's,
+// tinted by the kit). Longest first, so '\u25B6|' isn't read as '\u25B6'.
+var KIT_SYMBOLS = [
+  ['\u275A\u275A \u25B6', 'pause'], ['\u25C0\u25C0 \u25B6\u25B6', 'fvp:fast-forward'],
+  ['\u25C0\u25C0', 'fvp:fast-rewind'], ['\u25B6\u25B6', 'fvp:fast-forward'],
+  ['|\u25C0', 'fvp:skip-previous'], ['\u25B6|', 'fvp:skip-next'], ['\u275A\u275A', 'pause'],
+  ['\u25B2 \u25BC', 'chevron-up'], ['\u2B06 \u2B07', 'chevron-up'],
+  ['\u25B6', 'play'], ['\u25A0', 'stop'], ['\u2715', 'close'], ['\u2713', 'check'], ['+', 'add'], ['\u2212', 'remove'],
+  ['\u2B06', 'chevron-up'], ['\u2B07', 'chevron-down'], ['\u25B2', 'chevron-up'], ['\u25BC', 'chevron-down'],
+  ['\u21BB', 'refresh'], ['\u21C4', 'fvp:swap'], ['\u2605', 'bookmark-add'], ['\u2606', 'bookmark'],
+  ['\u266A', 'mic'], ['\u266B', 'volume-up'], ['\u260E', 'smartphone'], ['\u265B', 'crown'],
+  ['\u2630', 'menu'], ['\u24D8', 'info'], ['\u21A9', 'arrow-back'], ['\u25C9', 'location'],
+  ['\u21E4', 'fvp:first-page'], ['\u21E5', 'fvp:last-page'],
+  ['\u2039', 'chevron-left'], ['\u203A', 'chevron-right'], ['\u25A3', 'fullscreen'], ['\u25D4', 'tune'], ['\u261A', 'back-hand']
+];
+// The colours the panel's code gives buttons, and the kit button look each becomes.
+var KIT_VARIANTS = {
+  '#2e7d32': 'primary', '#1565c0': 'primary', '#00897b': 'primary',
+  '#c62828': 'danger',
+  '#6a1b9a': 'outline', '#4a148c': 'outline', '#ad1457': 'outline', '#5d2a2a': 'outline'
+};
+// Styles a kit button keeps from the ones it is given: where it sits and how big it is. Its colours,
+// font, padding and corners are the kit's.
+var KIT_LAYOUT_KEYS = ['display', 'width', 'minWidth', 'maxWidth', 'flexGrow', 'flexShrink', 'flexBasis', 'alignSelf',
+  'marginLeft', 'marginRight', 'marginTop', 'marginBottom', 'position', 'left', 'right', 'top', 'bottom'];
+// The panel's own surfaces and text in each theme, from the kit's tokens (dark is the kit's own).
+// A script can't change the kit's tokens, so these are set on the panel's plain elements; kit
+// controls keep their own look in both.
+var THEMES = {
+  dark: {
+    page: 'rgba(28, 28, 28, 0.97)', line: 'rgb(60, 60, 66)', card: 'rgb(36, 36, 40)',
+    row: 'rgb(50, 50, 50)', rowAlt: 'rgb(44, 44, 50)', rowWaiting: 'rgba(200, 150, 40, 0.22)', rowMine: 'rgba(46, 160, 92, 0.22)',
+    rowPreview: 'rgba(66, 120, 200, 0.25)', rowAdded: 'rgba(46, 160, 92, 0.16)', track: 'rgb(70, 70, 78)', thumb: 'rgb(30, 32, 40)',
+    text: 'rgb(245, 245, 250)', text2: 'rgb(210, 214, 224)', muted: 'rgb(150, 154, 170)', gold: 'rgb(245, 214, 138)'
+  },
+  light: {
+    page: 'rgba(244, 245, 249, 0.98)', line: 'rgb(208, 211, 220)', card: 'rgb(255, 255, 255)',
+    row: 'rgb(232, 235, 241)', rowAlt: 'rgb(224, 228, 236)', rowWaiting: 'rgba(200, 150, 40, 0.28)', rowMine: 'rgba(46, 160, 92, 0.24)',
+    rowPreview: 'rgba(66, 120, 200, 0.22)', rowAdded: 'rgba(46, 160, 92, 0.18)', track: 'rgb(200, 204, 214)', thumb: 'rgb(30, 32, 40)',
+    text: 'rgb(24, 24, 30)', text2: 'rgb(56, 60, 72)', muted: 'rgb(100, 106, 122)', gold: 'rgb(150, 105, 10)'
+  }
+};
+// The colours the panel's code gives its plain elements, and the theme colour each becomes, by style.
+var THEME_COLOURS = {
+  backgroundColor: {
+    'rgba(18, 18, 24, 0.96)': 'page', '#23232d': 'card', '#311b4f': 'card', '#2a2a33': 'row', '#31313c': 'rowAlt', '#37474f': 'row',
+    '#37404a': 'rowAlt', '#3949ab': 'rowCurrent', '#283593': 'rowCurrent', '#4a3f1e': 'rowWaiting', '#4e342e': 'rowWaiting',
+    '#2e4a3a': 'rowMine', '#1e3a5f': 'rowPreview', '#1a237e': 'rowPreview', '#1b3a2a': 'rowAdded', '#444444': 'track',
+    '#000000': 'thumb', '#e53935': 'accent'
+  },
+  borderColor: { '#555555': 'line', '#ab47bc': 'accent' },
+  color: {
+    '#ffffff': 'text', '#cccccc': 'text2', '#eeeeee': 'text2', '#e1bee7': 'text2',
+    '#bbbbbb': 'muted', '#aaaaaa': 'muted', '#999999': 'muted', '#888888': 'muted',
+    '#80deea': 'accentText', '#ffd54f': 'gold', '#ffcc66': 'gold'
+  }
+};
+// Accent colours. The first four are the kit's own (its accent classes, so its tabs, dropdowns and
+// switches follow); the rest are set on the panel's primary buttons, which then lose the kit's
+// hover colour, and use the nearest kit class for the rest.
+var ACCENTS = {
+  teal: { name: 'Teal', kit: '', colour: 'rgb(45, 140, 143)', bright: 'rgb(120, 220, 222)' },
+  violet: { name: 'Violet', kit: 'alt-theme--violet', colour: 'rgb(139, 92, 246)', bright: 'rgb(196, 181, 253)' },
+  amber: { name: 'Amber', kit: 'alt-theme--amber', colour: 'rgb(200, 150, 40)', bright: 'rgb(240, 196, 92)' },
+  rose: { name: 'Rose', kit: 'alt-theme--rose', colour: 'rgb(214, 74, 122)', bright: 'rgb(248, 168, 198)' },
+  red: { name: 'Red', kit: 'alt-theme--rose', colour: 'rgb(198, 48, 48)', bright: 'rgb(240, 130, 130)', own: true },
+  green: { name: 'Green', kit: '', colour: 'rgb(46, 150, 82)', bright: 'rgb(110, 214, 140)', own: true },
+  blue: { name: 'Blue', kit: 'alt-theme--violet', colour: 'rgb(40, 110, 214)', bright: 'rgb(130, 180, 250)', own: true }
+};
+// The kit's button colours, to put back on a primary button when an accent of our own is changed
+// for one of the kit's (see kitVariant).
+// On the light theme list rows stay dark (as the kit's buttons on them are): these
+// are the tinted rows' colours there.
+var LIGHT_ROW_TINTS = { rowWaiting: 'rgb(98, 76, 30)', rowMine: 'rgb(30, 82, 54)', rowPreview: 'rgb(34, 62, 106)', rowAdded: 'rgb(30, 72, 50)' };
+var KIT_BUTTON_COLOURS = { primary: '', secondary: 'rgb(50, 50, 56)', danger: 'rgb(190, 64, 64)', warning: 'rgb(200, 150, 40)', outline: 'rgba(0, 0, 0, 0)', ghost: 'rgba(0, 0, 0, 0)' };
 var FirePlaylistPanel = class {
   constructor(core) {
     this.core = core;
     this.karaoke = !!core.isKaraoke;
-    this.W = 1100;            // panel resolution in pixels
-    this.H = 940;
-    this.rowsPerPage = 7;
+    // The panel's resolution in pixels. It is laid out on fewer pixels than its size in the world
+    // would suggest, so everything on it comes out bigger: the kit's controls are sized for a panel
+    // seen closer up, and its text sizes are its own (a script can't change them), so this is what
+    // makes them easy to read in VR.
+    this.W = 1000;
+    this.H = 855;
     this.tab = 'playlist';    // 'playlist' (the singer queue in karaoke mode) | 'lists' | 'search'
     // Where each tab's rows start, as an item index (see LIST_WINDOW).
     this.page = 0;
@@ -151,8 +235,391 @@ var FirePlaylistPanel = class {
     this.linkQuery = '';
     this.pendingReplacement = null;
     this.searchTimer = null;
+    // The theme and accent picked on this device, and the panel's language.
+    this.theme = this.loadSetting('fvpPanelTheme', Object.keys(THEMES), 'dark');
+    this.accent = this.loadSetting('fvpPanelAccent', Object.keys(ACCENTS), 'teal');
+    this.themedEls = new Set(); // elements with a colour that follows the theme (see themed)
+    this.textEls = new Set();   // elements with text, put in the new language when it changes
+    this.kitButtons = new Set();
+    this.i18n = typeof FvpI18n !== 'undefined' ? new FvpI18n(name => core.setupScript(null, name)) : null;
     this.onMessageFn = msg => this.onMessage(msg);
     core.addMessageListener(this.onMessageFn);
+  }
+
+  loadSetting(key, choices, def) {
+    try {
+      const v = localStorage.getItem(key);
+      return choices.includes(v) ? v : def;
+    } catch (e) {
+      return def;
+    }
+  }
+  saveSetting(key, value) {
+    try { localStorage.setItem(key, value); } catch (e) {}
+  }
+
+  // ---------------------------------------------------------------- language
+
+  // The translation of an English string, {words} filled in (see i18n.js).
+  tr(text, vars) {
+    if (this.i18n) return this.i18n.tr(text, vars);
+    return vars ? String(text).replace(/\{(\w+)\}/g, (m, k) => (vars[k] != null ? String(vars[k]) : m)) : text;
+  }
+  // Text for setText: one of the panel's strings in the current language, a symbol in front kept
+  // ("+ Add" is "+" and "Add"). Anything else (a title, a name) stays as it is.
+  trText(text) {
+    if (!this.i18n || this.i18n.lang === 'en' || !text) return text;
+    const whole = this.i18n.lookup(text);
+    if (whole) return whole;
+    const m = /^([^\p{L}\p{N}]+?\s)([\s\S]+)$/u.exec(text);
+    const rest = m && this.i18n.lookup(m[2]);
+    if (rest) return m[1] + rest;
+    // Sentences put together (controlText's), each one of the panel's strings.
+    const parts = text.split(/(?<=[.!?])\s+/);
+    // A string can be more than one sentence, so the longest run that is one is taken each time.
+    const done = [];
+    for (let i = 0; parts.length > 1 && i < parts.length;) {
+      let j = parts.length;
+      while (j > i && !this.i18n.lookup(parts.slice(i, j).join(' '))) j--;
+      if (j === i) return text;
+      done.push(this.i18n.lookup(parts.slice(i, j).join(' ')));
+      i = j;
+    }
+    return done.length ? done.join(' ') : text;
+  }
+  // Switches the panel's language: loads its strings, then sets every text again.
+  async setLanguage(code) {
+    if (!this.i18n) return;
+    await this.i18n.use(code);
+    for (const el of this.textEls) {
+      if (el.fvpRawText != null) {
+        const raw = el.fvpRawText;
+        el.fvpRawText = null;
+        this.setText(el, raw);
+      }
+    }
+    if (this.kitTabs) this.kitTabsChoices = null;
+    for (const f of this.kitFields || []) {
+      try { f.placeholder = this.tr(f.fvpPlaceholder); } catch (e) {}
+    }
+    this.fillLookChoices();
+    this.render();
+  }
+
+  // ---------------------------------------------------------------- theme
+
+  // A theme colour by name: the theme's, or the accent's.
+  themeColour(token) {
+    const a = ACCENTS[this.accent] || ACCENTS.teal;
+    if (token === 'accent') return a.colour;
+    if (token === 'accentText') return this.theme === 'light' ? a.colour : a.bright;
+    if (token === 'rowCurrent') return a.colour.replace(/^rgb\((.*)\)$/, 'rgba($1, 0.38)');
+    return (THEMES[this.theme] || THEMES.dark)[token];
+  }
+  // A style value for a plain element: one of THEME_COLOURS becomes the theme's. It is kept, so a
+  // new theme can be applied.
+  themed(el, key, value) {
+    const map = THEME_COLOURS[key];
+    if (!map || typeof value !== 'string') return value;
+    if (!el.fvpRaw) el.fvpRaw = {};
+    el.fvpRaw[key] = value;
+    this.themedEls.add(el);
+    const token = map[value.toLowerCase()];
+    // On a kit surface (always dark): the accent still follows the choice, the rest stays as it is.
+    if (el.fvpNoTheme) return token === 'accentText' ? (ACCENTS[this.accent] || ACCENTS.teal).bright : token === 'accent' ? this.themeColour('accent') : value;
+    return token ? this.themeColour(token) : value;
+  }
+  // Styles for a new plain element. One inside a plain button or on a kit surface keeps its colours.
+  applyStyles(el, styles, parent) {
+    if (parent && (parent.fvpButton || parent.fvpNoTheme)) el.fvpNoTheme = true;
+    const out = {};
+    for (const [k, v] of Object.entries(styles || {})) out[k] = this.themed(el, k, v);
+    el.SetStyles(out);
+  }
+  // Puts the current theme and accent on everything already made.
+  applyTheme() {
+    for (const el of this.themedEls) {
+      for (const [k, v] of Object.entries(el.fvpRaw || {})) this.setStyle(el, k, v);
+    }
+    for (const el of this.kitButtons) this.kitVariant(el, el.fvpVariant || 'outline');
+    this.applyTabsLook();
+    if (this.themeRoot) {
+      for (const a of Object.values(ACCENTS)) if (a.kit) this.themeRoot.RemoveClass(a.kit);
+      const kitClass = (ACCENTS[this.accent] || ACCENTS.teal).kit;
+      if (kitClass) this.themeRoot.AddClass(kitClass);
+    }
+    this.render();
+  }
+  // The kit's tabs draw light text: on the light theme they sit on a dark strip.
+  applyTabsLook() {
+    if (!this.kitTabs) return;
+    const light = this.theme === 'light';
+    this.kitTabs.SetStyles({ backgroundColor: light ? 'rgb(42, 42, 48)' : 'rgba(0, 0, 0, 0)', borderRadius: light ? '12px' : '0px', paddingLeft: light ? '6px' : '0px', paddingRight: light ? '6px' : '0px' });
+  }
+  setTheme(theme) {
+    if (!THEMES[theme] || theme === this.theme) return;
+    this.theme = theme;
+    this.saveSetting('fvpPanelTheme', theme);
+    this.applyTheme();
+  }
+  setAccent(accent) {
+    if (!ACCENTS[accent] || accent === this.accent) return;
+    this.accent = accent;
+    this.saveSetting('fvpPanelAccent', accent);
+    this.applyTheme();
+  }
+
+  // ---------------------------------------------------------------- UI Kit controls
+
+  // Our own kit icons, from the assets host like the other pictures (a copy of
+  // public/assets/kit-icons is there). The address changes each visit, as applyIconText's does.
+  kitIconUrl(name) {
+    return `${this.core.assetUrl(`kit-icons/${name}.png`)}?fvp=${THUMB_VISIT}`;
+  }
+  // A kit button's look (see KIT_VARIANTS). With an accent of our own, a primary button is given
+  // its colour; one that had it gets the kit's colour for its look back.
+  kitVariant(el, variant) {
+    el.fvpVariant = variant;
+    // The kit's ghost and outline buttons are white on nothing, which can't be seen on the light
+    // theme's pale panel (and a script can't reach their icon's colour), so there they are the
+    // dark secondary pills the other buttons are.
+    // Not on a kit row or card, which stay dark.
+    if (this.theme === 'light' && !el.fvpOnDark && (variant === 'ghost' || variant === 'outline')) variant = 'secondary';
+    if (this._changed(el, 'variant', variant)) el.variant = variant;
+    const a = ACCENTS[this.accent] || ACCENTS.teal;
+    let bg = null;
+    if (variant === 'primary' && a.own) bg = a.colour;
+    else if (el.fvpOwnBg) bg = variant === 'primary' ? a.colour : (KIT_BUTTON_COLOURS[variant] || KIT_BUTTON_COLOURS.secondary);
+    if (bg && bg !== el.fvpOwnBg) {
+      el.fvpOwnBg = bg;
+      el.SetStyles({ backgroundColor: bg });
+    }
+  }
+  // A kit button's text: a symbol at its start (KIT_SYMBOLS), or '@name', becomes its icon; one
+  // at its end ("30s ▶▶") becomes an icon after the label.
+  kitText(el, text) {
+    text = text == null ? '' : String(text);
+    el.fvpRawText = text;
+    this.textEls.add(el);
+    let icon = '';
+    let rest = text;
+    let trailing = false;
+    const named = /^@([a-z:-]+)(?:\s([\s\S]*))?$/.exec(text);
+    if (named) {
+      icon = named[1];
+      rest = named[2] || '';
+    } else {
+      for (const [sym, name] of KIT_SYMBOLS) {
+        if (text.startsWith(sym) && (text.length === sym.length || text[sym.length] === ' ')) {
+          icon = name;
+          rest = text.slice(sym.length).trim();
+          break;
+        }
+        if (text.length > sym.length + 1 && text.endsWith(` ${sym}`)) {
+          icon = name;
+          rest = text.slice(0, -sym.length).trim();
+          trailing = true;
+          break;
+        }
+      }
+    }
+    rest = this.trText(rest);
+    if (!el.fvpRound && this._changed(el, 'text', rest)) el.text = rest;
+    const own = icon.startsWith('fvp:');
+    // Our own icon element: for our pictures, or any icon on a button with a bigger icon size.
+    const mine = own || !!(icon && el.fvpIconSize);
+    const kitIcon = mine ? '' : icon;
+    if (this._changed(el, 'icon', kitIcon)) el.icon = kitIcon;
+    if (!el.fvpRound && kitIcon && this._changed(el, 'iconPosition', trailing ? 'trailing' : 'leading')) el.iconPosition = trailing ? 'trailing' : 'leading';
+    if (mine && !el.fvpImg) {
+      // Our own icons are a kit icon with a picture in the button's slot, which comes after the
+      // label: the button's row is turned round to put one in front (see below). The pictures are
+      // Material icons like the kit's, which are drawn at 20 px in a pill and half the size round;
+      // ours have more space around them, so they are a step bigger.
+      el.fvpImg = this.ui.CreateKitIcon(el);
+      el.fvpImg.size = el.fvpIconSize || 'md';
+      el.fvpImg.SetStyles({ flexShrink: 0 });
+    }
+    if (el.fvpImg) {
+      const url = own ? this.kitIconUrl(icon.slice(4)) : '';
+      if (this._changed(el.fvpImg, 'image', url) && (url || el.fvpImgHad)) {
+        el.fvpImg.image = url;
+        el.fvpImgHad = !!url;
+      }
+      const glyph = mine && !own ? icon : '';
+      if (this._changed(el.fvpImg, 'icon', glyph)) el.fvpImg.icon = glyph;
+      this.display(el.fvpImg, mine);
+      const before = mine && rest && !trailing;
+      // Straight to the button: kitStyle keeps only where a button sits.
+      const dir = before ? 'row-reverse' : 'row';
+      if (!el.fvpRound && this._changed(el, 'flexDirection', dir)) el.SetStyles({ flexDirection: dir });
+      this.setStyle(el.fvpImg, 'marginLeft', mine && rest && trailing ? '6px' : '0px');
+      this.setStyle(el.fvpImg, 'marginRight', before ? '6px' : '0px');
+    }
+  }
+  // A kit button: a pill (KitButton), or round with one icon (KitIconButton, `round`).
+  kitButton(parent, text, onClick, styles, round) {
+    const s = styles || {};
+    const el = round ? this.ui.CreateKitIconButton(parent) : this.ui.CreateKitButton(parent);
+    el.fvpKit = true;
+    el.fvpRound = !!round;
+    // On a kit row or card (always dark), whatever the theme.
+    el.fvpOnDark = !!(parent && (parent.fvpNoTheme || parent.fvpKitRow));
+    // Large unless asked otherwise: in VR a button has to be easy to read and to hit.
+    el.size = s.kitSize || 'lg';
+    // A bigger icon than the kit's own for the button's size (its glyph is then drawn by our icon).
+    el.fvpIconSize = s.kitIconSize || null;
+    // The kit's buttons have no margin; the old ones had 4 px all round, which kept a row of them
+    // apart (and the lines of a wrapping row).
+    const layout = { flexShrink: 0, marginLeft: '4px', marginRight: '4px', marginTop: '3px', marginBottom: '3px' };
+    for (const k of KIT_LAYOUT_KEYS) if (k in s) layout[k] = s[k];
+    el.SetStyles(layout);
+    this.kitButtons.add(el);
+    // A button with no colour of its own is outlined: the kit's quiet look that still shows its
+    // edge, so it reads as a button on any surface.
+    this.kitVariant(el, s.kitVariant || KIT_VARIANTS[String(s.backgroundColor || '').toLowerCase()] || 'outline');
+    this.kitText(el, text);
+    this.bindClick(el, onClick);
+    return el;
+  }
+  // A style on a kit button: a colour picks its look; where it sits and its size are kept; the
+  // rest is the kit's.
+  kitStyle(el, key, value) {
+    if (key === 'backgroundColor') return this.kitVariant(el, KIT_VARIANTS[String(value).toLowerCase()] || 'outline');
+    if (!KIT_LAYOUT_KEYS.includes(key)) return;
+    if (this._changed(el, key, value)) el.SetStyles({ [key]: value });
+  }
+  // The icons the buttons show for some symbols (KIT_SYMBOLS, or '@name'), side by side, for the
+  // Info view's legend. A symbol with no icon (CC, Go Live) stays as text.
+  async kitIcons(parent, text) {
+    for (const part of String(text).split(' ')) {
+      let name = part.startsWith('@') ? part.slice(1) : null;
+      if (!name) {
+        const hit = KIT_SYMBOLS.find(([sym]) => sym === part);
+        name = hit ? hit[1] : null;
+      }
+      if (!name) {
+        await this.label(parent, part, { fontSize: '22px', marginLeft: '3px', marginRight: '3px' });
+        continue;
+      }
+      const ic = this.ui.CreateKitIcon(parent);
+      ic.size = 'md';
+      if (name.startsWith('fvp:')) ic.image = this.kitIconUrl(name.slice(4));
+      else ic.icon = name;
+      ic.SetStyles({ marginLeft: '3px', marginRight: '3px', flexShrink: 0 });
+    }
+  }
+
+  // A kit scroll view filling `parent`, with a column inside for the content.
+  async kitScrollColumn(parent, styles) {
+    const scroller = this.ui.CreateKitScrollView(parent);
+    scroller.SetStyles(Object.assign({ flexGrow: 1, flexShrink: 1, flexBasis: '0px', minHeight: '0px' }, styles || {}));
+    const col = await this.div(scroller, { display: 'flex', flexDirection: 'column', flexShrink: 0, paddingRight: '8px' });
+    return { scroller, col };
+  }
+  // A kit dropdown. `choices` are [key, English text]; onPick gets the key.
+  kitDropdown(parent, choices, onPick, styles) {
+    const dd = this.ui.CreateKitDropdown(parent);
+    dd.size = 'lg';
+    dd.SetStyles(Object.assign({ flexShrink: 0 }, styles || {}));
+    dd.fvpChoices = choices;
+    this.setDropdownChoices(dd, choices);
+    dd.OnChange(e => {
+      if (!e || e.value == null || this.core.blocked) return;
+      const pick = (dd.fvpShown || []).find(c => c[1] === String(e.value));
+      if (pick) onPick(pick[0]);
+    });
+    return dd;
+  }
+  // A dropdown's entries in the current language (each entry is its text, so `;` is escaped).
+  setDropdownChoices(dd, choices) {
+    dd.fvpChoices = choices;
+    dd.fvpShown = choices.map(([key, text, keep]) => [key, keep ? text : this.tr(text)]);
+    const list = dd.fvpShown.map(c => c[1].replace(/;/g, '\\;')).join(';');
+    if (this._changed(dd, 'choices', list)) dd.choices = list;
+  }
+  setDropdownValue(dd, key) {
+    if (!dd) return;
+    const c = (dd.fvpShown || []).find(x => x[0] === key);
+    const v = c ? c[1] : '';
+    if (this._changed(dd, 'value', v)) dd.value = v;
+  }
+  // The Look & language dropdowns, in the current language.
+  fillLookChoices() {
+    if (this.themeDropdown) this.setDropdownChoices(this.themeDropdown, [['dark', 'Dark'], ['light', 'Light']]);
+    if (this.accentDropdown) this.setDropdownChoices(this.accentDropdown, Object.entries(ACCENTS).map(([k, a]) => [k, a.name]));
+    if (this.sourceDropdown) this.setDropdownChoices(this.sourceDropdown, this.searchSources().map(k => [k, SEARCH_SOURCES[k].label, true]));
+  }
+  // Presses: one press can arrive twice, and a blacklisted user can't use anything.
+  bindClick(el, onClick) {
+    let last = 0;
+    el.OnClick(() => {
+      const now = Date.now();
+      if (now - last < 350) return;
+      last = now;
+      if (this.core.blocked) return; // blacklisted: nothing works (see Core.setBlocked)
+      try { onClick(); } catch (e) { console.error('[PlaylistPanel] click handler failed:', e); }
+    });
+  }
+
+  // A kit surface (a card) for a section of Info or More. Kit controls draw light on dark whatever
+  // the theme, so a surface and everything in it keep the dark look (fvpNoTheme).
+  kitSurface(parent, styles) {
+    const box = this.ui.CreateKitSurface(parent);
+    box.variant = 'card';
+    box.padding = 's4';
+    box.fvpNoTheme = true;
+    box.SetStyles(Object.assign({ flexShrink: 0, marginBottom: '10px' }, styles || {}));
+    return box;
+  }
+  // The kit's section heading: an optional small eyebrow above a title.
+  kitHeading(parent, text, eyebrow) {
+    const h = this.ui.CreateKitSectionHeader(parent);
+    h.fvpTextProp = 'title';
+    h.SetStyles({ flexShrink: 0, marginBottom: '4px' });
+    if (eyebrow) h.eyebrow = this.tr(eyebrow).toLocaleUpperCase();
+    this.setText(h, text);
+    return h;
+  }
+  // One settings row (the kit's option row): a label and a quieter line on the left, the control
+  // on the right. Returns the row; its control goes in it.
+  kitOption(parent, label, description) {
+    const r = this.ui.CreateKitOptionRow(parent);
+    r.fvpTextProp = 'label';
+    r.fvpNoTheme = true; // on a kit card
+    r.SetStyles({ flexShrink: 0 });
+    this.setText(r, label);
+    if (description) {
+      // A second text property: kept like a text element of its own, for a new language.
+      const d = { fvpTextProp: 'description', fvpProxy: r };
+      r.fvpDesc = d;
+      this.setText(d, description);
+    }
+    return r;
+  }
+  // A kit switch in an option row. onChange gets true or false.
+  kitToggle(parent, onChange) {
+    const t = this.ui.CreateKitToggle(parent);
+    t.fvpToggle = true;
+    t.OnChange(e => {
+      if (!e || e.value == null || this.core.blocked) return;
+      const v = e.value === true || String(e.value).toLowerCase() === 'true';
+      this.cache.get(t) && (this.cache.get(t).checked = v);
+      onChange(v);
+    });
+    return t;
+  }
+
+  // A kit chip (recent searches, words to add to a search). variant: filter, add or danger.
+  kitChip(parent, text, onClick, variant, icon) {
+    const chip = this.ui.CreateKitChip(parent);
+    chip.variant = variant || 'filter';
+    if (icon) chip.icon = icon;
+    chip.fvpTextProp = 'text';
+    chip.SetStyles({ flexShrink: 0, marginRight: '6px' });
+    this.setText(chip, text);
+    this.bindClick(chip, onClick);
+    return chip;
   }
 
   // ---------------------------------------------------------------- helpers
@@ -235,7 +702,23 @@ var FirePlaylistPanel = class {
     return text.replace(/[\u275A\u2715\u265B\u2630\u25D4\u261A]/g, ch => PLAIN_SYMBOLS[ch]);
   }
   setText(el, text) {
+    if (!el) return;
+    if (el.fvpKit) return this.kitText(el, text);
+    if (el.fvpTextProp) {
+      // A kit control whose text is one property (a chip's text, an empty state's message).
+      text = text == null ? '' : String(text);
+      el.fvpRawText = text;
+      this.textEls.add(el);
+      const t = this.trText(text);
+      const target = el.fvpProxy || el;
+      if (this._changed(target, el.fvpTextProp, t)) target[el.fvpTextProp] = t;
+      return;
+    }
     text = text == null ? '' : String(text);
+    // Kept as given, so a new language can be put on it (setLanguage).
+    el.fvpRawText = text;
+    this.textEls.add(el);
+    text = this.trText(text);
     // Text that starts with one of the picture icons (see ICON_FILES), or an element that has
     // shown one before, is drawn as a picture and a label inside the element.
     const m = ICON_START.exec(text);
@@ -245,8 +728,7 @@ var FirePlaylistPanel = class {
   }
   // The picture icons: the UI font on a Quest lacks these symbols, and pictures look the same
   // on every device. The element's own text is emptied, and it gets a picture and a label as
-  // children (as iconButton's do), made once and then only changed. `file` null shows text only
-  // (the pause button's play symbol, say).
+  // children, made once and then only changed. `file` null shows text only.
   setIconText(el, file, rest) {
     let part = this.iconParts.get(el);
     if (!part) {
@@ -258,6 +740,9 @@ var FirePlaylistPanel = class {
       part.building = (async () => {
         part.img = await this.div(el, { width: size, height: size, flexShrink: 0 });
         part.txt = await this.label(el, '', { fontSize: el.fvpFontSize || '20px', color: el.fvpColor || '#ffffff', whiteSpace: 'nowrap', flexShrink: 1, overflow: 'hidden', textOverflow: 'ellipsis' });
+        // Its text comes from el's (applyIconText), already in the panel's language: setLanguage
+        // setting it again on its own would empty it.
+        this.textEls.delete(part.txt);
         part.building = null;
         this.applyIconText(part);
       })().catch(e => console.warn('[PlaylistPanel] Could not make an icon:', e));
@@ -279,10 +764,21 @@ var FirePlaylistPanel = class {
     if (this._changed(part.txt, 'text', part.rest)) part.txt.text = part.rest;
   }
   display(el, on) {
+    if (!el) return;
     const v = on ? 'flex' : 'none';
     if (this._changed(el, 'display', v)) el.SetStyles({ display: v });
   }
   setStyle(el, key, value) {
+    if (!el) return;
+    if (el.fvpKit) return this.kitStyle(el, key, value);
+    if (el.fvpProgress) {
+      if (key !== 'width') return;
+      const v = Math.max(0, Math.min(1, (parseFloat(value) || 0) / 100));
+      if (this._changed(el, 'value', v)) el.fvpProgress.value = v;
+      return;
+    }
+    if (el.fvpKitRow && key === 'backgroundColor') return this.kitRowLook(el, value);
+    value = this.themed(el, key, value);
     if (this._changed(el, key, value)) el.SetStyles({ [key]: value });
   }
 
@@ -308,11 +804,9 @@ var FirePlaylistPanel = class {
     if (ms) this.statusTimer = setTimeout(() => this.setText(this.statusLabel, ''), ms);
   }
 
-  // Rows shown at once. Without a scroll view, the search tab has one row fewer, for the row of
-  // search helpers above it.
+  // Rows in the scroll view at once.
   pageSize() {
-    if (this.scrolling) return LIST_WINDOW;
-    return this.tab === 'search' ? this.rowsPerPage - 1 : this.rowsPerPage;
+    return LIST_WINDOW;
   }
 
   // Where the current tab's rows start (an item index), and setting it.
@@ -443,20 +937,25 @@ var FirePlaylistPanel = class {
 
   async div(parent, styles) {
     const el = await this.ready(this.ui.CreateVisualElement(parent));
-    el.SetStyles(Object.assign({ backgroundColor: 'rgba(0,0,0,0)' }, styles || {}));
+    this.applyStyles(el, Object.assign({ backgroundColor: 'rgba(0,0,0,0)' }, styles || {}), parent);
     return el;
   }
 
   async label(parent, text, styles) {
     const el = await this.ready(this.ui.CreateLabel(undefined, parent));
-    el.SetStyles(Object.assign({ color: '#ffffff', fontSize: '20px', backgroundColor: 'rgba(0,0,0,0)' }, styles || {}));
+    this.applyStyles(el, Object.assign({ color: '#ffffff', fontSize: '20px', backgroundColor: 'rgba(0,0,0,0)' }, styles || {}), parent);
     el.fvpFontSize = (styles && styles.fontSize) || '20px'; // for a picture icon (see setIconText)
     el.fvpColor = (styles && styles.color) || '#ffffff';
     this.setText(el, text);
     return el;
   }
 
+  // A button: the kit's (kitButton), or with styles.plain a button laid out as a card, with parts
+  // inside (the Who controls cards, a link).
   async button(parent, text, onClick, styles) {
+    if (!(styles && styles.plain)) return this.kitButton(parent, text, onClick, styles, styles && styles.round);
+    styles = Object.assign({}, styles);
+    for (const k of ['plain', 'round', 'kitSize', 'kitIconSize', 'kitVariant']) delete styles[k];
     const el = await this.ready(this.ui.CreateButton(parent));
     el.SetStyles(Object.assign({
       backgroundColor: '#00838f', color: '#ffffff', fontSize: '20px', flexShrink: 0,
@@ -468,25 +967,20 @@ var FirePlaylistPanel = class {
     el.fvpFontSize = (styles && styles.fontSize) || '20px';
     el.fvpColor = (styles && styles.color) || '#ffffff';
     this.setText(el, text);
-    // Guard against a click arriving twice from one press.
-    let last = 0;
-    el.OnClick(() => {
-      const now = Date.now();
-      if (now - last < 350) return;
-      last = now;
-      if (this.core.blocked) return; // blacklisted: nothing works (see Core.setBlocked)
-      try { onClick(); } catch (e) { console.error('[PlaylistPanel] click handler failed:', e); }
-    });
+    this.bindClick(el, onClick);
     return el;
   }
 
   // A web address shown as text that opens in the viewer's browser when pressed (the client asks
   // them first). `url` is the address, or a function giving it, for one that changes.
   async link(parent, text, url, styles) {
-    return this.button(parent, text, () => this.openLink(typeof url === 'function' ? url() : url), Object.assign({
+    const el = await this.button(parent, text, () => this.openLink(typeof url === 'function' ? url() : url), Object.assign({
       backgroundColor: 'rgba(0,0,0,0)', paddingLeft: '6px', paddingRight: '6px', paddingTop: '2px', paddingBottom: '2px',
-      marginLeft: '0px', marginRight: '0px', marginTop: '0px', marginBottom: '0px'
+      marginLeft: '0px', marginRight: '0px', marginTop: '0px', marginBottom: '0px', plain: true
     }, styles || {}));
+    // Its text colour follows the theme (the accent's, for a link).
+    if (styles && styles.color) this.setStyle(el, 'color', styles.color);
+    return el;
   }
 
   openLink(url) {
@@ -494,57 +988,9 @@ var FirePlaylistPanel = class {
     if (!this.core.openPage(url)) this.core.showToast(`Couldn't open it here. Go to ${url.replace(/^https?:\/\//, '')} in your browser.`, 6000);
   }
 
-  // A button with drawn icons (drawLock, drawSpeaker) and text as children, so the icon can be
-  // more than the UI font has. `draw` adds the icon to the button. Its text label is btn.label.
-  async iconButton(parent, draw, text, onClick, styles) {
-    const btn = await this.button(parent, '', onClick, Object.assign({ display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }, styles || {}));
-    if (draw) await draw(btn);
-    btn.label = text != null ? await this.label(btn, text, { fontSize: (styles && styles.fontSize) || '20px', marginLeft: draw && text ? '8px' : '0px' }) : null;
-    return btn;
-  }
-
-  // The UI font has symbols (▶ ◀◀ ✓ ...; fewer on Quest, see plainSymbols) but no colour emoji, so a padlock and a speaker are
-  // drawn from boxes. A padlock: the shackle (a round-topped border) over the body; open lifts the
-  // shackle to the right.
-  async drawLock(parent, open, color = '#ffffff') {
-    const box = await this.div(parent, { width: '26px', height: '32px', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end' });
-    await this.div(box, {
-      width: '16px', height: '14px', borderTopWidth: '4px', borderLeftWidth: '4px', borderRightWidth: '4px', borderBottomWidth: '0px',
-      borderColor: color, borderTopLeftRadius: '8px', borderTopRightRadius: '8px',
-      marginLeft: open ? '14px' : '0px', marginBottom: open ? '2px' : '-2px'
-    });
-    await this.div(box, { width: '24px', height: '18px', backgroundColor: color, borderRadius: '4px' });
-    return box;
-  }
-
-  // A speaker: body and cone, then a sound wave, or a cross when muted. Blocky (the cone is a taller
-  // box), as the UI draws a border-made triangle as a thin sliver.
-  async drawSpeaker(parent, wave, muted, color = '#ffffff') {
-    const box = await this.div(parent, { height: '30px', flexShrink: 0, display: 'flex', flexDirection: 'row', alignItems: 'center' });
-    await this.div(box, { width: '8px', height: '12px', backgroundColor: color, borderTopLeftRadius: '2px', borderBottomLeftRadius: '2px' });
-    await this.div(box, { width: '9px', height: '24px', backgroundColor: color, borderTopRightRadius: '3px', borderBottomRightRadius: '3px', marginLeft: '1px' });
-    if (muted) await this.label(box, '✕', { fontSize: '20px', color, marginLeft: '4px' });
-    if (wave) {
-      await this.div(box, { width: '8px', height: '18px', borderRightWidth: '3px', borderColor: color, borderTopRightRadius: '50%', borderBottomRightRadius: '50%', marginLeft: '1px' });
-    }
-    return box;
-  }
-
-  // A scrolling column (a UI Toolkit ScrollView) filling `parent`, or a plain column without one.
+  // A scrolling column (the kit's scroll view) filling `parent`.
   async scrollColumn(parent) {
-    if (typeof this.ui.CreateScrollView === 'function') {
-      try {
-        const scroller = await this.ready(this.ui.CreateScrollView(parent));
-        scroller.SetStyles({
-          flexGrow: 1, flexShrink: 1, flexBasis: '0px', minHeight: '0px',
-          overflow: 'scroll', backgroundColor: 'rgba(0,0,0,0)', backgroundImage: 'none'
-        });
-        return await this.div(scroller, { display: 'flex', flexDirection: 'column', flexShrink: 0, paddingRight: '6px' });
-      } catch (e) {
-        console.warn('[PlaylistPanel] Could not make a scroll view:', e);
-      }
-    }
-    return this.div(parent, { display: 'flex', flexDirection: 'column', flexGrow: 1, overflow: 'hidden' });
+    return (await this.kitScrollColumn(parent)).col;
   }
 
   // Who may control the player, from the server's two settings (lock and Take Over): 'host'
@@ -556,13 +1002,23 @@ var FirePlaylistPanel = class {
     return player.locked ? 'host' : 'everyone';
   }
 
-  // The three choices, closed to open: [level, padlock open, colour, name].
+  // The three choices, closed to open: [level, padlock open, colour, name]. The colours are the
+  // host chip's (see render): the accent, amber, and red for Take Over, so anyone can see at a
+  // glance that the player can be taken.
   controlLevels() {
     return [
-      ['host', false, '#2e7d32', 'Only the host'],
-      ['everyone', true, '#ef6c00', 'Everyone'],
-      ['takeover', true, '#c62828', 'Everyone + Take Over']
+      ['host', false, this.themeColour('accent'), 'Only the host'],
+      ['everyone', true, 'rgb(200, 150, 40)', 'Everyone'],
+      ['takeover', true, 'rgb(190, 64, 64)', 'Everyone + Take Over']
     ];
+  }
+  // A padlock, shut or open: the kit's own icons.
+  async lockIcon(parent, open, size) {
+    const ic = this.ui.CreateKitIcon(parent);
+    ic.size = size || 'md';
+    ic.icon = open ? 'lock-open' : 'lock';
+    ic.SetStyles({ flexShrink: 0 });
+    return ic;
   }
 
   controlText(level) {
@@ -595,35 +1051,35 @@ var FirePlaylistPanel = class {
     this.setStatus(this.controlText(level), 6000);
   }
 
-  // A text input. Returns null when this SDK has no UITextField.
-  async textField(parent, placeholder, onValue, onEnter) {
-    if (!BS.UITextField) return null;
-    const field = await this.ready(new BS.UITextField(this.ui, parent));
-    try { field.placeholder = placeholder; } catch (_) {}
-    // The SDK theme makes the inner input transparent and the text colour can't be reached from JS,
-    // so give the field itself a light box: the dark text stays readable on it.
-    // flexBasis 0 and minWidth 0 let the field shrink to the space left beside its buttons, so a long
-    // link scrolls inside it instead of widening it and pushing the buttons off the panel.
-    field.SetStyles({
-      flexGrow: 1, flexShrink: 1, flexBasis: '0px', minWidth: '0px', overflow: 'hidden',
-      fontSize: '22px', height: '48px', marginRight: '6px',
-      backgroundColor: '#e8e8ef', color: '#111111',
-      borderWidth: '2px', borderColor: '#9a9aa8', borderRadius: '8px',
-      paddingLeft: '10px', paddingRight: '10px'
-    });
+  // A text input: the kit's text field, or with `search` its search bar (a glyph, and a clear
+  // button while there is text).
+  async textField(parent, placeholder, onValue, onEnter, search) {
+    const field = search ? this.ui.CreateKitSearchBar(parent) : this.ui.CreateKitTextField(parent);
+    field.size = 'md';
+    field.placeholder = this.tr(placeholder);
+    field.fvpPlaceholder = placeholder;
+    field.SetStyles({ flexGrow: 1, flexShrink: 1, flexBasis: '0px', minWidth: '0px', marginRight: '6px' });
     field.OnChange(e => {
       if (!e || e.value == null) return;
-      // The SDK only sends a new value when it differs from the last one set from here, and typing
-      // doesn't update that copy. Without this, putting back text that was set before (+ lyrics,
-      // delete it, + lyrics again) sent nothing, and the box stayed empty.
-      try { if ('_value' in field) field._value = String(e.value); } catch (_) {}
-      onValue(String(e.value));
+      const v = String(e.value);
+      if (v === 'search:submit') return onEnter();
+      if (v === 'search:clear') {
+        try { if ('_value' in field) field._value = ''; } catch (_) {}
+        return onValue('');
+      }
+      // The SDK only sends a new value when it differs from the last one set from here, and
+      // typing doesn't update that copy. Without this, putting back text that was set before
+      // (+ lyrics, delete it, + lyrics again) sent nothing, and the box stayed empty.
+      try { if ('_value' in field) field._value = v; } catch (_) {}
+      onValue(v);
     });
     if (typeof field.OnKeyDown === 'function') {
       field.OnKeyDown(e => {
         if (e && (e.key === 'Enter' || e.key === '\n' || e.key === '\r' || e.keyCode === 13)) onEnter();
       });
     }
+    this.kitFields = this.kitFields || [];
+    this.kitFields.push(field);
     return field;
   }
 
@@ -670,6 +1126,7 @@ var FirePlaylistPanel = class {
     }).Async(), 15000, 'Creating the panel root object');
     this.checkAlive();
 
+    const UIClass = BS.UI || BS.BanterUI;
     // root (the screen, or the world) > mover (the grab handle: a pill just under the
     // panel's bottom edge, which players pick up to carry it) > panel (the UI, above the pill).
     // Closing sends the mover and the panel out of sight; opening puts them back.
@@ -707,13 +1164,22 @@ var FirePlaylistPanel = class {
     }).Async(), 15000, 'Creating the panel object');
     this.checkAlive();
 
-    const UIClass = BS.UI || BS.BanterUI;
     const ui = new UIClass(new BS.Vector2(this.W, this.H), false);
     this.ui = (await this.withTimeout(this.panelObj.AddComponent(ui), 15000, 'Adding the UI panel component')) || ui;
     this.checkAlive();
     console.log('[PlaylistPanel] UI panel added, creating elements...');
     if (typeof this.ui.SetBackgroundColor === 'function') {
       this.ui.SetBackgroundColor(new BS.Vector4(0, 0, 0, 0));
+    }
+    // Core.shouldUsePlaylistPanel only makes the panel in an app with the UI Kit.
+    if (typeof this.ui.CreateKitButton !== 'function') throw new Error('This app has no UI Kit');
+    // The language saved on this device. A missing file leaves it in English.
+    if (this.i18n) {
+      try {
+        await this.withTimeout(this.i18n.use(FvpI18n.savedLanguage()), 8000, 'Loading the panel language');
+      } catch (e) {
+        console.warn('[PlaylistPanel] Staying in English:', e);
+      }
     }
 
     const rootEl = await this.div(undefined, {
@@ -722,6 +1188,11 @@ var FirePlaylistPanel = class {
       borderWidth: '3px', borderColor: '#555555',
       paddingLeft: '18px', paddingRight: '18px', paddingTop: '14px', paddingBottom: '14px'
     });
+    // The kit's classes, and its accent class, for everything inside (see applyTheme).
+    rootEl.AddClass('alt');
+    this.themeRoot = rootEl;
+    const kitClass = (ACCENTS[this.accent] || ACCENTS.teal).kit;
+    if (kitClass) rootEl.AddClass(kitClass);
     const row = (parent, styles) => this.div(parent, Object.assign({ display: 'flex', flexDirection: 'row', alignItems: 'center', flexShrink: 0 }, styles || {}));
     const GREY = '#455a64';
 
@@ -730,21 +1201,17 @@ var FirePlaylistPanel = class {
     await this.label(header, this.karaoke ? 'Fire-V-Player Karaoke' : 'Fire-V-Player', { fontSize: '30px', fontWeight: 'bold' });
     // The server's build (see server/version.js), so people can tell an old version from a new one.
     this.versionLabel = await this.label(header, '', { fontSize: '18px', color: '#888888', marginLeft: '12px', flexGrow: 1 });
-    // Who runs the player: the host (♛) and a padlock coloured by who may control it (see
-    // controlLevel). Pressing it opens More, where that's set, and Take Over and Admin Take Over.
+    // Who runs the player: a padlock and the host's name, in the look for who may control it (see
+    // controlLevel and render). Pressing it opens More, where that's set, and Take Over and Admin
+    // Take Over.
     this.hostChip = await this.button(header, '', () => this.setView(this.view === 'more' ? 'main' : 'more'), {
-      display: 'flex', flexDirection: 'row', alignItems: 'center', backgroundColor: '#2e7d32',
-      paddingLeft: '12px', paddingRight: '14px', maxWidth: '380px', height: '52px'
+      backgroundColor: '#2e7d32', maxWidth: '380px', kitSize: 'lg'
     });
-    this.chipLockOpen = await this.drawLock(this.hostChip, true);
-    this.chipLockShut = await this.drawLock(this.hostChip, false);
-    this.hostLabel = await this.label(this.hostChip, '', {
-      fontSize: '20px', marginLeft: '10px', flexShrink: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
-    });
-    const headIcon = { backgroundColor: GREY, fontSize: '28px', width: '56px', height: '52px', paddingLeft: '0px', paddingRight: '0px', paddingTop: '0px', paddingBottom: '0px' };
-    this.infoBtn = await this.button(header, 'ⓘ', () => this.setView(this.view === 'info' ? 'main' : 'info'), headIcon);
-    this.moreBtn = await this.button(header, '☰', () => this.setView(this.view === 'more' ? 'main' : 'more'), Object.assign({}, headIcon, { backgroundColor: '#2e7d32' }));
-    await this.button(header, '✕', () => this.close(), Object.assign({}, headIcon, { backgroundColor: '#c62828', fontSize: '30px', marginLeft: '14px' }));
+    // The kit's round buttons: info, settings (More) and close.
+    const headIcon = { backgroundColor: GREY, round: true, kitSize: 'lg', marginLeft: '6px' };
+    this.infoBtn = await this.button(header, 'ⓘ', () => this.setView(this.view === 'info' ? 'main' : 'info'), Object.assign({}, headIcon, { kitVariant: 'secondary' }));
+    this.moreBtn = await this.button(header, '☰', () => this.setView(this.view === 'more' ? 'main' : 'more'), Object.assign({}, headIcon, { backgroundColor: '#2e7d32', kitVariant: 'secondary' }));
+    await this.button(header, '✕', () => this.close(), Object.assign({}, headIcon, { marginLeft: '14px', kitVariant: 'ghost' }));
 
     // Now playing
     const nowCard = this.nowCard = await this.div(rootEl, {
@@ -759,17 +1226,21 @@ var FirePlaylistPanel = class {
     // The bar has a fixed width, as a mouse event only says where it is inside the element
     // (the panel is always W pixels wide). The taller clear box around it is easier to hit.
     const progHit = this.progHit = await this.div(progRow, {
-      width: `${PROGRESS_WIDTH}px`, height: '36px', flexShrink: 0, marginLeft: '10px',
+      width: `${this.W - PROGRESS_SPARE}px`, height: '36px', flexShrink: 0, marginLeft: '10px',
       display: 'flex', flexDirection: 'column', justifyContent: 'center'
     });
-    const progOuter = await this.div(progHit, { height: '10px', backgroundColor: '#444444', borderRadius: '5px' });
-    this.progInner = await this.div(progOuter, { height: '100%', width: '0%', backgroundColor: '#e53935', borderRadius: '5px' });
+    // The kit's progress bar. Its fill is set through setStyle's 'width' (see setStyle).
+    const bar = this.ui.CreateKitProgressBar(progHit);
+    bar.size = 'md';
+    bar.tone = 'accent';
+    bar.SetStyles({ flexShrink: 0 });
+    this.progInner = { fvpProgress: bar };
     this.addProgressSeek(progHit);
 
     // Playback + volume controls
     // Symbols instead of words, so they read in any language (the Info view has a legend).
     const controls = this.controlsRow = await row(rootEl, { marginTop: '6px' });
-    const sym = { fontSize: '26px', minWidth: '64px', paddingLeft: '12px', paddingRight: '12px', height: '52px' };
+    const sym = { minWidth: '64px', kitSize: 'lg', kitIconSize: 'lg', marginRight: '6px' };
     const symBtn = (text, fn, styles) => this.button(controls, text, fn, Object.assign({}, sym, styles || {}));
     this.prevTrackBtn = await symBtn('|◀', () => this.changeTrack(-1));
     if (this.karaoke) {
@@ -784,14 +1255,14 @@ var FirePlaylistPanel = class {
     // Rebuilds only this viewer's screen, for a video that froze or didn't load for them.
     await symBtn('↻', () => this.core.reloadScreen(), { backgroundColor: '#5d4037' });
     // A live video only: everyone to its live point (see goLive).
-    this.goLiveBtn = await symBtn('Go Live', () => this.goLive(), { backgroundColor: '#c62828', fontSize: '22px', display: 'none' });
+    this.goLiveBtn = await symBtn('Go Live', () => this.goLive(), { backgroundColor: '#c62828', display: 'none' });
     await this.div(controls, { flexGrow: 1 });
-    // This viewer's volume: drawn speakers, as the UI font has none.
-    const vol = { backgroundColor: GREY, height: '52px', paddingLeft: '12px', paddingRight: '14px', fontSize: '26px' };
-    await this.iconButton(controls, b => this.drawSpeaker(b, false, false), '−', () => { this.core.volume(false); this.renderSoon(); }, vol);
+    // This viewer's volume.
+    const vol = { backgroundColor: GREY, kitSize: 'lg', kitIconSize: 'lg' };
+    await this.button(controls, '@fvp:volume-down', () => { this.core.volume(false); this.renderSoon(); }, vol);
     this.volLabel = await this.label(controls, '', { fontSize: '24px', width: '56px', textAlign: 'center' });
-    await this.iconButton(controls, b => this.drawSpeaker(b, true, false), '+', () => { this.core.volume(true); this.renderSoon(); }, vol);
-    this.muteBtn = await this.iconButton(controls, b => this.drawSpeaker(b, false, true), null, () => { this.core.mute(); this.renderSoon(); }, vol);
+    await this.button(controls, '@volume-up', () => { this.core.volume(true); this.renderSoon(); }, vol);
+    this.muteBtn = await this.button(controls, '@volume-off', () => { this.core.mute(); this.renderSoon(); }, vol);
 
     // Replacement suggestion (when a user can't play a video)
     this.noticeRow = await row(rootEl, { marginTop: '6px', backgroundColor: '#4e342e', borderRadius: '10px', paddingLeft: '10px', paddingRight: '6px' });
@@ -809,8 +1280,8 @@ var FirePlaylistPanel = class {
       this.previewLabel = await this.label(this.previewRow, '', {
         fontSize: '18px', flexGrow: 1, flexShrink: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
       });
-      await this.button(this.previewRow, '◀◀', () => this.core.back(), { fontSize: '24px' });
-      await this.button(this.previewRow, '▶▶', () => this.core.forward(), { fontSize: '24px' });
+      await this.button(this.previewRow, '◀◀', () => this.core.back());
+      await this.button(this.previewRow, '▶▶', () => this.core.forward());
       this.previewSingBtn = await this.button(this.previewRow, '♪ Sing It', () => {
         if (this.core.previewVideo) this.singIt(this.core.previewVideo);
       }, { backgroundColor: '#2e7d32' });
@@ -835,56 +1306,50 @@ var FirePlaylistPanel = class {
     this.mainView = await this.div(rootEl, { display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, overflow: 'hidden' });
 
     const tabs = await row(this.mainView, { marginTop: '6px' });
-    // Tight padding, so the page buttons still fit beside the tabs with a long playlist and
-    // videos waiting for the host (Playlist (322+2), 101-120 / 322).
-    const tabBtn = { paddingLeft: '10px', paddingRight: '10px' };
-    this.tabPlaylistBtn = await this.button(tabs, this.karaoke ? 'Singers' : 'Playlist', () => this.setTab('playlist'), tabBtn);
-    // Saved lists (not in karaoke mode, where the first tab is the singer queue).
-    this.tabListsBtn = this.karaoke ? null : await this.button(tabs, 'Lists', () => this.setTab('lists'), tabBtn);
-    // Search opens over the whole panel (see render), so it stands out from the tabs.
-    this.tabSearchBtn = await this.button(tabs, this.karaoke ? '+ Search Songs' : '+ Search & Add', () => this.openSearch(), {
-      backgroundColor: SEARCH_COLOR, paddingLeft: '12px', paddingRight: '12px', fontWeight: 'bold'
+    // The kit's tabs, as the menu's sub-navigation (underline): the playlist (or singers), saved
+    // lists, and search. Their labels, with counts, are set in render. (The kit's pill tabs are
+    // for picking one of a few settings, not for pages.)
+    this.kitTabs = this.ui.CreateKitTabs(tabs);
+    this.kitTabs.variant = 'underline';
+    this.kitTabs.SetStyles({ flexShrink: 0, marginRight: '8px' });
+    this.kitTabs.OnChange(e => {
+      if (!e || this.core.blocked) return;
+      const v = String(e.value);
+      if (v === 'search') this.openSearch();
+      else if (v === 'playlist' || v === 'lists') this.setTab(v);
     });
-    // While searching: a title and the way back, instead of the tabs.
-    this.searchTitle = await this.label(tabs, this.karaoke ? 'Search for a song' : 'Search', { fontSize: '26px', fontWeight: 'bold', marginLeft: '6px', marginRight: '12px' });
-    this.closeSearchBtn = await this.button(tabs, this.karaoke ? '↩ Singers' : '↩ Playlist', () => this.closeSearch(), { backgroundColor: '#c62828' });
+    this.applyTabsLook();
     await this.div(tabs, { flexGrow: 1 });
-    // Page buttons: first, back 5, back 1, forward 1, forward 5, last. With a scroll view they
-    // move the window of rows (see LIST_WINDOW), and Now goes back to the playing video.
-    // Narrow, so the row fits beside the tabs with a long playlist's label (101-120 / 322).
-    const pageBtn = { backgroundColor: GREY, paddingLeft: '6px', paddingRight: '6px', marginLeft: '2px', marginRight: '2px', fontSize: '24px', minWidth: '44px' };
-    this.nowBtn = this.karaoke ? null : await this.button(tabs, '◉ Now', () => this.showCurrent(), Object.assign({}, pageBtn, { fontSize: '20px', paddingLeft: '10px', paddingRight: '10px' }));
-    this.firstPageBtn = await this.button(tabs, '⇤', () => this.changePage(-Infinity), pageBtn);
-    this.back5Btn = await this.button(tabs, '«', () => this.changePage(-PAGE_JUMP), pageBtn);
-    this.prevPageBtn = await this.button(tabs, '‹', () => this.changePage(-1), pageBtn);
-    this.pageLabel = await this.label(tabs, '1 / 1', { fontSize: '17px', width: '116px', textAlign: 'center', flexShrink: 0 });
-    this.nextPageBtn = await this.button(tabs, '›', () => this.changePage(1), pageBtn);
-    this.fwd5Btn = await this.button(tabs, '»', () => this.changePage(PAGE_JUMP), pageBtn);
-    this.lastPageBtn = await this.button(tabs, '⇥', () => this.changePage(Infinity), pageBtn);
+    await this.buildPageNav(tabs);
 
     this.searchRow = await row(this.mainView, { marginTop: '4px' });
     const searchHint = this.karaoke ? 'Search for a song to sing, or paste a video link' : 'Search YouTube, or paste a YouTube / Twitch / Vimeo / video link';
-    this.searchField = await this.textField(this.searchRow, searchHint, v => { this.searchQuery = v; }, () => this.doSearch());
-    if (!this.searchField) await this.label(this.searchRow, 'Search needs text input, which this client does not have.', { color: '#bbbbbb', flexGrow: 1 });
-    // What to search: YouTube, Internet Archive films and TV, Tubi, NASA+, ESO or a screen share (not for karaoke).
-    // Without a text field it still picks where words sent from a phone are searched.
-    if (!this.karaoke) this.sourceBtn = await this.button(this.searchRow, 'YouTube', () => this.toggleSearchSource(), { backgroundColor: '#c62828', width: '170px' });
-    if (this.searchField) {
-      await this.button(this.searchRow, 'Search', () => this.doSearch(), { backgroundColor: '#1565c0' });
-      // Typing a link on a headset is hard: get a code, and send the link from a phone instead.
-      await this.button(this.searchRow, '☎ Phone', () => this.askPasteCode(), { backgroundColor: '#6a1b9a' });
-      // Speak (speech to text, toggleSpeech) stays hidden until Altspace answers StartTTS/StopTTS:
-      // there it never does, which only confuses people. Set SPEAK_ENABLED to bring it back.
-      const scene = this.core.banterScene();
-      if (SPEAK_ENABLED && scene && typeof scene.StartTTS === 'function' && typeof scene.StopTTS === 'function') {
-        this.speakBtn = await this.button(this.searchRow, 'Speak', () => this.toggleSpeech(), { backgroundColor: '#ad1457' });
-      }
-      // The last search, when its results were kept on this device.
-      if (this.searchQuery) this.setSearchText(this.searchQuery);
-    } else {
-      // A link sent from a phone still goes in (pasteFromPhone sets searchQuery without a field).
-      await this.button(this.searchRow, '☎ Phone', () => this.askPasteCode(), { backgroundColor: '#6a1b9a' });
+    this.searchField = await this.textField(this.searchRow, searchHint, v => { this.searchQuery = v; }, () => this.doSearch(), true);
+    // What to search: YouTube, Internet Archive films and TV, Tubi, NASA+, ESO or a screen share
+    // (not for karaoke).
+    if (!this.karaoke) {
+      this.sourceDropdown = this.kitDropdown(this.searchRow, [], k => {
+        this.searchSource = k;
+        this.setStatus(this.tr('Search will look on {source}.', { source: SEARCH_SOURCES[k].label }), 4000);
+      }, { width: '200px', marginRight: '6px' });
+      this.fillLookChoices();
     }
+    // Turns while a search is waiting for its results (see render).
+    this.searchSpinner = this.ui.CreateKitSpinner(this.searchRow);
+    this.searchSpinner.size = 'lg';
+    this.searchSpinner.tone = 'accent';
+    this.searchSpinner.SetStyles({ display: 'none', flexShrink: 0, marginLeft: '4px', marginRight: '10px' });
+    await this.button(this.searchRow, '@search Search', () => this.doSearch(), { backgroundColor: '#1565c0' });
+    // Typing a link on a headset is hard: get a code, and send the link from a phone instead.
+    await this.button(this.searchRow, '☎ Phone', () => this.askPasteCode(), { backgroundColor: '#6a1b9a' });
+    // Speak (speech to text, toggleSpeech) stays hidden until Altspace answers StartTTS/StopTTS:
+    // there it never does, which only confuses people. Set SPEAK_ENABLED to bring it back.
+    const scene = this.core.banterScene();
+    if (SPEAK_ENABLED && scene && typeof scene.StartTTS === 'function' && typeof scene.StopTTS === 'function') {
+      this.speakBtn = await this.button(this.searchRow, 'Speak', () => this.toggleSpeech(), { backgroundColor: '#ad1457' });
+    }
+    // The last search, when its results were kept on this device.
+    if (this.searchQuery) this.setSearchText(this.searchQuery);
 
     // Paste from your phone: a QR code that opens the page with the code filled in, and the
     // address and code, big, while a code is in use (see showPasteCode).
@@ -901,65 +1366,46 @@ var FirePlaylistPanel = class {
     this.phoneUrlLabel = await this.link(phoneText, '', () => this.pasteCode && `${this.core.getProtocol()}://${this.core.hostUrl}/p/${this.pasteCode}`,
       { fontSize: '46px', fontWeight: 'bold', color: '#80deea', marginTop: '4px' });
     await this.label(phoneText, 'and enter this code:', { fontSize: '28px', color: '#e1bee7', marginTop: '8px' });
+    // White on black in either theme.
     this.phoneCodeLabel = await this.label(phoneText, '', {
-      fontSize: '96px', fontWeight: 'bold', color: '#ffffff', marginTop: '4px',
-      backgroundColor: '#000000', borderRadius: '14px', paddingLeft: '28px', paddingRight: '28px'
+      fontSize: '96px', fontWeight: 'bold', color: 'rgb(255, 255, 255)', marginTop: '4px',
+      backgroundColor: 'rgb(0, 0, 0)', borderRadius: '14px', paddingLeft: '28px', paddingRight: '28px'
     });
     const phoneFoot = await row(phoneText, { marginTop: '10px' });
     this.phoneExpiryLabel = await this.label(phoneFoot, '', { fontSize: '22px', color: '#bbbbbb', marginRight: '16px' });
-    await this.button(phoneFoot, '✓ Done', () => this.hidePasteCode(), { backgroundColor: '#455a64', fontSize: '24px' });
+    await this.button(phoneFoot, '✓ Done', () => this.hidePasteCode(), { backgroundColor: '#455a64' });
 
-    // Search helpers: karaoke's words to add to the search, then recent searches.
+    // Search helpers: karaoke's words to add to the search, then recent searches, as the kit's
+    // chips (as its filter rows have).
     this.searchToolsRow = await row(this.mainView, { overflow: 'hidden' });
-    const small = { fontSize: '18px', paddingLeft: '12px', paddingRight: '12px', paddingTop: '6px', paddingBottom: '6px' };
-    if (this.karaoke && this.searchField) {
-      for (const word of ['karaoke', 'lyrics', 'zoom karaoke']) {
-        await this.button(this.searchToolsRow, `+ ${word}`, () => this.addSearchWord(word), Object.assign({ backgroundColor: '#6a1b9a' }, small));
-      }
+    if (this.karaoke) {
+      for (const word of ['karaoke', 'lyrics', 'zoom karaoke']) this.kitChip(this.searchToolsRow, word, () => this.addSearchWord(word), 'add', 'add');
     }
     this.recentLabel = await this.label(this.searchToolsRow, 'Recent:', { fontSize: '18px', color: '#bbbbbb', marginLeft: '8px', marginRight: '2px', flexShrink: 0 });
     this.recentBtns = [];
     for (let k = 0; k < 5; k++) {
       const idx = k;
-      const btn = await this.button(this.searchToolsRow, '', () => {
+      const chip = this.kitChip(this.searchToolsRow, '', () => {
         const q = this.recentSearches[idx];
         if (!q) return;
         this.setSearchText(q);
         this.doSearch();
-      }, Object.assign({
-        backgroundColor: GREY, flexShrink: 1, minWidth: '60px', maxWidth: '240px',
-        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
-      }, small));
-      this.recentBtns.push(btn);
+      }, 'filter', 'schedule');
+      chip.SetStyles({ flexShrink: 1, maxWidth: '240px' });
+      this.recentBtns.push(chip);
     }
-    this.clearRecentBtn = await this.button(this.searchToolsRow, '✕', () => this.clearRecent(), Object.assign({ backgroundColor: '#c62828' }, small));
+    this.clearRecentBtn = this.kitChip(this.searchToolsRow, 'Clear', () => this.clearRecent(), 'danger', 'close');
 
-    // List rows: a fixed pool, re-filled as the list or its window changes. In a scroll view when
-    // this SDK has one (as in the user's other worlds: CreateScrollView, overflow scroll, and a
-    // column inside), else pages of rowsPerPage.
-    let list = null;
-    if (typeof this.ui.CreateScrollView === 'function') {
-      try {
-        const scroller = await this.ready(this.ui.CreateScrollView(this.mainView));
-        scroller.SetStyles({
-          flexGrow: 1, flexShrink: 1, flexBasis: '0px', minHeight: '0px', marginTop: '6px',
-          overflow: 'scroll', backgroundColor: 'rgba(0,0,0,0)', backgroundImage: 'none'
-        });
-        list = await this.div(scroller, { display: 'flex', flexDirection: 'column', flexShrink: 0, paddingRight: '6px' });
-        this.scroller = scroller;
-        this.scrolling = true;
-      } catch (e) {
-        console.warn('[PlaylistPanel] Could not make a scroll view, so the list shows in pages:', e);
-        list = null;
-      }
-    }
-    if (!list) {
-      this.scrolling = false;
-      list = await this.div(this.mainView, { display: 'flex', flexDirection: 'column', flexGrow: 1, marginTop: '6px', overflow: 'hidden' });
-    }
-    this.listCol = list;
-    // First, so rows added later go after it (it only shows when there are no rows).
-    this.emptyLabel = await this.label(list, '', { color: '#bbbbbb', fontSize: '22px', textAlign: 'center', marginTop: '20px', whiteSpace: 'normal' });
+    // List rows: a fixed pool in the kit's scroll view (with its thin scrollbar), re-filled as the
+    // list or its window changes.
+    const made = await this.kitScrollColumn(this.mainView, { marginTop: '6px' });
+    const list = this.listCol = made.col;
+    this.scroller = made.scroller;
+    // First, so rows added later go after it (it only shows when there are no rows): the kit's
+    // empty state, a quiet glyph and a line or two (its icon is set in render).
+    this.emptyLabel = this.ui.CreateKitEmptyState(list);
+    this.emptyLabel.fvpTextProp = 'message';
+    this.emptyLabel.SetStyles({ flexShrink: 0, marginTop: '12px' });
     // Under it while Search has no results.
     this.madeWithRow = await this.div(list, { display: 'none', flexDirection: 'row', justifyContent: 'center', alignItems: 'center', flexShrink: 0, marginTop: '28px' });
     const madeWith = { color: '#888888', fontSize: '20px' };
@@ -967,24 +1413,21 @@ var FirePlaylistPanel = class {
     await this.label(this.madeWithRow, '\u2665', { color: '#e53935', fontSize: '24px', marginLeft: '6px', marginRight: '6px' });
     await this.label(this.madeWithRow, 'by FireRat', madeWith);
     this.rows = [];
-    const firstRows = this.scrolling ? FIRST_ROWS : this.rowsPerPage;
-    for (let k = 0; k < firstRows; k++) this.rows.push(await this.makeRow(list));
+    for (let k = 0; k < FIRST_ROWS; k++) this.rows.push(await this.makeRow(list));
 
     // ---- Info view: how to use it, what the symbols mean, who controls the player, and where to
     // get it for a world. It scrolls.
     this.infoView = await this.div(rootEl, { display: 'none', flexDirection: 'column', flexGrow: 1, flexShrink: 1, overflow: 'hidden', marginTop: '6px' });
     const infoCol = await this.scrollColumn(this.infoView);
-    const infoBox = async () => this.div(infoCol, {
-      display: 'flex', flexDirection: 'column', flexShrink: 0, backgroundColor: '#23232d', marginBottom: '8px',
-      borderRadius: '14px', paddingLeft: '18px', paddingRight: '18px', paddingTop: '12px', paddingBottom: '12px'
-    });
+    const infoBox = async () => this.kitSurface(infoCol);
     const colText = (parent, text, styles) => this.label(parent, text, Object.assign({ fontSize: '21px', whiteSpace: 'normal', marginTop: '6px' }, styles || {}));
-    const heading = (parent, text) => colText(parent, text, { fontSize: '26px', fontWeight: 'bold', marginTop: '0px' });
+    const heading = (parent, text) => this.kitHeading(parent, text);
     // Tips on the left, each a button and what it's for; the setup guide's QR code on the right.
     this.infoIntroBox = await infoBox();
     const infoCols = await row(this.infoIntroBox, { alignItems: 'flex-start' });
     const howCol = await this.div(infoCols, { display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, marginRight: '24px' });
     await heading(howCol, 'How to use it');
+    const hand = 'Your hand controls: move them in More (the gear at the top). The ✕ button folds them away to one button.';
     const tips = this.karaoke ? [
       ['+ Search Songs', 'Find a song, or paste a video link. + karaoke and + lyrics help find versions with words on screen.'],
       ['▶ Preview', 'Plays the song on the screen just for you, so you can check it has lyrics before adding it.'],
@@ -992,17 +1435,25 @@ var FirePlaylistPanel = class {
       ['▶ Sing', 'When it is your turn and no song is playing, press it on your name to start.'],
       ['☎ Phone', 'Shows a code. Send a link from your phone into your search, no typing in VR.'],
       ['♛ Host', 'Runs the karaoke. Press the host name at the top to see who can start songs, or to take over.'],
-      ['☚ Hand', 'Your hand controls: move them in More (the green button). The orange button folds them away to one button.']
+      ['☚ Hand', hand]
     ] : [
       ['+ Search & Add', `Search YouTube, Internet Archive, Tubi, NASA+ or ESO${this.core.allowUntrusted === true ? ', or find a screen share by its room code' : ''} (the button beside the box picks), or paste a link.`],
       ['☎ Phone', 'Shows a code. Send a link from your phone into your search, no typing in VR.'],
       ['☰ Lists', 'Saved playlists for this room. + All puts a whole list on the end.'],
       ['♛ Host', 'Runs the player for everyone. Press the host name at the top to see who else can control it, or to take over.'],
-      ['☚ Hand', 'Your hand controls: move them in More (the green button). The orange button folds them away to one button.']
+      ['☚ Hand', hand]
     ];
+    // Each name has the icon its button shows, as the button shows it. Search and Lists are tabs,
+    // which have no icon, so they are just their tab's name.
+    const TABS = { '+ Search Songs': 'Search Songs', '+ Search & Add': 'Search', '☰ Lists': 'Lists' };
+    const TIP_ICONS = { '♪ Sing It': '@mic' };
     for (const [name, text] of tips) {
       const tip = await row(howCol, { alignItems: 'flex-start', marginTop: '8px' });
-      await this.label(tip, name, { fontSize: '21px', fontWeight: 'bold', color: '#80deea', width: '190px', flexShrink: 0, whiteSpace: 'normal' });
+      const nameBox = await row(tip, { width: '190px', flexShrink: 0, alignItems: 'center' });
+      const tab = TABS[name];
+      if (!tab) await this.kitIcons(nameBox, TIP_ICONS[name] || name.split(' ')[0]);
+      const word = tab || name.replace(/^[^\p{L}\p{N}]+\s/u, '');
+      await this.label(nameBox, word, { fontSize: '21px', fontWeight: 'bold', color: '#80deea', marginLeft: tab ? '0px' : '6px', flexShrink: 1, whiteSpace: 'normal' });
       await this.label(tip, text, { fontSize: '21px', whiteSpace: 'normal', flexGrow: 1, flexShrink: 1 });
     }
     const guideCol = await this.div(infoCols, { display: 'flex', flexDirection: 'column', alignItems: 'center', width: '320px', flexShrink: 0 });
@@ -1026,19 +1477,15 @@ var FirePlaylistPanel = class {
       ['◀◀ ▶▶', this.karaoke ? 'Nudge your screen a little, to match the singer' : 'Skip back or forward, for you (the host: everyone)'],
       ['↻', 'Reload the video, for you only, if it froze'],
       ['Go Live', 'A live video: everyone to where it is live now (host)'],
-      this.karaoke ? ['♪', 'Sing: join the queue, or start your song'] : ['▲ ▼', 'Vote a video up or down, when voting is on'],
-      [b => this.drawSpeaker(b, true, false), 'Your volume (only what you hear)'],
-      [b => this.drawSpeaker(b, false, true), 'Mute or unmute, for you'],
+      this.karaoke ? ['♪', 'Sing: join the queue, or start your song'] : ['▲ ▼', 'Vote a video up or down, when voting is on. Then the most votes play first, and a video leaves the playlist once it has played.'],
+      ['@fvp:volume-down @volume-up', 'Your volume (only what you hear)'],
+      ['@volume-off', 'Mute or unmute, for you'],
       ['⬆ ⬇', 'Move up or down the list'],
       ['✕', 'Remove, close, or turn off'],
       ['+', 'Add'],
       ['✓', 'On, or approve'],
       ['♛', 'The host, who runs the player'],
-      ['☰', 'More: settings and host controls'],
-      ['CC', 'Captions on your screen'],
-      ['▣', 'Your screen\'s sharpness (resolution)'],
-      ['♫', 'Your sound: all round you (2D) or from the screen (3D)'],
-      ['◔', 'Your sound gets quieter as you walk away, or not']
+      ['@settings', 'More: settings and host controls']
     ];
     let legendRow = null;
     for (let k = 0; k < legend.length; k++) {
@@ -1046,160 +1493,35 @@ var FirePlaylistPanel = class {
       const [icon, text] = legend[k];
       const chip = await this.div(legendRow, {
         display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-        width: '96px', height: '44px', backgroundColor: '#455a64', borderRadius: '10px'
+        width: '96px', height: '44px', backgroundColor: 'rgba(0, 0, 0, 0)', borderRadius: '22px',
+        // Outlined, as the buttons are.
+        borderWidth: '2px', borderColor: 'rgb(120, 124, 138)'
       });
-      if (typeof icon === 'function') await icon(chip);
-      else await this.label(chip, icon, { fontSize: '24px' });
+      chip.fvpNoTheme = true; // on the dark card in either theme
+      await this.kitIcons(chip, icon);
       await this.label(legendRow, text, { fontSize: '20px', whiteSpace: 'normal', width: '390px', flexShrink: 1, marginLeft: '12px', marginRight: '12px' });
     }
 
     // Who controls the player: the three choices in ☰ (see controlLevel).
     const controlBox = await infoBox();
     await heading(controlBox, 'Who controls the player');
-    await colText(controlBox, 'The host picks one of these in More (the green button). The padlock at the top shows which is on.', { color: '#bbbbbb' });
+    await colText(controlBox, 'The host picks one of these in More (the gear at the top). The padlock at the top shows which is on.', { color: '#bbbbbb' });
+    this.infoLevelChips = {};
     for (const [level, open, color, name] of this.controlLevels()) {
       const line = await row(controlBox, { marginTop: '8px', alignItems: 'center' });
       const chip = await this.div(line, {
         display: 'flex', flexDirection: 'row', alignItems: 'center', flexShrink: 0, width: '300px', height: '48px',
-        backgroundColor: color, borderRadius: '10px', paddingLeft: '12px'
+        backgroundColor: color, borderRadius: '24px', paddingLeft: '14px'
       });
-      await this.drawLock(chip, open);
+      chip.fvpNoTheme = true; // white on its colour in either theme
+      this.infoLevelChips[level] = chip;
+      await this.lockIcon(chip, open);
       await this.label(chip, name, { fontSize: '21px', marginLeft: '10px' });
       await this.label(line, this.controlText(level), { fontSize: '20px', whiteSpace: 'normal', flexGrow: 1, flexShrink: 1, marginLeft: '12px' });
     }
     await colText(controlBox, 'When the host leaves the space, Take Over turns on after 42 seconds, so the player is never stuck. A space admin can become the host at any time: press the host button at the top, then Admin Take Over.', { color: '#bbbbbb', fontSize: '19px' });
 
-    // ---- More view (☰): who controls the player, host controls, your own player, add by link,
-    // space admins. It scrolls.
-    this.moreView = await this.div(rootEl, { display: 'none', flexDirection: 'column', flexGrow: 1, flexShrink: 1, overflow: 'hidden', marginTop: '6px' });
-    const moreCol = await this.scrollColumn(this.moreView);
-    const section = async (title) => {
-      const box = await this.div(moreCol, {
-        display: 'flex', flexDirection: 'column', flexShrink: 0, backgroundColor: '#23232d',
-        borderRadius: '14px', paddingLeft: '12px', paddingRight: '12px', paddingTop: '8px', paddingBottom: '8px', marginBottom: '8px'
-      });
-      await this.label(box, title, { fontSize: '21px', color: '#cccccc', marginLeft: '4px', fontWeight: 'bold' });
-      return box;
-    };
-
-    // Who controls the player: one choice of three, instead of separate Lock and Take Over, so a
-    // locked player isn't left open to Take Over by mistake (see controlLevel).
-    const controlSection = this.controlSection = await section('♛ Who controls the player');
-    const hostLine = await row(controlSection, { marginTop: '2px' });
-    this.controlHostLabel = await this.label(hostLine, '', { fontSize: '22px', color: '#ffd54f', marginLeft: '4px', marginRight: '12px', flexShrink: 1 });
-    this.takeOverBtn = await this.button(hostLine, '♛ Take Over', () => {
-      if (this.core.player && !this.isHost()) this.send(Commands.TAKE_OVER);
-    }, { backgroundColor: '#2e7d32', fontSize: '22px' });
-    // Where Take Over would be when it's off: a space admin takes control even when locked (see
-    // Core.adminTakeOver). Shown to everyone, as the client can't always tell who is an admin.
-    this.adminTakeOverBtn = await this.button(hostLine, '♛ Admin Take Over', () => this.adminTakeOver(), { backgroundColor: '#ad1457', fontSize: '22px' });
-    const choices = await row(controlSection, { marginTop: '4px', alignItems: 'stretch' });
-    this.controlCards = {};
-    for (const [level, open, color, name] of this.controlLevels()) {
-      const card = await this.button(choices, '', () => this.setControl(level), {
-        display: 'flex', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'flex-start',
-        flexGrow: 1, flexShrink: 1, flexBasis: '0px', minWidth: '0px', paddingTop: '10px', paddingBottom: '10px',
-        borderWidth: '3px', borderColor: 'rgba(0,0,0,0)'
-      });
-      const top = await row(card);
-      await this.drawLock(top, open);
-      await this.label(top, name, { fontSize: '22px', fontWeight: 'bold', marginLeft: '10px' });
-      await this.label(card, this.controlText(level), { fontSize: '17px', whiteSpace: 'normal', marginTop: '6px', color: '#eeeeee' });
-      this.controlCards[level] = { card, color };
-    }
-    this.controlNote = await this.label(controlSection, '', { fontSize: '17px', color: '#999999', marginLeft: '4px', marginTop: '4px', whiteSpace: 'normal' });
-
-    // Host controls (the host only), with seek.
-    this.hostSection = await section('♛ Host controls');
-    const hostRow = await row(this.hostSection, { flexWrap: 'wrap' });
-    if (this.karaoke) {
-      // Auto Advance: when a song ends, the next singer starts by themselves.
-      this.autoAdvanceBtn = await this.button(hostRow, 'Auto Advance', () => this.send(Commands.TOGGLE_AUTO_ADVANCE));
-    } else {
-      this.votingBtn = await this.button(hostRow, 'Voting', () => this.send(Commands.TOGGLE_VOTE));
-      this.clearBtn = await this.button(hostRow, '✕ Clear Playlist', () => this.send(Commands.CLEAR_PLAYLIST), { backgroundColor: '#c62828' });
-      this.loadDefaultBtn = await this.button(hostRow, '↻ Load Default Playlist', () => {
-        this.send(Commands.FROM_PLAYLIST, { id: this.core.params.playlist, shouldClear: true, fromPlaylist: true });
-        this.setStatus('Loading playlist...');
-      }, { backgroundColor: '#2e7d32' });
-    }
-    // Seek: moves everyone.
-    const seekRow = await row(this.hostSection, { marginTop: '4px' });
-    // A live video's time is how far back from the live point (see doSeek).
-    this.seekLabel = await this.label(seekRow, 'Go to (everyone):', { fontSize: '20px', color: '#bbbbbb', marginLeft: '4px', marginRight: '8px' });
-    this.seekField = await this.textField(seekRow, 'e.g. 95 or 1:35', v => { this.seekQuery = v; }, () => this.doSeek());
-    if (this.seekField) {
-      this.seekField.SetStyles({ flexGrow: 0, flexBasis: '220px', width: '220px' });
-      await this.button(seekRow, '▶ Go', () => this.doSeek(), { backgroundColor: '#1565c0' });
-    }
-    await this.button(seekRow, '◀◀ 30s', () => this.seekBy(-30), { backgroundColor: GREY });
-    await this.button(seekRow, '30s ▶▶', () => this.seekBy(30), { backgroundColor: GREY });
-
-    // Your own player
-    const mineSection = await section('☺ Just for you (nobody else\'s player changes)');
-    const mineRow = await row(mineSection, { flexWrap: 'wrap' });
-    await this.button(mineRow, '↻ Reload Video', () => this.core.reloadScreen(), { backgroundColor: '#5d4037' });
-    await this.button(mineRow, '◀◀', () => this.sendMine(Commands.LOCAL_SKIP_BACK, Commands.SKIP_BACK), { fontSize: '24px' });
-    await this.button(mineRow, '▶▶', () => this.sendMine(Commands.LOCAL_SKIP_FORWARD, Commands.SKIP_FORWARD), { fontSize: '24px' });
-    this.autoSyncBtn = await this.button(mineRow, 'Auto Sync', () => {
-      this.autoSync = !this.autoSync;
-      this.core.autoSync = this.autoSync; // kept for a video file, which plays without the screen page
-      this.sendMine(Commands.AUTO_SYNC, Commands.AUTO_SYNC, this.autoSync);
-      this.render();
-    });
-    this.captionsBtn = await this.button(mineRow, 'CC', () => {
-      this.core.setCaptions(this.core.captions === false);
-      this.render();
-    });
-    await this.button(mineRow, '↻ Refresh List', () => this.refresh(true), { backgroundColor: GREY });
-    // Fixed widths, so changing them doesn't move the buttons around.
-    const mineRow2 = await row(mineSection, { flexWrap: 'wrap' });
-    // Steps through the screen resolutions (page widths; 4K on PC only), then back to the snippet's.
-    this.resolutionBtn = await this.button(mineRow2, '▣', () => {
-      const choices = this.core.screenResolutionChoices();
-      const now = this.core.viewerResolution;
-      const next = now ? choices[choices.indexOf(now) + 1] : choices[0];
-      this.core.setScreenResolution(next || null);
-      this.render();
-    }, { backgroundColor: '#00838f', width: '330px' });
-    // Switches this viewer's sound between 2D and 3D (Core's audioMode).
-    this.audioBtn = await this.button(mineRow2, '♫', () => {
-      this.core.setAudioMode(this.core.audioMode() === '3d' ? '2d' : '3d');
-      this.render();
-    }, { backgroundColor: '#4527a0', width: '330px' });
-    // Turns this viewer's distance fade on or off (Core's fadeOn).
-    this.fadeBtn = await this.button(mineRow2, '◔', () => {
-      this.core.setFade(this.core.fadeOn() ? 'off' : 'on');
-      this.render();
-    }, { backgroundColor: '#4527a0', width: '330px' });
-    // Steps the hand controls through their places (Core's HAND_PLACES), when the snippet has them.
-    if (this.core.params['hand-controls'] === 'true') {
-      this.handBtn = await this.button(mineRow2, '☚', () => {
-        Promise.resolve(this.core.nextHandPlace()).then(() => this.render()).catch(() => {});
-      }, { backgroundColor: '#5d4037', width: '330px' });
-    }
-
-    // Add by link (in karaoke mode, pasting a link into Search does this)
-    const linkSection = this.karaoke ? null : await section('+ Add by link');
-    if (linkSection) {
-      const linkRow = await row(linkSection);
-      this.linkField = await this.textField(linkRow, 'Video link, YouTube playlist, or list of links (.txt, .m3u, Google Doc, Drive folder)', v => { this.linkQuery = v; }, () => this.addLink());
-      if (this.linkField) {
-        // A video is added; a playlist or list of links asks what to do with it.
-        await this.button(linkRow, '+ Add', () => this.addLink(), { backgroundColor: '#2e7d32' });
-      } else {
-        await this.label(linkRow, 'Adding links needs text input, which this client does not have.', { color: '#bbbbbb', flexGrow: 1 });
-      }
-    }
-
-    // Mode: switches everyone (saved in the space state, see Core.switchMode). Shown to everyone,
-    // because the client can't always tell who is a space admin; the server refuses anyone else.
-    this.adminSection = await section('Space admins only');
-    const adminRow = await row(this.adminSection, { flexWrap: 'wrap' });
-    this.modeLabel = await this.label(adminRow, '', { fontSize: '20px', marginLeft: '4px', marginRight: '12px' });
-    this.modeSwitchBtn = await this.button(adminRow, '', () => this.switchMode(), { backgroundColor: '#6a1b9a' });
-    this.modeDefaultBtn = await this.button(adminRow, 'Use Snippet Default', () => this.useDefaultMode(), { backgroundColor: GREY });
-    await this.label(this.adminSection, 'These only work for space admins (the world owner and community moderators). The mode switches everyone in the space. Admin Take Over is under Who controls the player, beside the host.', { fontSize: '16px', color: '#999999', marginLeft: '4px', marginTop: '4px', whiteSpace: 'normal' });
+    await this.buildKitMore(rootEl, row);
 
     // Footer
     const footer = await row(rootEl, { marginTop: '4px' });
@@ -1216,30 +1538,218 @@ var FirePlaylistPanel = class {
     this.checkAlive();
     this.built = true;
     this.render();
-    console.log(`[PlaylistPanel] Ready${this.scrolling ? ' (scrolling list)' : ''}.`);
-    if (this.scrolling) this.growRows();
+    console.log('[PlaylistPanel] Ready.');
+    this.growRows();
   }
 
-  // One list row: picture, title and a line under it, and up to four buttons.
-  async makeRow(parent) {
-    const r = await this.div(parent, {
-      display: 'flex', flexDirection: 'row', alignItems: 'center', height: '76px', flexShrink: 0,
-      paddingLeft: '6px', paddingRight: '6px', marginBottom: '5px', borderRadius: '10px', backgroundColor: '#2a2a33'
+  // Page buttons beside the tabs: first, back, forward, last. They move the window of rows (see
+  // LIST_WINDOW), and Now goes back to the playing video.
+  async buildPageNav(parent) {
+    const pageBtn = { marginLeft: '2px', marginRight: '2px', round: true, kitSize: 'md', kitVariant: 'outline' };
+    this.nowBtn = this.karaoke ? null : await this.button(parent, '◉ Now', () => this.showCurrent(), Object.assign({}, pageBtn, { round: false, kitVariant: 'secondary', kitIconSize: 'md', marginRight: '6px' }));
+    this.firstPageBtn = await this.button(parent, '⇤', () => this.changePage(-Infinity), pageBtn);
+    this.prevPageBtn = await this.button(parent, '‹', () => this.changePage(-1), pageBtn);
+    this.pageLabel = await this.label(parent, '1 / 1', { fontSize: '19px', width: '104px', textAlign: 'center', flexShrink: 0 });
+    this.nextPageBtn = await this.button(parent, '›', () => this.changePage(1), pageBtn);
+    this.lastPageBtn = await this.button(parent, '⇥', () => this.changePage(Infinity), pageBtn);
+  }
+
+  // The More view, as the kit's Settings page: cards with a section heading, and option
+  // rows with a switch or a dropdown, or buttons where there's something to do rather than set.
+  async buildKitMore(rootEl, row) {
+    this.moreView = await this.div(rootEl, { display: 'none', flexDirection: 'column', flexGrow: 1, flexShrink: 1, overflow: 'hidden', marginTop: '6px' });
+    const col = await this.scrollColumn(this.moreView);
+    const buttons = parent => row(parent, { flexWrap: 'wrap', marginTop: '6px' });
+    const note = (parent, text) => this.label(parent, text, { fontSize: '16px', color: '#999999', marginTop: '6px', whiteSpace: 'normal' });
+    const optionRow = (option, styles) => row(option, Object.assign({ justifyContent: 'flex-end', flexGrow: 1 }, styles || {}));
+
+    // Who controls the player: one choice of three (see controlLevel).
+    const control = this.controlSection = this.kitSurface(col);
+    this.kitHeading(control, 'Who controls the player');
+    const hostLine = await row(control, { marginTop: '2px' });
+    this.controlHostLabel = await this.label(hostLine, '', { fontSize: '20px', color: '#ffd54f', marginRight: '12px', flexShrink: 1 });
+    this.takeOverBtn = await this.button(hostLine, '♛ Take Over', () => {
+      if (this.core.player && !this.isHost()) this.send(Commands.TAKE_OVER);
+    }, { backgroundColor: '#2e7d32' });
+    this.adminTakeOverBtn = await this.button(hostLine, '♛ Admin Take Over', () => this.adminTakeOver());
+    const choices = await row(control, { marginTop: '8px', alignItems: 'stretch' });
+    this.controlCards = {};
+    for (const [level, open, color, name] of this.controlLevels()) {
+      const card = await this.button(choices, '', () => this.setControl(level), {
+        display: 'flex', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'flex-start',
+        flexGrow: 1, flexShrink: 1, flexBasis: '0px', minWidth: '0px', paddingTop: '10px', paddingBottom: '10px', paddingLeft: '12px', paddingRight: '12px',
+        marginLeft: '3px', marginRight: '3px', borderWidth: '3px', borderColor: 'rgba(0,0,0,0)', borderRadius: '16px', plain: true
+      });
+      const top = await row(card, { alignSelf: 'stretch' });
+      await this.lockIcon(top, open, 'md');
+      // One line: a longer name in another language is cut rather than wrapped.
+      await this.label(top, name, { fontSize: '18px', fontWeight: 'bold', marginLeft: '8px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flexShrink: 1, minWidth: '0px' });
+      await this.label(card, this.controlText(level), { fontSize: '17px', whiteSpace: 'normal', marginTop: '6px', color: '#eeeeee', textAlign: 'left' });
+      this.controlCards[level] = { card, color };
+    }
+    this.controlNote = await note(control, '');
+
+    // Host controls (the host only).
+    this.hostSection = this.kitSurface(col);
+    this.kitHeading(this.hostSection, 'Host controls');
+    if (this.karaoke) {
+      const o = this.kitOption(this.hostSection, 'Auto Advance', 'When a song ends, the next singer starts by themselves.');
+      this.autoAdvanceBtn = this.kitToggle(o, () => this.send(Commands.TOGGLE_AUTO_ADVANCE));
+    } else {
+      const o = this.kitOption(this.hostSection, 'Voting', 'Everyone votes videos up or down, the most votes play first, and a video leaves the playlist once it has played');
+      this.votingBtn = this.kitToggle(o, () => this.send(Commands.TOGGLE_VOTE));
+    }
+    // Seek: moves everyone. A live video's time is how far back from the live point (see doSeek).
+    this.seekLabel = this.kitOption(this.hostSection, 'Go to (everyone):');
+    const seekRow = await optionRow(this.seekLabel);
+    this.seekField = await this.textField(seekRow, 'e.g. 95 or 1:35', v => { this.seekQuery = v; }, () => this.doSeek());
+    this.seekField.SetStyles({ flexGrow: 1, flexBasis: '120px', width: '120px' });
+    await this.button(seekRow, '▶ Go', () => this.doSeek(), { backgroundColor: '#1565c0' });
+    await this.button(seekRow, '◀◀ 30s', () => this.seekBy(-30));
+    await this.button(seekRow, '30s ▶▶', () => this.seekBy(30));
+    if (!this.karaoke) {
+      const hostRow = await buttons(this.hostSection);
+      this.clearBtn = await this.button(hostRow, '✕ Clear Playlist', () => this.send(Commands.CLEAR_PLAYLIST), { backgroundColor: '#c62828' });
+      this.loadDefaultBtn = await this.button(hostRow, '↻ Load Default Playlist', () => {
+        this.send(Commands.FROM_PLAYLIST, { id: this.core.params.playlist, shouldClear: true, fromPlaylist: true });
+        this.setStatus('Loading playlist...');
+      }, { backgroundColor: '#2e7d32' });
+    }
+
+    // Just for you
+    const mine = this.kitSurface(col);
+    this.kitHeading(mine, 'Just for you (nobody else\'s player changes)');
+    const mineRow = await buttons(mine);
+    await this.button(mineRow, '↻ Reload Video', () => this.core.reloadScreen());
+    await this.button(mineRow, '◀◀', () => this.sendMine(Commands.LOCAL_SKIP_BACK, Commands.SKIP_BACK));
+    await this.button(mineRow, '▶▶', () => this.sendMine(Commands.LOCAL_SKIP_FORWARD, Commands.SKIP_FORWARD));
+    await this.button(mineRow, '↻ Refresh List', () => this.refresh(true));
+    this.autoSyncBtn = this.kitToggle(this.kitOption(mine, 'Auto Sync', 'Keeps your screen at the room\'s time.'), v => {
+      this.autoSync = v;
+      this.core.autoSync = v; // kept for a video file, which plays without the screen page
+      this.sendMine(Commands.AUTO_SYNC, Commands.AUTO_SYNC, v);
+      this.render();
     });
-    const thumb = await this.div(r, { width: '112px', height: '63px', flexShrink: 0, borderRadius: '6px', backgroundColor: '#000000' });
-    const info = await this.div(r, { display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, minWidth: '0px', marginLeft: '12px', overflow: 'hidden' });
-    const title = await this.label(info, '', { fontSize: '22px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' });
-    const sub = await this.label(info, '', { fontSize: '16px', color: '#aaaaaa', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: '4px' });
-    const btns = await this.div(r, { display: 'flex', flexDirection: 'row', flexShrink: 0 });
-    const slot = { row: r, thumb, title, sub, buttons: [], actions: [] };
+    this.captionsBtn = this.kitToggle(this.kitOption(mine, 'CC', 'Captions on your screen'), v => {
+      this.core.setCaptions(v);
+      this.render();
+    });
+    const res = this.kitOption(mine, 'Resolution', 'Your screen\'s sharpness (resolution)');
+    this.resolutionDropdown = this.kitDropdown(res, [], k => {
+      this.core.setScreenResolution(k === 'default' ? null : Number(k));
+      this.render();
+    }, { width: '300px' });
+    const sound = this.kitOption(mine, 'Sound', 'Your sound: all round you (2D) or from the screen (3D)');
+    this.audioDropdown = this.kitDropdown(sound, [['3d', '3D'], ['2d', '2D']], k => {
+      this.core.setAudioMode(k);
+      this.render();
+    }, { width: '300px' });
+    this.fadeToggle = this.kitToggle(this.kitOption(mine, 'Fade', 'Your sound gets quieter as you walk away, or not'), v => {
+      this.core.setFade(v ? 'on' : 'off');
+      this.render();
+    });
+    if (this.core.params['hand-controls'] === 'true') {
+      const hand = this.kitOption(mine, 'Hand', 'Your hand controls');
+      this.handBtn = await this.button(await optionRow(hand), '☚', () => {
+        Promise.resolve(this.core.nextHandPlace()).then(() => this.render()).catch(() => {});
+      });
+    }
+
+    // Look & language: this viewer's panel only.
+    const look = this.kitSurface(col);
+    this.kitHeading(look, 'Look & language');
+    if (this.i18n) {
+      this.languageDropdown = this.kitDropdown(this.kitOption(look, 'Language'), FVP_LANGUAGES.map(([k, name]) => [k, name, true]), k => this.setLanguage(k), { width: '300px' });
+    }
+    this.themeDropdown = this.kitDropdown(this.kitOption(look, 'Theme'), [], k => this.setTheme(k), { width: '300px' });
+    this.accentDropdown = this.kitDropdown(this.kitOption(look, 'Accent'), [], k => this.setAccent(k), { width: '300px' });
+    this.fillLookChoices();
+
+    // Add by link (in karaoke mode, pasting a link into Search does this)
+    if (!this.karaoke) {
+      const link = this.kitSurface(col);
+      this.kitHeading(link, 'Add by link');
+      const linkRow = await row(link, { marginTop: '4px' });
+      this.linkField = await this.textField(linkRow, 'Video link, YouTube playlist, or list of links (.txt, .m3u, Google Doc, Drive folder)', v => { this.linkQuery = v; }, () => this.addLink());
+      await this.button(linkRow, '+ Add', () => this.addLink(), { backgroundColor: '#2e7d32' });
+    }
+
+    // Mode: switches everyone (see Core.switchMode). Shown to everyone; the server refuses anyone
+    // who isn't a space admin.
+    this.adminSection = this.kitSurface(col);
+    this.kitHeading(this.adminSection, 'Space admins only');
+    const adminRow = await row(this.adminSection, { flexWrap: 'wrap' });
+    this.modeLabel = await this.label(adminRow, '', { fontSize: '18px', marginRight: '12px' });
+    this.modeSwitchBtn = await this.button(adminRow, '', () => this.switchMode());
+    this.modeDefaultBtn = await this.button(adminRow, 'Use Snippet Default', () => this.useDefaultMode());
+    await note(this.adminSection, 'These only work for space admins (the world owner and community moderators). The mode switches everyone in the space. Admin Take Over is under Who controls the player, beside the host.');
+  }
+
+  // One list row: the video's picture (16:9), its title with a line under it (who added it, and
+  // its length at that line's right end), the votes as a count pill and up to four buttons. Our
+  // own labels rather than the kit's list row, whose title and line under it have no room for the
+  // length: beside the title it cut the title short. The rows are dark in either theme, as the
+  // kit's buttons on them are.
+  async makeRow(parent) {
+    const w = await this.div(parent, {
+      display: 'flex', flexDirection: 'row', alignItems: 'center', flexShrink: 0,
+      paddingLeft: '8px', paddingRight: '6px', paddingTop: '5px', paddingBottom: '5px', marginBottom: '4px', borderRadius: '12px'
+    });
+    w.fvpKitRow = true;
+    w.fvpNoTheme = true;
+    const thumb = await this.div(w, {
+      width: '112px', height: '63px', flexShrink: 0, borderRadius: '8px',
+      display: 'flex', alignItems: 'center', justifyContent: 'center'
+    });
+    thumb.SetStyles({ backgroundColor: 'rgb(0, 0, 0)' });
+    // A glyph in place of a picture, for a row without one.
+    const thumbIcon = this.ui.CreateKitIcon(thumb);
+    thumbIcon.size = 'lg';
+    thumbIcon.tone = 'muted';
+    thumbIcon.SetStyles({ display: 'none' });
+    const info = await this.div(w, {
+      display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, minWidth: '0px', marginLeft: '14px', marginRight: '6px', overflow: 'hidden'
+    });
+    const cut = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
+    const title = await this.label(info, '', Object.assign({ fontSize: '20px' }, cut));
+    const line = await this.div(info, { display: 'flex', flexDirection: 'row', alignItems: 'center', marginTop: '3px' });
+    const sub = await this.label(line, '', Object.assign({ fontSize: '17px', color: '#aaaaaa', flexGrow: 1, flexShrink: 1, minWidth: '0px' }, cut));
+    const meta = await this.label(line, '', { fontSize: '19px', color: '#cccccc', flexShrink: 0, marginLeft: '12px', whiteSpace: 'nowrap' });
+    const slot = { row: w, thumb, thumbIcon, title, sub, meta, buttons: [], actions: [] };
+    // Read-out only: the vote buttons beside it do the voting.
+    slot.votes = this.ui.CreateKitCountPill(w);
+    slot.votes.icon = 'thumb-up';
+    slot.votes.size = 'md';
+    slot.votes.interactive = false;
+    slot.votes.SetStyles({ flexShrink: 0, marginLeft: '6px', marginRight: '6px', display: 'none' });
     for (let b = 0; b < 4; b++) {
       const idx = b;
-      const btn = await this.button(btns, '', () => { const fn = slot.actions[idx]; if (fn) fn(); }, { fontSize: '21px', paddingLeft: '12px', paddingRight: '12px', minWidth: '54px' });
+      const btn = await this.button(w, '', () => { const fn = slot.actions[idx]; if (fn) fn(); }, { kitSize: 'md', marginLeft: '3px', marginRight: '3px' });
       slot.buttons.push(btn);
     }
     // Hidden until it has something to show, so a row built ahead of time stays out of the way.
-    this.display(r, false);
+    this.display(w, false);
     return slot;
+  }
+  // A list row's look, from the colour the fill functions give it (see THEME_COLOURS): the playing
+  // one in the accent; one waiting, yours or added keeps its tint. The rows are dark in either
+  // theme, so on the light theme they are a dark grey.
+  kitRowLook(el, value) {
+    el.fvpRaw = el.fvpRaw || {};
+    el.fvpRaw.backgroundColor = value;
+    this.themedEls.add(el);
+    const token = THEME_COLOURS.backgroundColor[String(value).toLowerCase()] || 'row';
+    const light = this.theme === 'light';
+    let bg;
+    if (token === 'rowCurrent') bg = light ? this.themeColour('accent') : this.themeColour('rowCurrent');
+    else if (token === 'row' || token === 'rowAlt') bg = light ? 'rgb(50, 50, 56)' : 'rgba(0, 0, 0, 0)';
+    else bg = light ? (LIGHT_ROW_TINTS[token] || 'rgb(50, 50, 56)') : this.themeColour(token);
+    if (this._changed(el, 'backgroundColor', bg)) el.SetStyles({ backgroundColor: bg });
+  }
+  // A row's line under the title, and its length at that line's right end.
+  setRowLines(slot, parts, dur) {
+    this.setText(slot.sub, parts.filter(Boolean).join('  -  '));
+    this.setText(slot.meta, dur || '');
   }
 
   // Builds the rest of the scroll view's rows (up to LIST_WINDOW) a few at a time after the panel
@@ -1265,7 +1775,7 @@ var FirePlaylistPanel = class {
   // has no call to scroll a ScrollView, so the rows are hidden for a moment: with nothing in it,
   // UI Toolkit clamps the scroll position to the top.
   resetScroll() {
-    if (!this.scrolling || !this.listCol) return;
+    if (!this.listCol) return;
     this.display(this.listCol, false);
     clearTimeout(this.scrollTimer);
     this.scrollTimer = setTimeout(() => {
@@ -1971,20 +2481,16 @@ var FirePlaylistPanel = class {
     this.render();
   }
 
-  // The furthest a tab's rows can start: the last full window (scrolling), or the last page.
+  // The furthest a tab's rows can start: the last full window.
   maxStart(total) {
-    const size = this.pageSize();
-    if (this.scrolling) return Math.max(0, total - size);
-    return Math.max(0, Math.ceil(total / size) - 1) * size;
+    return Math.max(0, total - this.pageSize());
   }
 
-  // Moves the rows by `delta` windows (pages), or to either end with -Infinity / Infinity.
+  // Moves the rows by `delta` windows, or to either end with -Infinity / Infinity.
   changePage(delta) {
     const size = this.pageSize();
     const from = this.tabStart();
-    let start = Math.min(this.maxStart(this.tabItems().length), Math.max(0, from + delta * size));
-    if (!this.scrolling) start = Math.floor(start / size) * size;
-    this.showFrom(start);
+    this.showFrom(Math.min(this.maxStart(this.tabItems().length), Math.max(0, from + delta * size)));
   }
 
   // Shows the current tab's rows from item `start`, at the top of the scroll view.
@@ -1995,32 +2501,19 @@ var FirePlaylistPanel = class {
     this.render();
   }
 
-  // Switches the search to the next source (YouTube, Archive films, Tubi, NASA+, ESO, ESO Fulldome, Screen Share). It only searches
-  // when Search is pressed, so clicking through the sources doesn't start one each time.
-  toggleSearchSource() {
-    const order = this.searchSources();
-    this.searchSource = order[(order.indexOf(this.searchSource) + 1) % order.length];
-    this.showSearchSource();
-    this.setStatus(SEARCH_SOURCES[this.searchSource].status.replace(/^Searching/, 'Search will look on'), 4000);
-  }
   // The sources this world can use: a screen share needs links from other sites (untrusted-links).
   searchSources() {
     return Object.keys(SEARCH_SOURCES).filter(k => k !== 'screen' || this.core.allowUntrusted === true);
   }
   showSearchSource() {
-    if (!this.sourceBtn) return;
-    const source = SEARCH_SOURCES[this.searchSource] || SEARCH_SOURCES.youtube;
-    this.setText(this.sourceBtn, source.label);
-    this.setStyle(this.sourceBtn, 'backgroundColor', source.color);
+    this.setDropdownValue(this.sourceDropdown, this.searchSource);
   }
 
   // Where the playing video is: its row near the top (one before it shows above), or its page.
   currentStart() {
     const player = this.core.player;
     const current = player && typeof player.currentTrack === 'number' ? player.currentTrack : 0;
-    const size = this.pageSize();
     const total = this.listItems().length;
-    if (!this.scrolling) return Math.floor(current / size) * size;
     return Math.min(this.maxStart(total), Math.max(0, current - 1));
   }
 
@@ -2055,7 +2548,7 @@ var FirePlaylistPanel = class {
       this.searchPage = 0;
       this.resetScroll();
       const n = kept.results.length;
-      this.setStatus(`${n} result${n === 1 ? '' : 's'} (from your recent searches)`);
+      this.setStatus(this.tr(n === 1 ? '{count} result (from your recent searches)' : '{count} results (from your recent searches)', { count: n }));
       this.render();
       return;
     }
@@ -2079,7 +2572,7 @@ var FirePlaylistPanel = class {
         console.warn('[PlaylistPanel] No search results from the server after 120s.');
         this.setStatus('No reply from the server for that search. Try again.');
       } else {
-        this.setStatus(`Searching... ${secs}s`, 0);
+        this.setStatus(`${this.tr('Searching...')} ${secs}s`, 0);
       }
     }, 1000);
     this.tab = 'search';
@@ -2412,7 +2905,8 @@ var FirePlaylistPanel = class {
         this.resetScroll(); // new results start at the top
         this.tab = 'search';
         const n = this.searchResults.length;
-        this.setStatus(n ? `${n} result${n === 1 ? '' : 's'}` : 'No results.');
+        this.setStatus(n ? this.tr(n === 1 ? '{count} result' : '{count} results', { count: n }) : 'No results.');
+        this.renderSoon(); // the search spinner stops
         break;
       case Commands.ERROR: {
         if (json.searchId !== undefined && json.searchId !== this.searchId) break; // an earlier search's
@@ -2422,6 +2916,7 @@ var FirePlaylistPanel = class {
         clearInterval(this.searchTimer);
         this.searchTimer = null;
         this.setStatus(m, 5000);
+        this.renderSoon(); // the search spinner stops
         break;
       }
       case Commands.SHOW_REPLACE_PROMPT:
@@ -2459,11 +2954,9 @@ var FirePlaylistPanel = class {
     this.renderSoon();
   }
 
-  // An on/off setting's button: "✓ name" in green, or "✕ name" in grey.
-  setOnOff(btn, on, name) {
-    if (!btn) return;
-    this.setText(btn, `${on ? '✓' : '✕'} ${name}`);
-    this.setStyle(btn, 'backgroundColor', on ? '#2e7d32' : '#455a64');
+  // An on/off setting's switch (see kitToggle).
+  setOnOff(toggle, on) {
+    if (toggle && this._changed(toggle, 'checked', !!on)) toggle.checked = !!on;
   }
 
   renderSoon() {
@@ -2487,7 +2980,7 @@ var FirePlaylistPanel = class {
     this.setStyle(this.timeLabel, 'width', `${width}px`);
     if (this.progHit) this.setStyle(this.progHit, 'width', `${this.progressWidth()}px`);
   }
-  progressWidth() { return PROGRESS_WIDTH - ((this.timeWidth || TIME_WIDTH) - TIME_WIDTH); }
+  progressWidth() { return this.W - PROGRESS_SPARE - ((this.timeWidth || TIME_WIDTH) - TIME_WIDTH); }
 
   updateTime() {
     if (!this.built || this.dragSeek != null) return; // a drag on the bar shows its own time
@@ -2542,21 +3035,20 @@ var FirePlaylistPanel = class {
 
     // Header: the host and who may control the player (the padlock and the chip's colour).
     const level = this.controlLevel(player);
-    const levelColor = this.controlLevels().find(l => l[0] === level)[2];
-    const hostName = player.host ? (host ? 'You' : player.host.name || 'Someone') : '';
-    this.setText(this.hostLabel, player.host ? `♛ ${hostName}` : 'Connecting...');
-    this.setStyle(this.hostChip, 'backgroundColor', player.host ? levelColor : '#455a64');
-    this.display(this.chipLockOpen, !!player.host && level !== 'host');
-    this.display(this.chipLockShut, !!player.host && level === 'host');
+    const hostName = player.host ? (host ? this.tr('You') : player.host.name || this.tr('Someone')) : '';
+    // A padlock and the host's name, in the look for who may control the player.
+    this.setText(this.hostChip, player.host ? `@${level === 'host' ? 'lock' : 'lock-open'} ${hostName}` : '@lock Connecting...');
+    // Red while anyone can take over, so it's plain to see.
+    this.kitVariant(this.hostChip, !player.host ? 'secondary' : level === 'host' ? 'primary' : level === 'everyone' ? 'warning' : 'danger');
     const version = this.core.serverVersion || '';
     this.setText(this.versionLabel, version ? `v${version.split(' ')[0]}` : '');
-    this.setText(this.infoVersionLabel, version ? `Version ${version}` : '');
+    this.setText(this.infoVersionLabel, version ? this.tr('Version {version}', { version }) : '');
 
     // Now playing
     const current = playlist[player.currentTrack];
     const idle = player.host ? (this.karaoke ? 'Nobody is singing' : 'Nothing playing') : 'Connecting...';
     let nowText = current ? current.title : idle;
-    if (current && this.karaoke) nowText = `Now singing: ${current.user && current.user.name ? current.user.name + ' - ' : ''}${current.title}`;
+    if (current && this.karaoke) nowText = this.tr('Now singing: {song}', { song: `${current.user && current.user.name ? current.user.name + ' - ' : ''}${current.title}` });
     this.setText(this.nowTitle, nowText);
     this.updateTime();
 
@@ -2572,11 +3064,14 @@ var FirePlaylistPanel = class {
     }
     this.display(this.pauseBtn, host && hasPlaylist);
     this.setText(this.pauseBtn, player.paused ? '▶' : '❚❚');
-    this.setStyle(this.pauseBtn, 'backgroundColor', player.paused ? '#2e7d32' : '#c62828');
+    // Both are the main button's look: red reads as stop.
+    this.setStyle(this.pauseBtn, 'backgroundColor', '#2e7d32');
     this.display(this.rewBtn, hasPlaylist);
     this.display(this.ffBtn, hasPlaylist);
     const muted = this.core.params.mute === 'true';
     this.setText(this.volLabel, `${this.core.params.volume}`);
+    // The mute button keeps its crossed-out speaker (volume up is the button beside it), red while
+    // muted.
     this.setStyle(this.muteBtn, 'backgroundColor', muted ? '#c62828' : '#455a64');
 
     // Views
@@ -2586,13 +3081,13 @@ var FirePlaylistPanel = class {
     this.display(this.moreView, more);
     this.display(this.infoView, info);
     // While open, ☰ and ⓘ go back (↩).
-    this.setText(this.moreBtn, more ? '↩' : '☰');
+    this.setText(this.moreBtn, more ? '↩' : '@settings');
     this.setText(this.infoBtn, info ? '↩' : 'ⓘ');
 
     // Replacement suggestion
     const r = this.pendingReplacement;
     this.display(this.noticeRow, !!r);
-    if (r) this.setText(this.noticeLabel, `Someone can't play "${r.original.title}". Replace it with "${r.alternative.title}"?`);
+    if (r) this.setText(this.noticeLabel, this.tr('Someone can\'t play "{original}". Replace it with "{alternative}"?', { original: r.original.title, alternative: r.alternative.title }));
     this.display(this.replaceConfirmBtn, host);
 
     // Karaoke preview bar
@@ -2600,43 +3095,55 @@ var FirePlaylistPanel = class {
       const pv = this.core.previewVideo;
       this.display(this.previewRow, !!pv);
       if (pv) {
-        this.setText(this.previewLabel, `Previewing on your screen: ${pv.title || pv.link}`);
+        this.setText(this.previewLabel, this.tr('Previewing on your screen: {title}', { title: pv.title || pv.link }));
         this.display(this.previewSingBtn, !this.isInQueue());
       }
     }
 
-    // More view
-    // On/off settings: ✓ and green when on, ✕ and grey when off.
-    this.setOnOff(this.autoSyncBtn, this.autoSync, 'Auto Sync');
-    this.setOnOff(this.captionsBtn, this.core.captions !== false, 'CC');
-    const [resW, resH] = this.core.screenPageSize();
+    // More view: its switches and dropdowns.
+    this.setOnOff(this.autoSyncBtn, this.autoSync);
+    this.setOnOff(this.captionsBtn, this.core.captions !== false);
     if (this.handBtn) this.setText(this.handBtn, `☚ ${this.core.handPlaceLabel()}`);
-    if (this.audioBtn) this.setText(this.audioBtn, `♫ Sound: ${this.core.audioModeLabel()}`);
-    if (this.fadeBtn) this.setText(this.fadeBtn, `◔ Fade: ${this.core.fadeLabel()}`);
-    this.setText(this.resolutionBtn, `▣ ${resW} × ${resH}${this.core.viewerResolution ? '' : ' (default)'}`);
+    this.setOnOff(this.fadeToggle, this.core.fadeOn());
+    if (this.audioDropdown) this.setDropdownValue(this.audioDropdown, this.core.audioMode());
+    if (this.resolutionDropdown) {
+      const [dw, dh] = [this.core.defaultResolution(), Math.round(this.core.defaultResolution() * 9 / 16)];
+      const opts = [['default', `${this.tr('Default')} (${dw} × ${dh})`, true]]
+        .concat(this.core.screenResolutionChoices().map(w => [String(w), `${w} × ${Math.round(w * 9 / 16)}`, true]));
+      this.setDropdownChoices(this.resolutionDropdown, opts);
+      this.setDropdownValue(this.resolutionDropdown, this.core.viewerResolution ? String(this.core.viewerResolution) : 'default');
+    }
+
+    // Look & language
+    if (this.languageDropdown && this.i18n) this.setDropdownValue(this.languageDropdown, this.i18n.lang);
+    this.setDropdownValue(this.themeDropdown, this.theme);
+    this.setDropdownValue(this.accentDropdown, this.accent);
 
     // Space admins only, but shown to everyone
     {
       const def = this.core.defaultMode || (this.karaoke ? 'karaoke' : 'playlist');
       const override = this.core.modeOverride;
-      const from = override ? 'set by a space admin' : 'the snippet default';
-      this.setText(this.modeLabel, `Mode: ${this.modeName(this.karaoke ? 'karaoke' : 'playlist')} (${from})`);
-      this.setText(this.modeSwitchBtn, `Switch to ${this.karaoke ? 'Playlist' : 'Karaoke'}`);
+      const from = this.tr(override ? 'set by a space admin' : 'the snippet default');
+      this.setText(this.modeLabel, this.tr('Mode: {mode} ({from})', { mode: this.tr(this.modeName(this.karaoke ? 'karaoke' : 'playlist')), from }));
+      this.setText(this.modeSwitchBtn, this.tr('Switch to {mode}', { mode: this.tr(this.karaoke ? 'Playlist' : 'Karaoke') }));
       this.display(this.modeDefaultBtn, !!override);
-      this.setText(this.modeDefaultBtn, `Use Snippet Default (${this.modeName(def)})`);
+      this.setText(this.modeDefaultBtn, this.tr('Use Snippet Default ({mode})', { mode: this.tr(this.modeName(def)) }));
     }
 
     // Who controls the player: the chosen card is in its colour with a white edge, the others grey.
-    this.setText(this.controlHostLabel, player.host ? (host ? '♛ You are the host' : `♛ Host: ${player.host.name || 'Someone'}`) : 'Connecting...');
+    this.setText(this.controlHostLabel, player.host ? (host ? '♛ You are the host' : `♛ ${this.tr('Host: {name}', { name: player.host.name || this.tr('Someone') })}`) : 'Connecting...');
     const takeOverShown = !host && !!player.host && !!player.canTakeOver;
     this.display(this.takeOverBtn, takeOverShown);
     // With Take Over on, anyone (an admin too) can use that instead.
     this.display(this.adminTakeOverBtn, !host && !takeOverShown);
+    // The colours again, as the accent may have changed.
+    const levelColours = Object.fromEntries(this.controlLevels().map(l => [l[0], l[2]]));
     for (const [lvl, c] of Object.entries(this.controlCards || {})) {
       const on = lvl === level;
-      this.setStyle(c.card, 'backgroundColor', on ? c.color : '#37404a');
+      this.setStyle(c.card, 'backgroundColor', on ? levelColours[lvl] : 'rgb(50, 50, 56)');
       this.setStyle(c.card, 'borderColor', on ? '#ffffff' : 'rgba(0,0,0,0)');
     }
+    for (const [lvl, chip] of Object.entries(this.infoLevelChips || {})) this.setStyle(chip, 'backgroundColor', levelColours[lvl]);
     this.setText(this.controlNote, host
       ? 'Press one to change it. It shows on the padlock at the top for everyone.'
       : player.canTakeOver ? 'Only the host can change this. Press Take Over to become the host.' : 'Only the host can change this. A space admin can press Admin Take Over to become the host.');
@@ -2644,9 +3151,9 @@ var FirePlaylistPanel = class {
     // Host controls
     this.display(this.hostSection, host);
     if (this.karaoke) {
-      this.setOnOff(this.autoAdvanceBtn, !!player.autoAdvance, 'Auto Advance');
+      this.setOnOff(this.autoAdvanceBtn, !!player.autoAdvance);
     } else {
-      this.setOnOff(this.votingBtn, !!player.canVote, 'Voting');
+      this.setOnOff(this.votingBtn, !!player.canVote);
       this.display(this.clearBtn, host && hasPlaylist);
       this.display(this.loadDefaultBtn, host && !hasPlaylist && !!this.core.params.playlist);
     }
@@ -2655,16 +3162,12 @@ var FirePlaylistPanel = class {
     if (this.karaoke && this.tab === 'lists') this.tab = 'playlist';
     const onSearch = this.tab === 'search';
     const onLists = this.tab === 'lists';
-    // Search covers the panel: no now playing or transport, and a title and Back instead of tabs.
+    // Search covers the panel: no now playing or transport.
     const searching = onSearch && !more;
     this.display(this.nowCard, !searching);
     this.display(this.controlsRow, !searching);
-    this.display(this.tabPlaylistBtn, !onSearch);
-    if (this.tabListsBtn) this.display(this.tabListsBtn, !onSearch);
-    this.display(this.tabSearchBtn, !onSearch);
-    this.display(this.searchTitle, onSearch);
-    this.display(this.closeSearchBtn, onSearch);
     this.showSearchSource();
+    this.display(this.searchSpinner, onSearch && !!this.searchTimer);
 
     // A pasted playlist's question.
     const pl = this.pendingList;
@@ -2672,12 +3175,12 @@ var FirePlaylistPanel = class {
     if (pl) {
       const data = this.listData.get(pl.id);
       const name = (data && data.state === 'ready' && data.title) || (typeof this.core.listLabel === 'function' ? this.core.listLabel(pl.id) : 'playlist');
-      const size = data && data.state === 'ready' ? ` (${data.items.length} videos)` : data && data.state === 'loading' ? ' (loading...)' : '';
+      const size = data && data.state === 'ready' ? ` (${this.tr('{count} videos', { count: data.items.length })})` : data && data.state === 'loading' ? ` (${this.tr('loading...')})` : '';
       const can = host ? '' : this.canAdd() ? ' Only the host can replace the playlist.' : ' The player is locked: you can save it for yourself.';
       const failed = data && data.state === 'error';
       this.setText(this.listPromptLabel, failed
-        ? `That link isn't a playlist or video this player can use: ${data.error}`
-        : `That's a playlist: ${name}${size}. Replace the playlist, add it all to the end, or save it to Lists (for everyone here, or just for you)?${can}`);
+        ? this.tr('That link isn\'t a playlist or video this player can use: {error}', { error: data.error })
+        : this.tr('That\'s a playlist: {name}{size}. Replace the playlist, add it all to the end, or save it to Lists (for everyone here, or just for you)?', { name, size }) + (can ? ' ' + this.tr(can.trim()) : ''));
       this.display(this.promptReplaceBtn, host && !failed);
       this.display(this.promptAppendBtn, this.canAdd() && !failed);
       this.display(this.promptShareBtn, this.canAdd() && !failed);
@@ -2686,17 +3189,28 @@ var FirePlaylistPanel = class {
     }
     const list = this.listItems();
     const waitingCount = this.karaoke ? 0 : list.length - playlist.length;
-    this.setText(this.tabPlaylistBtn, `${this.karaoke ? '♪ Singers' : '♫ Playlist'} (${this.karaoke ? list.length : playlist.length}${waitingCount ? `+${waitingCount}` : ''})`);
-    this.setStyle(this.tabPlaylistBtn, 'backgroundColor', this.tab === 'playlist' ? '#1565c0' : '#455a64');
-    if (this.tabListsBtn) {
-      const lists = this.getLists();
-      this.setText(this.tabListsBtn, lists.length ? `☰ Lists (${lists.length})` : '☰ Lists');
-      this.setStyle(this.tabListsBtn, 'backgroundColor', onLists ? '#1565c0' : '#455a64');
+    const firstCount = `(${this.karaoke ? list.length : playlist.length}${waitingCount ? `+${waitingCount}` : ''})`;
+    {
+      // The kit's tabs: key:label;key:label (a label can't hold ; or start a key with :).
+      const lists = this.karaoke ? null : this.getLists();
+      const clean = t => String(t).replace(/[;:]/g, ' ');
+      // In capitals, as the menu's tabs are.
+      const up = t => clean(t).toLocaleUpperCase();
+      const choices = [`playlist:${up(`${this.tr(this.karaoke ? 'Singers' : 'Playlist')} ${firstCount}`)}`];
+      if (lists) choices.push(`lists:${up(`${this.tr('Lists')}${lists.length ? ` (${lists.length})` : ''}`)}`);
+      choices.push(`search:${up(this.tr(this.karaoke ? 'Search Songs' : 'Search'))}`);
+      const joined = choices.join(';');
+      if (this.kitTabsChoices !== joined) {
+        this.kitTabsChoices = joined;
+        this.kitTabs.choices = joined;
+      }
+      const v = onSearch ? 'search' : onLists ? 'lists' : 'playlist';
+      if (this._changed(this.kitTabs, 'value', v)) this.kitTabs.value = v;
     }
     if (this.nowBtn) this.display(this.nowBtn, !!(!onSearch && hasPlaylist && (this.tab !== 'playlist' || list.length > this.pageSize())));
     this.display(this.searchRow, onSearch);
     this.display(this.phoneCard, onSearch && !!this.pasteCode);
-    this.display(this.searchToolsRow, onSearch && !!this.searchField);
+    this.display(this.searchToolsRow, onSearch);
     const recent = this.recentSearches;
     (this.recentBtns || []).forEach((btn, k) => {
       this.display(btn, k < recent.length);
@@ -2710,20 +3224,15 @@ var FirePlaylistPanel = class {
     const pages = Math.max(1, Math.ceil(items.length / size));
     const start = Math.min(this.tabStart(), this.maxStart(items.length));
     this.setTabStart(start);
-    if (this.scrolling) {
-      // The window of rows in the scroll view: "21-40 / 300".
-      this.setText(this.pageLabel, items.length ? `${start + 1}-${Math.min(items.length, start + size)} / ${items.length}` : '0 / 0');
-    } else {
-      this.setText(this.pageLabel, `${Math.floor(start / size) + 1} / ${pages}`);
-    }
-    // Back and forward only when there's more than fits, first and last from 3 windows, the
-    // jumps of 5 only past that.
+    // The window of rows in the scroll view: "21-40 / 300". Nothing to count (Search before a
+    // search) shows nothing, rather than 0 / 0 on its own.
+    this.setText(this.pageLabel, items.length ? `${start + 1}-${Math.min(items.length, start + size)} / ${items.length}` : '0 / 0');
+    this.display(this.pageLabel, items.length > 0);
+    // Back and forward only when there's more than fits, first and last from 3 windows.
     this.display(this.prevPageBtn, pages > 1);
     this.display(this.nextPageBtn, pages > 1);
     this.display(this.firstPageBtn, pages > 2);
     this.display(this.lastPageBtn, pages > 2);
-    this.display(this.back5Btn, pages > PAGE_JUMP);
-    this.display(this.fwd5Btn, pages > PAGE_JUMP);
 
     // Rows
     const canAdd = this.canAdd();
@@ -2735,6 +3244,8 @@ var FirePlaylistPanel = class {
       const v = k < size ? items[i] : null;
       this.display(slot.row, !!v);
       if (!v) continue;
+      if (slot.votes && (onLists || onSearch || this.karaoke || v.waiting)) this.display(slot.votes, false);
+      slot.isList = onLists && v.kind === 'list';
       if (onLists) {
         if (v.kind === 'list') this.fillListRow(slot, v.list, host, canAdd);
         else this.fillListItemRow(slot, v, host, canAdd, inPlaylist);
@@ -2754,6 +3265,10 @@ var FirePlaylistPanel = class {
     }
     this.setText(this.emptyLabel, empty);
     this.display(this.emptyLabel, !!empty);
+    if (empty) {
+      const icon = onLists ? 'bookmark' : onSearch ? 'search' : this.karaoke ? 'mic' : 'videocam';
+      if (this._changed(this.emptyLabel, 'icon', icon)) this.emptyLabel.icon = icon;
+    }
     this.display(this.madeWithRow, onSearch && !items.length);
   }
 
@@ -2770,6 +3285,12 @@ var FirePlaylistPanel = class {
 
   setThumb(slot, url, link) {
     url = this.thumbUrl(url, link);
+    if (slot.thumbIcon) {
+      // A row with no picture shows a glyph in its place.
+      const icon = url ? '' : slot.isList ? 'bookmark' : 'videocam';
+      if (icon && this._changed(slot.thumbIcon, 'icon', icon)) slot.thumbIcon.icon = icon;
+      this.display(slot.thumbIcon, !!icon);
+    }
     const safe = url ? String(url).replace(/["\\\n\r]/g, '') : '';
     const value = safe ? `url("${safe}")` : 'none';
     if (!this._changed(slot.thumb, 'backgroundImage', value)) return;
@@ -2810,19 +3331,24 @@ var FirePlaylistPanel = class {
       slot.actions[b] = d ? d.fn : null;
       if (d) {
         this.setText(btn, d.text);
-        this.setStyle(btn, 'backgroundColor', d.color || '#00838f');
+        // A button with no colour of its own is outlined (see kitButton).
+        this.setStyle(btn, 'backgroundColor', d.color || '#455a64');
       }
     }
   }
 
   fillPlaylistRow(slot, v, i, player, host) {
     const isCurrent = player.currentTrack === i;
-    const by = v.user && v.user.name ? v.user.name : 'Unknown';
-    const votes = player.canVote && !isCurrent ? `(${v.votes || 0}) ` : '';
+    const by = v.user && v.user.name ? v.user.name : this.tr('Unknown');
+    const showVotes = player.canVote && !isCurrent;
+    // The votes are a count pill.
+    this.display(slot.votes, showVotes);
+    const n = String(v.votes || 0);
+    if (showVotes && this._changed(slot.votes, 'count', n)) slot.votes.count = n;
     this.setStyle(slot.row, 'backgroundColor', isCurrent ? '#3949ab' : (i % 2 === 0 ? '#2a2a33' : '#31313c'));
-    this.setText(slot.title, `${i + 1}. ${votes}${v.title || 'Untitled'}`);
+    this.setText(slot.title, `${i + 1}. ${v.title || 'Untitled'}`);
     const dur = v.duration ? this.timeCode(v.duration / 1000) : '';
-    this.setText(slot.sub, `${isCurrent ? 'Now playing - ' : ''}Added by ${by}${dur ? '  -  ' + dur : ''}`);
+    this.setRowLines(slot, [isCurrent ? this.tr('Now playing') : '', this.tr('Added by {name}', { name: by })], dur);
     this.setThumb(slot, v.thumbnail, v.link);
 
     const defs = [];
@@ -2850,7 +3376,7 @@ var FirePlaylistPanel = class {
     this.setStyle(slot.row, 'backgroundColor', '#4a3f1e');
     this.setText(slot.title, v.title || 'Untitled');
     const dur = v.duration ? this.timeCode(v.duration / 1000) : '';
-    this.setText(slot.sub, `Waiting for the host to approve  -  added by ${me ? 'you' : (w.name || 'someone')}${dur ? '  -  ' + dur : ''}`);
+    this.setRowLines(slot, [this.tr('Waiting for the host to approve'), me ? this.tr('added by you') : this.tr('added by {name}', { name: w.name || this.tr('someone') })], dur);
     this.setThumb(slot, v.thumbnail, v.link);
     const defs = [];
     if (host) defs.push({ text: '✓', color: '#2e7d32', fn: () => this.send(Commands.APPROVE_VIDEO, v.link) });
@@ -2865,9 +3391,9 @@ var FirePlaylistPanel = class {
     const v = s.v || {};
     const waiting = s.a === false;
     this.setStyle(slot.row, 'backgroundColor', waiting ? '#4a3f1e' : me ? '#2e4a3a' : (i % 2 === 0 ? '#2a2a33' : '#31313c'));
-    this.setText(slot.title, `${i + 1}. ${s.name || 'Someone'}${me ? ' (you)' : ''}`);
+    this.setText(slot.title, `${i + 1}. ${s.name || this.tr('Someone')}${me ? ` (${this.tr('you')})` : ''}`);
     const dur = v.duration ? this.timeCode(v.duration / 1000) : '';
-    this.setText(slot.sub, `${waiting ? 'Waiting for the host to approve:  ' : 'will sing '}${v.title || 'a song'}${dur ? '  -  ' + dur : ''}`);
+    this.setRowLines(slot, [`${waiting ? this.tr('Waiting for the host to approve') + ':  ' : this.tr('will sing') + ' '}${v.title || this.tr('a song')}`], dur);
     this.setThumb(slot, v.thumbnail, v.link);
 
     const defs = [];
@@ -2906,7 +3432,7 @@ var FirePlaylistPanel = class {
     this.setText(slot.title, v.title || 'Untitled');
     const channel = v.channel && v.channel.name ? v.channel.name : '';
     const dur = typeof v.duration === 'number' && v.duration > 0 ? this.timeCode(v.duration / 1000) : '';
-    this.setText(slot.sub, [previewing ? 'Previewing on your screen' : added ? 'In the playlist' : waits ? 'Waiting for the host' : '', channel, dur].filter(Boolean).join('  -  '));
+    this.setRowLines(slot, [this.tr(previewing ? 'Previewing on your screen' : added ? 'In the playlist' : waits ? 'Waiting for the host' : ''), channel], dur);
     this.setThumb(slot, v.thumbnail, v.link);
 
     if (this.karaoke) {
@@ -2935,17 +3461,19 @@ var FirePlaylistPanel = class {
     const open = this.openListId === list.id;
     this.setStyle(slot.row, 'backgroundColor', open ? '#283593' : '#37474f');
     const name = (data.state === 'ready' && data.title) || list.label;
-    const tag = list.isDefault ? '  (default)' : list.shared ? '  (shared)' : list.user ? '  (mine)' : '';
-    this.setText(slot.title, `${open ? 'v ' : '> '}${name}${tag}`);
+    const tagWord = list.isDefault ? 'default' : list.shared ? 'shared' : list.user ? 'mine' : '';
+    // Open / Close beside it says whether it's open, so the name needs no marker.
+    const tag = tagWord ? ` (${this.tr(tagWord)})` : '';
+    this.setText(slot.title, `${name}${tag}`);
     let sub;
-    if (data.state === 'loading') sub = 'Loading...';
+    if (data.state === 'loading') sub = this.tr('Loading...');
     else if (data.state === 'error') sub = data.error;
     else if (data.state === 'ready') {
       const n = data.items.length;
-      sub = `${n} video${n === 1 ? '' : 's'}${data.truncated ? ' (the first ones)' : ''}${data.skipped ? `, ${data.skipped} skipped` : ''}`;
-    } else sub = 'Press Open to see what is in it';
-    if (list.shared && list.by) sub += `  -  saved by ${list.by}`;
-    this.setText(slot.sub, sub);
+      sub = `${this.tr(n === 1 ? '{count} video' : '{count} videos', { count: n })}${data.truncated ? ` (${this.tr('the first ones')})` : ''}${data.skipped ? `, ${this.tr('{count} skipped', { count: data.skipped })}` : ''}`;
+    } else sub = this.tr('Press Open to see what is in it');
+    if (list.shared && list.by) sub += `  -  ${this.tr('saved by {name}', { name: list.by })}`;
+    this.setRowLines(slot, [sub], '');
     const first = data.state === 'ready' && data.items[0];
     this.setThumb(slot, first ? first.thumbnail : '', first ? first.link : '');
 
@@ -2975,7 +3503,7 @@ var FirePlaylistPanel = class {
     this.setStyle(slot.row, 'backgroundColor', entry.index % 2 === 0 ? '#2a2a33' : '#31313c');
     this.setText(slot.title, `    ${entry.index + 1}. ${v.title || 'Untitled'}`);
     const dur = v.duration ? this.timeCode(v.duration / 1000) : '';
-    this.setText(slot.sub, [added ? 'In the playlist' : waits ? 'Waiting for the host' : '', this.sourceName(v.link), dur].filter(Boolean).join('  -  '));
+    this.setRowLines(slot, [this.tr(added ? 'In the playlist' : waits ? 'Waiting for the host' : ''), this.sourceName(v.link)], dur);
     this.setThumb(slot, v.thumbnail, v.link);
 
     const defs = [];

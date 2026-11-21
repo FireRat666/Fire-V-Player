@@ -804,7 +804,7 @@ var FirePlaylistPanel = class {
   send(path, data) {
     const msg = { path };
     if (data !== undefined) msg.data = data;
-    this.core.sendMessage(msg);
+    return this.core.sendMessage(msg);
   }
 
   // A control for this viewer's player only. The server passes these on to their browser page,
@@ -1081,8 +1081,9 @@ var FirePlaylistPanel = class {
     field.OnChange(e => {
       if (!e || e.value == null) return;
       const v = String(e.value);
-      if (v === 'search:submit') return onEnter();
-      if (v === 'search:clear') {
+      // The search bar's own submit and clear; a plain field passes every value on.
+      if (search && v === 'search:submit') return onEnter();
+      if (search && v === 'search:clear') {
         try { if ('_value' in field) field._value = ''; } catch (_) {}
         return onValue('');
       }
@@ -1461,7 +1462,10 @@ var FirePlaylistPanel = class {
       ['♛ Host', 'Runs the karaoke. Press the host name at the top to see who can start songs, or to take over.'],
       ['☚ Hand', hand]
     ] : [
-      ['+ Search & Add', `Search YouTube, Internet Archive, Tubi, NASA+ or ESO${this.core.allowUntrusted === true ? ', or find a screen share by its room code' : ''} (the button beside the box picks), or paste a link.`],
+      // Whole sentences, each its own key, so each is translated as one.
+      ['+ Search & Add', this.core.allowUntrusted === true
+        ? 'Search YouTube, Internet Archive, Tubi, NASA+, ESO or a screen share by its room code: pick the source from the drop-down beside the box. Or paste a link.'
+        : 'Search YouTube, Internet Archive, Tubi, NASA+ or ESO: pick the source from the drop-down beside the box. Or paste a link.'],
       ['☎ Phone', 'Shows a code. Send a link from your phone into your search, no typing in VR.'],
       ['☰ Lists', 'Saved playlists for this room. + All puts a whole list on the end.'],
       ['♛ Host', 'Runs the player for everyone. Press the host name at the top to see who else can control it, or to take over.'],
@@ -1619,10 +1623,10 @@ var FirePlaylistPanel = class {
     this.kitHeading(this.hostSection, 'Host controls');
     if (this.karaoke) {
       const o = this.kitOption(this.hostSection, 'Auto Advance', 'When a song ends, the next singer starts by themselves.');
-      this.autoAdvanceBtn = this.kitToggle(o, () => this.send(Commands.TOGGLE_AUTO_ADVANCE));
+      this.autoAdvanceBtn = this.kitToggle(o, () => this.sendToggle(this.autoAdvanceBtn, Commands.TOGGLE_AUTO_ADVANCE, 'autoAdvance'));
     } else {
       const o = this.kitOption(this.hostSection, 'Voting', 'Everyone votes videos up or down, the most votes play first, and a video leaves the playlist once it has played');
-      this.votingBtn = this.kitToggle(o, () => this.send(Commands.TOGGLE_VOTE));
+      this.votingBtn = this.kitToggle(o, () => this.sendToggle(this.votingBtn, Commands.TOGGLE_VOTE, 'canVote'));
     }
     // Seek: moves everyone. A live video's time is how far back from the live point (see doSeek).
     this.seekLabel = this.kitOption(this.hostSection, 'Go to (everyone):');
@@ -1901,6 +1905,7 @@ var FirePlaylistPanel = class {
   destroy() {
     if (this.destroyed) return;
     this.destroyed = true;
+    if (this.i18n) this.i18n.cancel(); // a language still loading doesn't change it after this
     this.built = false;
     this.visible = false;
     if (this.core && this.core.previewVideo && typeof this.core.stopPreview === 'function') this.core.stopPreview();
@@ -2978,6 +2983,14 @@ var FirePlaylistPanel = class {
       this.clockSkew = (Date.now() / 1000) - (p.lastStartTime + (p.currentTime || 0));
     }
     this.renderSoon();
+  }
+
+  // A room setting's switch: the server answers with the new state (render). When the message
+  // can't be sent, the switch goes back to what the server last said.
+  sendToggle(toggle, path, key) {
+    if (this.send(path)) return;
+    this.setOnOff(toggle, !!(this.core.player && this.core.player[key]));
+    this.setStatus('Not connected to the server. Reconnecting...', 4000);
   }
 
   // An on/off setting's switch (see kitToggle).

@@ -290,12 +290,28 @@ var FirePlaylistPanel = class {
   // Switches the panel's language: loads its strings, then sets every text again.
   async setLanguage(code) {
     if (!this.i18n) return;
-    await this.i18n.use(code);
+    let applied;
+    const request = this.i18n.request + 1; // the one use() is about to start
+    try {
+      applied = await this.withTimeout(this.i18n.use(code), 8000, 'Loading the panel language');
+    } catch (e) {
+      if (this.i18n.request !== request) return; // a later choice is loading
+      // The language it had stays, and the dropdown shows it again; picking it once more retries.
+      this.i18n.cancel();
+      console.warn(`[PlaylistPanel] Could not load the language ${code}:`, e);
+      if (this.languageDropdown) {
+        const c = this.cache.get(this.languageDropdown);
+        if (c) delete c.value;
+        this.setDropdownValue(this.languageDropdown, this.i18n.lang);
+      }
+      return;
+    }
+    if (!applied) return; // a later choice replaced this one
     for (const el of this.textEls) {
       if (el.fvpRawText != null) {
         const raw = el.fvpRawText;
         el.fvpRawText = null;
-        this.setText(el, raw);
+        this.setText(el, raw, el.fvpLiteral);
       }
     }
     if (this.kitTabs) this.kitTabsChoices = null;
@@ -423,7 +439,7 @@ var FirePlaylistPanel = class {
         }
       }
     }
-    rest = this.trText(rest);
+    if (!el.fvpLiteral) rest = this.trText(rest);
     if (!el.fvpRound && this._changed(el, 'text', rest)) el.text = rest;
     const own = icon.startsWith('fvp:');
     // Our own icon element: for our pictures, or any icon on a button with a bigger icon size.
@@ -701,15 +717,18 @@ var FirePlaylistPanel = class {
   plainSymbols(text) {
     return text.replace(/[\u275A\u2715\u265B\u2630\u25D4\u261A]/g, ch => PLAIN_SYMBOLS[ch]);
   }
-  setText(el, text) {
+  // literal: text that isn't ours (a title, a name), shown as it is in every language; the
+  // caller translates any of our words in it first.
+  setText(el, text, literal) {
     if (!el) return;
+    el.fvpLiteral = !!literal;
     if (el.fvpKit) return this.kitText(el, text);
     if (el.fvpTextProp) {
       // A kit control whose text is one property (a chip's text, an empty state's message).
       text = text == null ? '' : String(text);
       el.fvpRawText = text;
       this.textEls.add(el);
-      const t = this.trText(text);
+      const t = el.fvpLiteral ? text : this.trText(text);
       const target = el.fvpProxy || el;
       if (this._changed(target, el.fvpTextProp, t)) target[el.fvpTextProp] = t;
       return;
@@ -718,7 +737,7 @@ var FirePlaylistPanel = class {
     // Kept as given, so a new language can be put on it (setLanguage).
     el.fvpRawText = text;
     this.textEls.add(el);
-    text = this.trText(text);
+    if (!el.fvpLiteral) text = this.trText(text);
     // Text that starts with one of the picture icons (see ICON_FILES), or an element that has
     // shown one before, is drawn as a picture and a label inside the element.
     const m = ICON_START.exec(text);
@@ -1178,6 +1197,8 @@ var FirePlaylistPanel = class {
       try {
         await this.withTimeout(this.i18n.use(FvpI18n.savedLanguage()), 8000, 'Loading the panel language');
       } catch (e) {
+        // A reply after this would change the language of a panel half built in English.
+        this.i18n.cancel();
         console.warn('[PlaylistPanel] Staying in English:', e);
       }
     }
@@ -1446,7 +1467,8 @@ var FirePlaylistPanel = class {
     // Each name has the icon its button shows, as the button shows it. Search and Lists are tabs,
     // which have no icon, so they are just their tab's name.
     const TABS = { '+ Search Songs': 'Search Songs', '+ Search & Add': 'Search', '☰ Lists': 'Lists' };
-    const TIP_ICONS = { '♪ Sing It': '@mic' };
+    // The host is the padlock at the top (the crown is Take Over, in More).
+    const TIP_ICONS = { '♪ Sing It': '@mic', '♛ Host': '@lock' };
     for (const [name, text] of tips) {
       const tip = await row(howCol, { alignItems: 'flex-start', marginTop: '8px' });
       const nameBox = await row(tip, { width: '190px', flexShrink: 0, alignItems: 'center' });
@@ -1484,7 +1506,7 @@ var FirePlaylistPanel = class {
       ['✕', 'Remove, close, or turn off'],
       ['+', 'Add'],
       ['✓', 'On, or approve'],
-      ['♛', 'The host, who runs the player'],
+      ['@lock', 'The host, who runs the player'],
       ['@settings', 'More: settings and host controls']
     ];
     let legendRow = null;
@@ -1748,8 +1770,8 @@ var FirePlaylistPanel = class {
   }
   // A row's line under the title, and its length at that line's right end.
   setRowLines(slot, parts, dur) {
-    this.setText(slot.sub, parts.filter(Boolean).join('  -  '));
-    this.setText(slot.meta, dur || '');
+    this.setText(slot.sub, parts.filter(Boolean).join('  -  '), true);
+    this.setText(slot.meta, dur || '', true);
   }
 
   // Builds the rest of the scroll view's rows (up to LIST_WINDOW) a few at a time after the panel
@@ -2571,6 +2593,7 @@ var FirePlaylistPanel = class {
         this.searchTimer = null;
         console.warn('[PlaylistPanel] No search results from the server after 120s.');
         this.setStatus('No reply from the server for that search. Try again.');
+        this.renderSoon(); // the search spinner stops
       } else {
         this.setStatus(`${this.tr('Searching...')} ${secs}s`, 0);
       }
@@ -3037,7 +3060,7 @@ var FirePlaylistPanel = class {
     const level = this.controlLevel(player);
     const hostName = player.host ? (host ? this.tr('You') : player.host.name || this.tr('Someone')) : '';
     // A padlock and the host's name, in the look for who may control the player.
-    this.setText(this.hostChip, player.host ? `@${level === 'host' ? 'lock' : 'lock-open'} ${hostName}` : '@lock Connecting...');
+    this.setText(this.hostChip, player.host ? `@${level === 'host' ? 'lock' : 'lock-open'} ${hostName}` : `@lock ${this.tr('Connecting...')}`, true);
     // Red while anyone can take over, so it's plain to see.
     this.kitVariant(this.hostChip, !player.host ? 'secondary' : level === 'host' ? 'primary' : level === 'everyone' ? 'warning' : 'danger');
     const version = this.core.serverVersion || '';
@@ -3046,10 +3069,10 @@ var FirePlaylistPanel = class {
 
     // Now playing
     const current = playlist[player.currentTrack];
-    const idle = player.host ? (this.karaoke ? 'Nobody is singing' : 'Nothing playing') : 'Connecting...';
+    const idle = this.tr(player.host ? (this.karaoke ? 'Nobody is singing' : 'Nothing playing') : 'Connecting...');
     let nowText = current ? current.title : idle;
     if (current && this.karaoke) nowText = this.tr('Now singing: {song}', { song: `${current.user && current.user.name ? current.user.name + ' - ' : ''}${current.title}` });
-    this.setText(this.nowTitle, nowText);
+    this.setText(this.nowTitle, nowText, true);
     this.updateTime();
 
     // Controls
@@ -3095,7 +3118,7 @@ var FirePlaylistPanel = class {
       const pv = this.core.previewVideo;
       this.display(this.previewRow, !!pv);
       if (pv) {
-        this.setText(this.previewLabel, this.tr('Previewing on your screen: {title}', { title: pv.title || pv.link }));
+        this.setText(this.previewLabel, this.tr('Previewing on your screen: {title}', { title: pv.title || pv.link }), true);
         this.display(this.previewSingBtn, !this.isInQueue());
       }
     }
@@ -3111,7 +3134,9 @@ var FirePlaylistPanel = class {
       const opts = [['default', `${this.tr('Default')} (${dw} × ${dh})`, true]]
         .concat(this.core.screenResolutionChoices().map(w => [String(w), `${w} × ${Math.round(w * 9 / 16)}`, true]));
       this.setDropdownChoices(this.resolutionDropdown, opts);
-      this.setDropdownValue(this.resolutionDropdown, this.core.viewerResolution ? String(this.core.viewerResolution) : 'default');
+      // A saved width that is now the world's default is the Default choice (it isn't in the list).
+      const w = this.core.viewerResolution;
+      this.setDropdownValue(this.resolutionDropdown, w && w !== dw ? String(w) : 'default');
     }
 
     // Look & language
@@ -3131,7 +3156,7 @@ var FirePlaylistPanel = class {
     }
 
     // Who controls the player: the chosen card is in its colour with a white edge, the others grey.
-    this.setText(this.controlHostLabel, player.host ? (host ? '♛ You are the host' : `♛ ${this.tr('Host: {name}', { name: player.host.name || this.tr('Someone') })}`) : 'Connecting...');
+    this.setText(this.controlHostLabel, player.host ? `♛ ${host ? this.tr('You are the host') : this.tr('Host: {name}', { name: player.host.name || this.tr('Someone') })}` : this.tr('Connecting...'), true);
     const takeOverShown = !host && !!player.host && !!player.canTakeOver;
     this.display(this.takeOverBtn, takeOverShown);
     // With Take Over on, anyone (an admin too) can use that instead.
@@ -3346,7 +3371,7 @@ var FirePlaylistPanel = class {
     const n = String(v.votes || 0);
     if (showVotes && this._changed(slot.votes, 'count', n)) slot.votes.count = n;
     this.setStyle(slot.row, 'backgroundColor', isCurrent ? '#3949ab' : (i % 2 === 0 ? '#2a2a33' : '#31313c'));
-    this.setText(slot.title, `${i + 1}. ${v.title || 'Untitled'}`);
+    this.setText(slot.title, `${i + 1}. ${v.title || this.tr('Untitled')}`, true);
     const dur = v.duration ? this.timeCode(v.duration / 1000) : '';
     this.setRowLines(slot, [isCurrent ? this.tr('Now playing') : '', this.tr('Added by {name}', { name: by })], dur);
     this.setThumb(slot, v.thumbnail, v.link);
@@ -3374,7 +3399,7 @@ var FirePlaylistPanel = class {
     const v = w.v || {};
     const me = !!(window.user && w.id === window.user.id);
     this.setStyle(slot.row, 'backgroundColor', '#4a3f1e');
-    this.setText(slot.title, v.title || 'Untitled');
+    this.setText(slot.title, v.title || this.tr('Untitled'), true);
     const dur = v.duration ? this.timeCode(v.duration / 1000) : '';
     this.setRowLines(slot, [this.tr('Waiting for the host to approve'), me ? this.tr('added by you') : this.tr('added by {name}', { name: w.name || this.tr('someone') })], dur);
     this.setThumb(slot, v.thumbnail, v.link);
@@ -3391,7 +3416,7 @@ var FirePlaylistPanel = class {
     const v = s.v || {};
     const waiting = s.a === false;
     this.setStyle(slot.row, 'backgroundColor', waiting ? '#4a3f1e' : me ? '#2e4a3a' : (i % 2 === 0 ? '#2a2a33' : '#31313c'));
-    this.setText(slot.title, `${i + 1}. ${s.name || this.tr('Someone')}${me ? ` (${this.tr('you')})` : ''}`);
+    this.setText(slot.title, `${i + 1}. ${s.name || this.tr('Someone')}${me ? ` (${this.tr('you')})` : ''}`, true);
     const dur = v.duration ? this.timeCode(v.duration / 1000) : '';
     this.setRowLines(slot, [`${waiting ? this.tr('Waiting for the host to approve') + ':  ' : this.tr('will sing') + ' '}${v.title || this.tr('a song')}`], dur);
     this.setThumb(slot, v.thumbnail, v.link);
@@ -3429,7 +3454,7 @@ var FirePlaylistPanel = class {
     const waits = !this.karaoke && !added && !!this.waitingLinks && this.waitingLinks.has(v.link);
     const previewing = this.karaoke && this.isPreviewing(v);
     this.setStyle(slot.row, 'backgroundColor', previewing ? '#1e3a5f' : added ? '#1b3a2a' : '#2a2a33');
-    this.setText(slot.title, v.title || 'Untitled');
+    this.setText(slot.title, v.title || this.tr('Untitled'), true);
     const channel = v.channel && v.channel.name ? v.channel.name : '';
     const dur = typeof v.duration === 'number' && v.duration > 0 ? this.timeCode(v.duration / 1000) : '';
     this.setRowLines(slot, [this.tr(previewing ? 'Previewing on your screen' : added ? 'In the playlist' : waits ? 'Waiting for the host' : ''), channel], dur);
@@ -3464,7 +3489,7 @@ var FirePlaylistPanel = class {
     const tagWord = list.isDefault ? 'default' : list.shared ? 'shared' : list.user ? 'mine' : '';
     // Open / Close beside it says whether it's open, so the name needs no marker.
     const tag = tagWord ? ` (${this.tr(tagWord)})` : '';
-    this.setText(slot.title, `${name}${tag}`);
+    this.setText(slot.title, `${name}${tag}`, true);
     let sub;
     if (data.state === 'loading') sub = this.tr('Loading...');
     else if (data.state === 'error') sub = data.error;
@@ -3501,9 +3526,9 @@ var FirePlaylistPanel = class {
     const added = inPlaylist && inPlaylist.has(v.link);
     const waits = !added && !!this.waitingLinks && this.waitingLinks.has(v.link);
     this.setStyle(slot.row, 'backgroundColor', entry.index % 2 === 0 ? '#2a2a33' : '#31313c');
-    this.setText(slot.title, `    ${entry.index + 1}. ${v.title || 'Untitled'}`);
+    this.setText(slot.title, `    ${entry.index + 1}. ${v.title || this.tr('Untitled')}`, true);
     const dur = v.duration ? this.timeCode(v.duration / 1000) : '';
-    this.setRowLines(slot, [this.tr(added ? 'In the playlist' : waits ? 'Waiting for the host' : ''), this.sourceName(v.link)], dur);
+    this.setRowLines(slot, [this.tr(added ? 'In the playlist' : waits ? 'Waiting for the host' : ''), this.tr(this.sourceName(v.link))], dur);
     this.setThumb(slot, v.thumbnail, v.link);
 
     const defs = [];

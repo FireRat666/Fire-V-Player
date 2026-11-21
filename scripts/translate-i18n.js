@@ -14,6 +14,11 @@
 // words, with a symbol in front ("+ Add") left off, as setText looks it up without one. Strings
 // already in a language's file are kept, so a translation corrected by hand stays; one the panel
 // no longer has is dropped. {words} in a string are kept out of the translation and put back.
+//
+// scripts/i18n-fixes.json holds corrections by hand. They are put over the output every run, even
+// with --force, so a run can't undo them. New machine translations that look doubtful (one word,
+// which the translator gets with no context, or text that came back unchanged) are listed at the
+// end to be checked; a wrong one gets its correction added to that file.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -25,13 +30,26 @@ const URL_BASE = (process.env.LIBRETRANSLATE_URL || 'http://127.0.0.1:5000').rep
 const API_KEY = process.env.LIBRETRANSLATE_KEY || '';
 const LANGS = ['ja', 'fr', 'de'];
 const BATCH = 40;
+const FIXES_FILE = path.join(__dirname, 'i18n-fixes.json');
+
+function readFixes() {
+  if (!fs.existsSync(FIXES_FILE)) return {};
+  return JSON.parse(fs.readFileSync(FIXES_FILE, 'utf8'));
+}
+
+// Why a new machine translation may be wrong, or null.
+function doubt(en, out) {
+  if (!/\s/.test(en.replace(/\.+$/, '').trim())) return 'one word, translated with no context';
+  if (out.trim().toLowerCase() === en.trim().toLowerCase()) return 'came back unchanged';
+  return null;
+}
 
 // Strings that are names, not words to translate.
 const KEEP = new Set(['Fire-V-Player', 'Fire-V-Player Karaoke', 'YouTube', 'Archive Films', 'Tubi', 'NASA+', 'ESO', 'ESO Fulldome',
   'Screen Share', 'Go Live', 'LIVE', 'CC', 'FireRat', 'English', 'Français', 'Deutsch', '日本語',
   'Dropbox', 'Twitch', 'Vimeo', 'VDO.Ninja', 'Google Drive',
   // Not shown in the panel: log lines, timeout names, words added to a search, a key name.
-  'Panel destroyed during build', 'Loading the panel language', 'Using the UI Kit', 'No UI Kit in this app, using the plain look',
+  'Panel destroyed during build', 'Loading the panel language', 'This app has no UI Kit', 'Using the UI Kit', 'No UI Kit in this app, using the plain look',
   '(scrolling list)', 'zoom karaoke', 'Enter']);
 // Not shown either: what a Unity call that timed out was doing, object and shader names.
 const SKIP = /^(Adding|Creating|Making|Moving|Naming) the |_|\w\/\w/;
@@ -44,16 +62,49 @@ function args() {
   return out;
 }
 
-// The panel's English strings.
+// The panel's English strings: every string passed to tr(), which is one by definition, and the
+// other literals that read as words.
 function extract() {
   const found = new Set();
   for (const file of FILES) {
-    for (let text of literals(fs.readFileSync(path.join(ROOT, file), 'utf8'))) {
+    const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
+    for (const text of trKeys(src)) found.add(text);
+    for (let text of literals(src)) {
       text = text.replace(/^[^\p{L}\p{N}{]+?\s/u, '').trim();
       if (isWords(text)) found.add(text);
     }
   }
   return [...found].sort();
+}
+
+// The quoted strings in a tr(...) call's first argument: tr('x'), tr(a ? 'x' : 'y'). The second
+// argument is the {words}' values, not keys. Template literals with ${} aren't keys either.
+function trKeys(src) {
+  const out = [];
+  const re = /\btr\(/g;
+  let m;
+  while ((m = re.exec(src))) {
+    let i = m.index + m[0].length, depth = 1;
+    while (i < src.length && depth > 0) {
+      if (src[i] === ',' && depth === 1) break; // the end of the first argument
+      const c = src[i];
+      if (c === "'" || c === '"' || c === '`') {
+        let j = i + 1, text = '', plain = true;
+        while (j < src.length && src[j] !== c) {
+          if (src[j] === '\\') { text += src[j + 1] === 'n' ? '\n' : src[j + 1]; j += 2; continue; }
+          if (c === '`' && src[j] === '$' && src[j + 1] === '{') plain = false;
+          text += src[j++];
+        }
+        // Not the arguments of a call inside it.
+        if (plain && depth === 1 && text.trim() && /\p{L}/u.test(text)) out.push(text);
+        i = j + 1; continue;
+      }
+      if (c === '(') depth++;
+      else if (c === ')') depth--;
+      i++;
+    }
+  }
+  return out;
 }
 
 // The string literals in a script, and template literals without ${}, skipping comments and
@@ -72,7 +123,11 @@ function literals(src) {
     while (i < src.length) {
       const c = src[i];
       if (c === '/' && src[i + 1] === '/') { i = src.indexOf('\n', i); if (i < 0) i = src.length; continue; }
-      if (c === '/' && src[i + 1] === '*') { i = src.indexOf('*/', i + 2) + 2; continue; }
+      if (c === '/' && src[i + 1] === '*') {
+        const end = src.indexOf('*/', i + 2);
+        if (end < 0) throw new Error(`A /* comment at character ${i} is never closed.`);
+        i = end + 2; continue;
+      }
       if (c === "'" || c === '"') {
         let j = i + 1;
         while (j < src.length && src[j] !== c && src[j] !== '\n') j += src[j] === '\\' ? 2 : 1;
@@ -133,8 +188,9 @@ function protect(text) {
 function restore(text, vars) {
   let ok = true;
   const out = vars.reduce((t, v, i) => {
-    const re = new RegExp(`\\[\\s*${i}\\s*\\]`);
-    if (!re.test(t)) { ok = false; return t; }
+    // Exactly once, in any order: a marker lost or doubled means a broken translation.
+    const re = new RegExp(`\\[\\s*${i}\\s*\\]`, 'g');
+    if ((t.match(re) || []).length !== 1) { ok = false; return t; }
     return t.replace(re, v);
   }, text);
   return ok ? out : null;
@@ -183,6 +239,8 @@ function write(code, dict) {
 async function main() {
   const { force, langs } = args();
   const strings = extract();
+  const fixes = readFixes();
+  const toCheck = [];
   if (process.argv.includes('--list')) return console.log(strings.join('\n'));
   console.log(`${strings.length} strings in the panel.`);
   for (const code of langs) {
@@ -197,13 +255,30 @@ async function main() {
       const out = await translate(prepared.map(p => p.out), code);
       chunk.forEach((s, k) => {
         const back = out[k] != null ? restore(String(out[k]), prepared[k].vars) : null;
-        if (back) dict[s] = back;
+        if (back) {
+          dict[s] = back;
+          const why = doubt(s, back);
+          if (why) toCheck.push(`  ${code}: "${s}" -> "${back}" (${why})`);
+        }
         else console.warn(`  ${code}: lost a {word} in "${s}" -> "${out[k]}", left in English`);
       });
       process.stdout.write(`  ${Math.min(i + BATCH, todo.length)}/${todo.length}\r`);
     }
+    // Corrections by hand win, for strings the panel still has.
+    const own = fixes[code] || {};
+    for (const s of strings) if (typeof own[s] === 'string' && own[s]) dict[s] = own[s];
+    for (const s of Object.keys(own)) if (!strings.includes(s)) console.warn(`  ${code}: the fix for "${s}" isn't a panel string any more`);
     write(code, dict);
     console.log(`\n${code}: wrote public/i18n/${code}.js (${Object.keys(dict).length} strings).`);
+  }
+  // Only the ones still machine-made: a doubtful string with a fix is already corrected.
+  const open = toCheck.filter(line => {
+    const m = /^ {2}(\w+): "([\s\S]*)" -> /.exec(line);
+    return !(m && fixes[m[1]] && fixes[m[1]][m[2]]);
+  });
+  if (open.length) {
+    console.log(`\nCheck these new machine translations; put a correction for any that are wrong in scripts/i18n-fixes.json:`);
+    console.log(open.join('\n'));
   }
 }
 

@@ -1,0 +1,24 @@
+{
+  "_about": "Hand corrections to the machine translations. scripts/translate-i18n.js puts these over its output every time it runs, --force included. Add one here when a translation is wrong.",
+  "de": {
+    "Add": "Hinzufügen",
+    "Leave": "Verlassen",
+    "You": "Du",
+    "you": "du",
+    "someone": "jemandem",
+    "Loading...": "Wird geladen...",
+    "loading...": "wird geladen..."
+  },
+  "fr": {
+    "Save for Me": "Enregistrer pour moi",
+    "No saved lists. Paste a YouTube playlist or a list of links into + Search & Add (or More > + Add by link) and choose ★ Save for Everyone or ☆ Save for Me.": "Aucune liste enregistrée. Collez une playlist YouTube ou une liste de liens dans + Rechercher et ajouter (ou Plus > + Ajouter par lien) et choisir ★ Enregistrer pour tout le monde ou ☆ Enregistrer pour moi.",
+    "No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first (press ♛ at the top).": "Pas encore de chanteurs. Utilisez Recherche pour choisir une chanson et rejoindre la file d'attente. Celui qui anime le karaoké doit d'abord prendre le contrôle du lecteur : appuyez sur le nom de l'hôte en haut, puis sur Prendre le contrôle quand c'est possible."
+  },
+  "ja": {
+    "You": "あなた",
+    "you": "あなた",
+    "Someone": "誰か",
+    "someone": "誰か",
+    "loading...": "読み込み中..."
+  }
+}

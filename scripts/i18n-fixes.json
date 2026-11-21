@@ -105,7 +105,9 @@
     "Want this player in your own world?": "¿Quieres este reproductor en tu propio mundo?",
     "When the host leaves the space, Take Over turns on after 42 seconds, so the player is never stuck. A space admin can become the host at any time: press the host button at the top, then Admin Take Over.": "Cuando el anfitrión sale del espacio, Tomar el control se activa a los 42 segundos, así el reproductor nunca se queda bloqueado. Un administrador del espacio puede ser el anfitrión en cualquier momento: pulsa el botón del anfitrión arriba y luego Tomar el control (admin).",
     "Who controls the player": "Quién controla el reproductor",
-    "No saved lists. Paste a YouTube playlist or a list of links into + Search & Add (or More > + Add by link) and choose ★ Save for Everyone or ☆ Save for Me.": "No hay listas guardadas. Pega una lista de YouTube o una lista de enlaces en + Buscar (o Más > + Añadir por enlace) y elige ★ Guardar para todos o ☆ Guardar para mí."
+    "No saved lists. Paste a YouTube playlist or a list of links into + Search & Add (or More > + Add by link) and choose ★ Save for Everyone or ☆ Save for Me.": "No hay listas guardadas. Pega una lista de YouTube o una lista de enlaces en + Buscar (o Más > + Añadir por enlace) y elige ★ Guardar para todos o ☆ Guardar para mí.",
+    "Clear Playlist": "Vaciar la lista",
+    "Go back from live (everyone):": "Retroceder desde el directo (todos):"
   },
   "pt": {
     "Accent": "Cor de destaque",
@@ -176,6 +178,7 @@
     "When the host leaves the space, Take Over turns on after 42 seconds, so the player is never stuck. A space admin can become the host at any time: press the host button at the top, then Admin Take Over.": "Quando o anfitrião sai do espaço, Assumir é liberado após 42 segundos, então o player nunca fica travado. Um administrador do espaço pode virar o anfitrião a qualquer momento: toque no botão do anfitrião no topo e depois em Assumir (admin).",
     "Who controls the player": "Quem controla o player",
     "Your hand controls: move them in More (the gear at the top). The ✕ button folds them away to one button.": "Seus controles de mão: mude a posição deles em Mais (a engrenagem no topo). O botão ✕ os recolhe em um só botão.",
-    "No saved lists. Paste a YouTube playlist or a list of links into + Search & Add (or More > + Add by link) and choose ★ Save for Everyone or ☆ Save for Me.": "Nenhuma lista salva. Cole uma playlist do YouTube ou uma lista de links em + Buscar (ou Mais > + Adicionar por link) e escolha ★ Salvar para todos ou ☆ Salvar para mim."
+    "No saved lists. Paste a YouTube playlist or a list of links into + Search & Add (or More > + Add by link) and choose ★ Save for Everyone or ☆ Save for Me.": "Nenhuma lista salva. Cole uma playlist do YouTube ou uma lista de links em + Buscar (ou Mais > + Adicionar por link) e escolha ★ Salvar para todos ou ☆ Salvar para mim.",
+    "Go back from live (everyone):": "Voltar do ponto ao vivo (todos):"
   }
 }

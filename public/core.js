@@ -1459,9 +1459,16 @@ var Core = class {
 
   async setupPlaylistPanel() {
     try {
-      // The panel's translations (i18n.js), then the panel. Without i18n.js it stays in English.
+      // The panel's translations (i18n.js), then the panel. Without i18n.js it stays in English,
+      // and a load that never finishes doesn't hold the panel up for more than 8 seconds.
       if (typeof FvpI18n === 'undefined') {
-        await this.setupScript(null, "i18n");
+        let timer;
+        const waited = await Promise.race([
+          this.setupScript(null, "i18n").then(() => true),
+          new Promise(resolve => { timer = setTimeout(() => resolve(false), 8000); })
+        ]);
+        clearTimeout(timer);
+        if (!waited) console.warn('[Core] i18n.js took over 8s to load: the panel stays in English.');
       }
       if (typeof FirePlaylistPanel === 'undefined') {
         await this.setupScript(null, "playlist-panel");

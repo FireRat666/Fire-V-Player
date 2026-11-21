@@ -27,6 +27,7 @@ var FvpI18n = class {
     this.lang = 'en';
     this.dict = {};
     this.loaded = new Map(); // code -> dictionary, so switching back is instant
+    this.request = 0;        // counts use() calls: only the latest may change the language
   }
 
   // The language saved on this device, or the browser's when it is one of ours.
@@ -39,24 +40,31 @@ var FvpI18n = class {
     return FVP_LANGUAGES.some(l => l[0] === nav) ? nav : 'en';
   }
 
-  // Loads a language's strings and makes it the current one. English needs no file.
+  // Loads a language's strings and makes it the current one, and returns its code. Each call is a
+  // new request: if another one starts before this one's strings arrive, this one only keeps them
+  // for later and returns null. If they can't be loaded it throws, and the current language stays.
   async use(code) {
     if (!FVP_LANGUAGES.some(l => l[0] === code)) code = 'en';
-    let dict = {};
-    if (code !== 'en') {
-      dict = this.loaded.get(code);
-      if (!dict) {
-        if (!FVP_STRINGS[code]) {
-          try { await this.loadScript(`i18n/${code}`); } catch (e) { console.warn(`[i18n] Could not load ${code}:`, e); }
-        }
-        dict = FVP_STRINGS[code] || {};
-        if (FVP_STRINGS[code]) this.loaded.set(code, dict);
+    const request = ++this.request;
+    let dict = code === 'en' ? {} : this.loaded.get(code);
+    if (!dict) {
+      if (!FVP_STRINGS[code]) {
+        try { await this.loadScript(`i18n/${code}`); } catch (e) { console.warn(`[i18n] Could not load ${code}:`, e); }
       }
+      dict = FVP_STRINGS[code];
+      if (!dict || typeof dict !== 'object') throw new Error(`No strings for ${code}`);
+      this.loaded.set(code, dict);
     }
+    if (request !== this.request) return null;
     this.lang = code;
-    this.dict = dict || {};
+    this.dict = dict;
     try { localStorage.setItem('fvpLanguage', code); } catch (e) {}
     return code;
+  }
+
+  // Makes any request still loading stale, so it can't change the language when it arrives.
+  cancel() {
+    this.request++;
   }
 
   // The translation of an English string, with {words} filled in from vars.

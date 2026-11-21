@@ -40,7 +40,7 @@ FVP_STRINGS["pt"] = {
   "Find a song, or paste a video link. + karaoke and + lyrics help find versions with words on screen.": "Encontre uma música ou cole um link de vídeo. + karaoke e + letras ajudam a encontrar versões com palavras na tela.",
   "Getting a code for your phone...": "Obtendo um código para o seu telefone...",
   "Go": "Ir",
-  "Go back from live (everyone):": "Voltem do vivo",
+  "Go back from live (everyone):": "Voltar do ponto ao vivo (todos):",
   "Go to (everyone):": "Ir para (todos):",
   "Going live": "Vai ao vivo",
   "Got the link from your phone": "Consegui o link do seu telefone",

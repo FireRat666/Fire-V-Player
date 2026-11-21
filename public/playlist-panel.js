@@ -1195,6 +1195,9 @@ var FirePlaylistPanel = class {
     // The language saved on this device. A missing file leaves it in English.
     if (this.i18n) {
       try {
+        console.log(`[PlaylistPanel] Device language: ${navigator.language} (${(navigator.languages || []).join(', ')}), saved: ${localStorage.getItem('fvpLanguage') || 'none'}, using ${FvpI18n.savedLanguage()}.`);
+      } catch (e) {}
+      try {
         await this.withTimeout(this.i18n.use(FvpI18n.savedLanguage()), 8000, 'Loading the panel language');
       } catch (e) {
         // A reply after this would change the language of a panel half built in English.

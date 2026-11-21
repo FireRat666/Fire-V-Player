@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // Makes public/i18n/<code>.js, the playlist panel's translations, with LibreTranslate.
 //
-//   node scripts/translate-i18n.js                 # ja, fr and de, from http://127.0.0.1:5000
+//   node scripts/translate-i18n.js                 # ja, fr, de, es and pt, from http://127.0.0.1:5000
 //   node scripts/translate-i18n.js --lang ja       # one language
 //   node scripts/translate-i18n.js --force         # translate everything again
 //   node scripts/translate-i18n.js --list          # just print the strings it found
+//   node scripts/translate-i18n.js --check         # look over the existing translations, change nothing
 //   LIBRETRANSLATE_URL=https://... LIBRETRANSLATE_KEY=... node scripts/translate-i18n.js
 //   LIBRETRANSLATE_DOCKER=libretranslate node scripts/translate-i18n.js
 //       # asks the server inside that Docker container (docker exec), for when its port isn't
@@ -28,7 +29,7 @@ const FILES = ['public/playlist-panel.js'];
 const OUT_DIR = path.join(ROOT, 'public', 'i18n');
 const URL_BASE = (process.env.LIBRETRANSLATE_URL || 'http://127.0.0.1:5000').replace(/\/$/, '');
 const API_KEY = process.env.LIBRETRANSLATE_KEY || '';
-const LANGS = ['ja', 'fr', 'de'];
+const LANGS = ['ja', 'fr', 'de', 'es', 'pt'];
 const BATCH = 40;
 const FIXES_FILE = path.join(__dirname, 'i18n-fixes.json');
 
@@ -41,12 +42,15 @@ function readFixes() {
 function doubt(en, out) {
   if (!/\s/.test(en.replace(/\.+$/, '').trim())) return 'one word, translated with no context';
   if (out.trim().toLowerCase() === en.trim().toLowerCase()) return 'came back unchanged';
+  // A symbol the panel shows as an icon (✕ ★ ☆ ♛), lost or changed into another.
+  const symbols = t => (t.match(/[\u2190-\u2BFF]/g) || []).sort().join('');
+  if (symbols(en) !== symbols(out)) return `a symbol changed (${symbols(en)} -> ${symbols(out) || 'none'})`;
   return null;
 }
 
 // Strings that are names, not words to translate.
 const KEEP = new Set(['Fire-V-Player', 'Fire-V-Player Karaoke', 'YouTube', 'Archive Films', 'Tubi', 'NASA+', 'ESO', 'ESO Fulldome',
-  'Screen Share', 'Go Live', 'LIVE', 'CC', 'FireRat', 'English', 'Français', 'Deutsch', '日本語',
+  'Screen Share', 'Go Live', 'LIVE', 'CC', 'FireRat', 'English', 'Français', 'Deutsch', 'Español', 'Português', '日本語',
   'Dropbox', 'Twitch', 'Vimeo', 'VDO.Ninja', 'Google Drive',
   // Not shown in the panel: log lines, timeout names, words added to a search, a key name.
   'Panel destroyed during build', 'Loading the panel language', 'This app has no UI Kit', 'Using the UI Kit', 'No UI Kit in this app, using the plain look',
@@ -242,6 +246,20 @@ async function main() {
   const fixes = readFixes();
   const toCheck = [];
   if (process.argv.includes('--list')) return console.log(strings.join('\n'));
+  // --check: the doubt checks over every language file as it is, translating nothing.
+  if (process.argv.includes('--check')) {
+    const fixes = readFixes();
+    for (const code of langs) {
+      const dict = readExisting(code);
+      for (const s of strings) {
+        if (!dict[s]) { console.log(`  ${code}: "${s}" has no translation`); continue; }
+        if (fixes[code] && fixes[code][s]) continue;
+        const why = doubt(s, dict[s]);
+        if (why && !why.startsWith('one word')) console.log(`  ${code}: "${s}" -> "${dict[s]}" (${why})`);
+      }
+    }
+    return;
+  }
   console.log(`${strings.length} strings in the panel.`);
   for (const code of langs) {
     const old = force ? {} : readExisting(code);

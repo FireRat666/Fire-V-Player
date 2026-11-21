@@ -15,7 +15,9 @@ var FVP_LANGUAGES = [
   // Put it back once the SDK has a fallback font for them.
   // ['ja', '日本語'],
   ['fr', 'Français'],
-  ['de', 'Deutsch']
+  ['de', 'Deutsch'],
+  ['es', 'Español'],
+  ['pt', 'Português']
 ];
 
 var FVP_STRINGS = typeof FVP_STRINGS === 'undefined' ? {} : FVP_STRINGS;

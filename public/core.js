@@ -101,19 +101,21 @@ var Core = class {
     // Check the URL for the 'mode' parameter to determine behavior (e.g., skip times).
     this.isKaraoke = this.urlParams.get('mode') === 'karaoke';
     this.imIn = false;
-    // The button icons' defaults, each of which a snippet attribute can replace.
-    this.setOrDefault("data-playlist-icon-url", this.assetUrl('Playlist.png'));
-    this.setOrDefault("data-vol-up-icon-url", this.assetUrl('VolUp.png'));
-    this.setOrDefault("data-vol-down-icon-url", this.assetUrl('VolDown.png'));
-    this.setOrDefault("data-mute-icon-url", this.assetUrl('Mute.png'));
-    this.setOrDefault("data-controls-show-icon-url", this.assetUrl('ControlsShow.png'));
-    this.setOrDefault("data-controls-hide-icon-url", this.assetUrl('ControlsHide.png'));
-    this.setOrDefault("data-skip-forward-icon-url", this.assetUrl('Forward.png'));
-    this.setOrDefault("data-skip-backward-icon-url", this.assetUrl('Backwards.png'));
-    this.setOrDefault("data-reload-icon-url", this.assetUrl('Reload.png'));
-    this.setOrDefault("data-unmute-icon-url", this.assetUrl('Unmute.png'));
-    this.setOrDefault("data-play-icon-url", this.assetUrl('Play.png'));
-    this.setOrDefault("data-pause-icon-url", this.assetUrl('Pause.png'));
+    // The button icons' defaults, each of which a snippet attribute can replace: Material icons on
+    // a disc, in the UI Kit's colours (assets/world-icons). The earlier dotted pictures are still
+    // there (assets/*.png, such as https://firer.at/files/fvp/VolUp.png) for a snippet that sets them.
+    this.setOrDefault("data-playlist-icon-url", this.assetUrl('world-icons/Playlist.png'));
+    this.setOrDefault("data-vol-up-icon-url", this.assetUrl('world-icons/VolUp.png'));
+    this.setOrDefault("data-vol-down-icon-url", this.assetUrl('world-icons/VolDown.png'));
+    this.setOrDefault("data-mute-icon-url", this.assetUrl('world-icons/Mute.png'));
+    this.setOrDefault("data-controls-show-icon-url", this.assetUrl('world-icons/ControlsShow.png'));
+    this.setOrDefault("data-controls-hide-icon-url", this.assetUrl('world-icons/ControlsHide.png'));
+    this.setOrDefault("data-skip-forward-icon-url", this.assetUrl('world-icons/Forward.png'));
+    this.setOrDefault("data-skip-backward-icon-url", this.assetUrl('world-icons/Backwards.png'));
+    this.setOrDefault("data-reload-icon-url", this.assetUrl('world-icons/Reload.png'));
+    this.setOrDefault("data-unmute-icon-url", this.assetUrl('world-icons/Unmute.png'));
+    this.setOrDefault("data-play-icon-url", this.assetUrl('world-icons/Play.png'));
+    this.setOrDefault("data-pause-icon-url", this.assetUrl('world-icons/Pause.png'));
 
     if(this.params.announce === 'true') { 
       // this.setupSayNamesScript();
@@ -280,8 +282,45 @@ var Core = class {
     const go = await this.makeImage(name, parent, position, size, size, iconUrl, { rotation, layer: LAYER_UI, alive });
     if (alive && !alive()) return go;
     await this.addColliderBox(go, new BS.Vector3(size, size, 0.01), true);
-    go.On('click', () => { if (!this.blocked) callback(); });
+    go.On('click', () => {
+      if (this.blocked) return;
+      this.pressLook(go);
+      callback();
+    });
     return go;
+  }
+  // A press on a world button shows: it shrinks a little and takes the accent picked in the
+  // panel's Settings for a moment (a world button has no hover look to go by).
+  pressLook(go) {
+    clearTimeout(go.fvpPressTimer);
+    const material = go.fvpMaterial;
+    const tint = this.accentTint();
+    // Clients without SetActive hide a button by its scale (see setActive), so there the scale is
+    // left alone.
+    const scale = typeof go.SetActive === 'function' && typeof go.SetLocalScale === 'function';
+    try {
+      if (material) material.color = tint;
+      if (scale) go.SetLocalScale(new BS.Vector3(0.86, 0.86, 0.86));
+    } catch (e) {}
+    go.fvpPressTimer = setTimeout(() => {
+      if (go.destroyed) return;
+      try {
+        if (material) material.color = this.white();
+        if (scale) go.SetLocalScale(new BS.Vector3(1, 1, 1));
+      } catch (e) {}
+    }, 220);
+  }
+  // The panel's accent (its light shade, as the white icons are tinted by it), from the panel, or
+  // as saved on this device before the panel is made. Teal when neither is there.
+  accentTint() {
+    let key = this.playlistPanel && this.playlistPanel.accent;
+    if (!key) {
+      try { key = localStorage.getItem('fvpPanelAccent'); } catch (e) {}
+    }
+    const accents = typeof ACCENTS !== 'undefined' ? ACCENTS : null;
+    const accent = accents && (accents[key] || accents.teal);
+    const m = /rgb\((\d+),\s*(\d+),\s*(\d+)\)/.exec(accent ? accent.bright : 'rgb(120, 220, 222)');
+    return new BS.Vector4(m[1] / 255, m[2] / 255, m[3] / 255, 1);
   }
   // A flat picture, seen from -Z. Words are pictures too (assets/*Label.png): the world's own
   // text shows as pink blocks on some clients.
@@ -292,7 +331,8 @@ var Core = class {
     if (opts.alive && !opts.alive()) return go; // see makeIconButton
     await this.addComponent(go, this.bsComponent('Plane', { width, height }, 'BanterPlane', [width, height]));
     if (opts.alive && !opts.alive()) return go;
-    await this.addComponent(go, this.bsComponent('Material', { shaderName: shader, texture: url, color: this.white() },
+    // Kept for a button's press look (see pressLook).
+    go.fvpMaterial = await this.addComponent(go, this.bsComponent('Material', { shaderName: shader, texture: url, color: this.white() },
       'BanterMaterial', [shader, url, this.white(), 0, true]));
     return go;
   }
@@ -1168,14 +1208,19 @@ var Core = class {
     // A picture on each side, so it reads from either one. Each is tracked in `made` too: if the
     // button is removed while one is being made, it can end up with no parent, loose in the world.
     const url = this.assetUrl('SingersButton.png');
-    await this.makeImage('FireVPlayer_SingerButtonFront', button, new BS.Vector3(0, 0, -0.005), 1, 0.3, url, { made, layer: LAYER_UI });
+    const front = await this.makeImage('FireVPlayer_SingerButtonFront', button, new BS.Vector3(0, 0, -0.005), 1, 0.3, url, { made, layer: LAYER_UI });
     if (!alive()) return;
-    await this.makeImage('FireVPlayer_SingerButtonBack', button, new BS.Vector3(0, 0, 0.005), 1, 0.3, url,
+    const back = await this.makeImage('FireVPlayer_SingerButtonBack', button, new BS.Vector3(0, 0, 0.005), 1, 0.3, url,
       { made, layer: LAYER_UI, rotation: new BS.Vector3(0, 180, 0) });
     if (!alive()) return;
     await this.addColliderBox(button, new BS.Vector3(1, 0.3, 0.05), true);
     // Like the hand's Playlist button, it brings the panel to itself (just above it).
-    button.On('click', () => { if (!this.blocked) this.openPlaylist('singer'); });
+    button.On('click', () => {
+      if (this.blocked) return;
+      this.pressLook(front);
+      this.pressLook(back);
+      this.openPlaylist('singer');
+    });
     // Where it is in the world, for the panel. Unity only reports a transform when it changes, so
     // a button that never moves is worked out from its settings (see PlaylistPanel.singerPose).
     this.singerLayout = { world, position, rotation, parent: this.buttonsTransform };
@@ -1399,19 +1444,25 @@ var Core = class {
   }
 
   // "panel" = in-world UI Toolkit panel, "page" = 2D menu browser page,
-  // "auto" = panel whenever the SDK has the UI system. (The SideQuest/Altspace client can define a
+  // "auto" = panel whenever the app has the UI system and its UI Kit (the panel is built from the
+  // kit's controls; an older app gets the page). (The SideQuest/Altspace client can define a
   // window.openPage that doesn't open anything, so its presence doesn't mean the page works.)
   shouldUsePlaylistPanel() {
     if (!window.isBanter) return false;
-    const hasUi = !!(window.BS && (BS.UI || BS.BanterUI));
+    const UIClass = window.BS && (BS.UI || BS.BanterUI);
+    const hasKit = !!(UIClass && UIClass.prototype && typeof UIClass.prototype.CreateKitButton === 'function');
     const mode = String(this.params["playlist-ui"] || 'auto').toLowerCase();
-    const use = mode === 'page' ? false : hasUi;
-    console.log(`[Core] playlist-ui=${mode}, UI system ${hasUi ? 'found' : 'missing'}, window.openPage ${typeof window.openPage}: using the ${use ? 'in-world panel' : 'menu page'}.`);
+    const use = mode === 'page' ? false : hasKit;
+    console.log(`[Core] playlist-ui=${mode}, UI Kit ${hasKit ? 'found' : 'missing'}, window.openPage ${typeof window.openPage}: using the ${use ? 'in-world panel' : 'menu page'}.`);
     return use;
   }
 
   async setupPlaylistPanel() {
     try {
+      // The panel's translations (i18n.js), then the panel. Without i18n.js it stays in English.
+      if (typeof FvpI18n === 'undefined') {
+        await this.setupScript(null, "i18n");
+      }
       if (typeof FirePlaylistPanel === 'undefined') {
         await this.setupScript(null, "playlist-panel");
       }

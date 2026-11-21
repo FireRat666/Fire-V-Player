@@ -3255,7 +3255,7 @@ var FirePlaylistPanel = class {
     const recent = this.recentSearches;
     (this.recentBtns || []).forEach((btn, k) => {
       this.display(btn, k < recent.length);
-      if (k < recent.length) this.setText(btn, recent[k]);
+      if (k < recent.length) this.setText(btn, recent[k], true); // a search as typed, never translated
     });
     this.display(this.recentLabel, recent.length > 0);
     this.display(this.clearRecentBtn, recent.length > 0);

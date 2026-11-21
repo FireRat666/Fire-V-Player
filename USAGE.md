@@ -440,7 +440,7 @@ Whether the sound gets quieter with distance is the separate `spatial` setting, 
 | `button-scale` | The `x y z` scale of the in-world UI buttons. | `1 1 1` |
 | `reload-button` | Adds a Reload button to the row under the screen, after Playlist, which reloads only that player's screen (see [Reloading your screen](#reloading-your-screen)). `false` leaves it out. | `true` |
 | `play-pause-button` | Adds a Play/Pause button to the row under the screen, before the skip buttons. Only the host sees it, and it shows Pause while playing and Play while paused. While the host has paused, everyone stays paused: a viewer's own skip moves their screen but doesn't start it, and when the host plays again everyone goes to the same point. `false` leaves it out. With both this and `reload-button` off, the row is laid out as before they existed. | `true` |
-| `playlist-ui` | What the Playlist (or, in karaoke mode, Singers) button opens. `panel`: an in-world panel (UI Toolkit) with controls, the playlist or singer queue, and search. `page`: the 2D playlist page in the client's menu browser. `auto`: `panel` whenever the client has the UI system (the SideQuest/Altspace Creator SDK), otherwise `page`. | `auto` |
+| `playlist-ui` | What the Playlist (or, in karaoke mode, Singers) button opens. `panel`: an in-world panel (UI Toolkit) with controls, the playlist or singer queue, and search. `page`: the 2D playlist page in the client's menu browser. `auto`: `panel` whenever the client has the UI system with its UI Kit (the SideQuest/Altspace Creator SDK), otherwise `page`. | `auto` |
 | `playlist-panel-position` | Where the in-world panel sits in the world, in the same units as `position`. When set, `playlist-panel-rotation` is a world rotation too (empty = the screen's rotation), and `playlist-panel-offset` is ignored. | (beside the screen) |
 | `playlist-panel-offset` | Where the in-world panel sits, relative to the screen, in metres: `x` right, `y` up, `z` toward the viewer. Empty puts it just right of the screen. | (beside the screen) |
 | `playlist-panel-rotation` | The in-world panel's rotation: relative to the screen, or a world rotation when `playlist-panel-position` is set. Empty: relative `0 -20 0` (turned slightly toward the screen's centre), or the screen's rotation. | (see description) |
@@ -456,6 +456,10 @@ Whether the sound gets quieter with distance is the separate `spatial` setting, 
 | `data-reload-icon-url` | URL for a custom "Reload" button icon. | Default icon |
 | `data-skip-forward-icon-url` | URL for a custom "Skip Forward" button icon. | Default icon |
 | `data-skip-backward-icon-url` | URL for a custom "Skip Backward" button icon. | Default icon |
+| `data-controls-show-icon-url` | URL for a custom icon on the hand controls' show button (while they're folded away). `https://firer.at/files/fvp/ControlsShow.png` is the earlier dotted one. | Default icon |
+| `data-controls-hide-icon-url` | URL for a custom icon on the hand controls' hide button. `https://firer.at/files/fvp/ControlsHide.png` is the earlier dotted one. | Default icon |
+
+The default icons are Material icons on a round disc, in the UI Kit's colours. The earlier dotted icons are still hosted, so a snippet can switch back to them with these attributes: `https://firer.at/files/fvp/` followed by `Playlist.png`, `VolUp.png`, `VolDown.png`, `Mute.png`, `Unmute.png`, `Play.png`, `Pause.png`, `Reload.png`, `Forward.png` (skip forward), `Backwards.png` (skip backward), `ControlsShow.png` or `ControlsHide.png` (the hand controls' show and hide button).
 
 ### Karaoke Mode Parameters
 

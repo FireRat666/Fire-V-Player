@@ -19,6 +19,7 @@ using BS;
 using BS.SDKEditor;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace FireVPlayer.EditorTools
 {
@@ -43,9 +44,20 @@ namespace FireVPlayer.EditorTools
         static readonly Vector3 SingerTilt = new Vector3(30, -180, 0);
 
         static readonly Color Outline = new Color(1f, 0.55f, 0.1f, 0.95f);
-        static readonly Color Fill = new Color(1f, 0.55f, 0.1f, 0.07f);
+        static readonly Color Fill = new Color(1f, 0.55f, 0.1f, 0.25f);
         static readonly Color SingerOutline = new Color(1f, 0.3f, 0.7f, 0.95f);
-        static readonly Color SingerFill = new Color(1f, 0.3f, 0.7f, 0.07f);
+        static readonly Color SingerFill = new Color(1f, 0.3f, 0.7f, 0.25f);
+        // The part of a fill hidden behind other meshes is drawn this faint (its outline is dotted).
+        const float HiddenAlpha = 0.3f;
+
+        // The gap to a wall behind the screen or panel (see WallGap).
+        const float WallLookAhead = 1f;     // how far behind it to look for a wall
+        const float WallLookBack = 0.1f;    // and how far in front, for one it's gone through
+        const float WallDeepLookBack = 2f;  // how far in front to look for the face of a wall it's inside
+        const float SuggestedGap = 0.01f;   // closer than this, the wall may flicker through it
+        static readonly Color GapGood = new Color(0.35f, 0.9f, 0.45f, 1f);
+        static readonly Color GapWarn = new Color(1f, 0.25f, 0.2f, 1f);
+        static readonly Color GapNone = new Color(0.8f, 0.8f, 0.8f, 0.8f);
 
         /// <summary>
         /// Subscribes to snippet synchronization changes to trigger SceneView repaints.
@@ -58,12 +70,11 @@ namespace FireVPlayer.EditorTools
         }
 
         /// <summary>
-        /// Draws scene gizmos and component outlines for the selected snippet.
+        /// Draws the outlines for a selected snippet. It's called from the Scene view's own drawing
+        /// (OnSceneGui), not as a gizmo, so it shows even with the Scene view's Gizmos turned off.
         /// </summary>
         /// <param name="snippet">Snippet component instance.</param>
-        /// <param name="type">Gizmo drawing context type.</param>
-        [DrawGizmo(GizmoType.Selected | GizmoType.Active)]
-        static void Draw(BSSnippet snippet, GizmoType type)
+        static void Draw(BSSnippet snippet)
         {
             if (snippet == null || string.IsNullOrEmpty(snippet.InstanceId)) return;
             XElement e;
@@ -91,6 +102,7 @@ namespace FireVPlayer.EditorTools
             var sScale = Vec(e, "scale") ?? Vector3.one;
             Rect(frame, sPos, sRot, Vector3.one, new Vector2(sScale.x, sScale.y * ScreenAspect), Outline, Fill,
                 used ? "Screen" : "Screen (NOT USED: another Fire-V-Player comes first in index.html)");
+            WallGap(frame, sPos, sRot, new Vector2(sScale.x, sScale.y * ScreenAspect));
 
             // Buttons: "0 0 0" (or empty) puts them under the screen, turned with it.
             var under = sPos + new Vector3(0, -sScale.y * ButtonsDrop, 0);
@@ -134,6 +146,7 @@ namespace FireVPlayer.EditorTools
                 pRot = sRot * Quaternion.Euler(pEuler ?? new Vector3(0, 20, 0));
             }
             Rect(frame, pPos, pRot, Vector3.one, pSize, Outline, Fill, "Playlist panel");
+            WallGap(frame, pPos, pRot, pSize);
 
             // Karaoke's Singers button. With a position it's placed in the world (or from the
             // screen, with controls-follow-screen); otherwise it hangs off the buttons.
@@ -157,7 +170,7 @@ namespace FireVPlayer.EditorTools
             Rect(frame, gPos, gRot, gScale, SingerSize, SingerOutline, karaoke ? SingerFill : Color.clear,
                 karaoke ? "Singers button" : "Singers button (karaoke only)");
 
-            // Remembered for the drag handle (OnSceneGui): gizmo drawing can't take mouse input.
+            // Remembered for the drag handle, which OnSceneGui draws after this on every event, not only repaints.
             _singer = karaoke && used
                 ? new SingerSpot
                 {
@@ -187,12 +200,22 @@ namespace FireVPlayer.EditorTools
         static SingerSpot _singer;
 
         /// <summary>
-        /// Draws the Singers button's drag handle on the selected snippet, and saves where it's dragged to
-        /// (and, on the first drag, the turn it has now) as its settings.
+        /// Draws the outlines for each selected snippet, then the Singers button's drag handle, and saves
+        /// where it's dragged to (and, on the first drag, the turn it has now) as its settings.
         /// </summary>
         /// <param name="view">The Scene view being drawn.</param>
         static void OnSceneGui(SceneView view)
         {
+            if (Event.current.type == EventType.Repaint)
+            {
+                _singer = null;
+                foreach (var selected in Selection.gameObjects)
+                {
+                    var found = selected ? selected.GetComponent<BSSnippet>() : null;
+                    if (found != null) Draw(found);
+                }
+            }
+
             var s = _singer;
             if (s == null) return;
             var go = Selection.activeGameObject;
@@ -345,14 +368,190 @@ namespace FireVPlayer.EditorTools
         static void RectAt(Vector2 centre, Vector2 size, Color fill, Color outline)
         {
             var h = size * 0.5f;
-            Handles.DrawSolidRectangleWithOutline(new[]
+            var corners = new[]
             {
                 new Vector3(centre.x - h.x, centre.y - h.y, 0),
                 new Vector3(centre.x - h.x, centre.y + h.y, 0),
                 new Vector3(centre.x + h.x, centre.y + h.y, 0),
                 new Vector3(centre.x + h.x, centre.y - h.y, 0),
-            }, fill, outline);
+            };
+            // Drawn twice: solid where nothing is in front of it, and dotted with a fainter fill where a
+            // mesh hides it. So where it meets a wall shows as an edge, and a screen behind the room's
+            // walls is still easy to see.
+            var zTest = Handles.zTest;
+            var colour = Handles.color;
+            try
+            {
+                Handles.zTest = CompareFunction.LessEqual;
+                Handles.DrawSolidRectangleWithOutline(corners, fill, outline);
+                Handles.zTest = CompareFunction.Greater;
+                Handles.DrawSolidRectangleWithOutline(corners, Faded(fill, HiddenAlpha), Color.clear);
+                Handles.color = outline;
+                for (int i = 0; i < corners.Length; i++)
+                    Handles.DrawDottedLine(corners[i], corners[(i + 1) % corners.Length], 4f);
+            }
+            finally
+            {
+                Handles.zTest = zTest;
+                Handles.color = colour;
+            }
         }
+
+        /// <summary>A colour with its alpha scaled.</summary>
+        static Color Faded(Color c, float alpha) => new Color(c.r, c.g, c.b, c.a * alpha);
+
+        /// <summary>
+        /// Shows how far the wall behind a rectangle (screen or panel) is, measured from its centre and
+        /// corners straight out of its back, and warns when it's so close the wall may flicker through
+        /// it, or when it has gone into the wall. Only meshes with a collider count.
+        /// </summary>
+        /// <param name="frame">Base transform matrix.</param>
+        /// <param name="pos">The rectangle's centre.</param>
+        /// <param name="rot">Its rotation (the viewer is on its -Z side, so the wall is along +Z).</param>
+        /// <param name="size">Its width and height.</param>
+        static void WallGap(Matrix4x4 frame, Vector3 pos, Quaternion rot, Vector2 size)
+        {
+            var m = frame * Matrix4x4.TRS(pos, rot, Vector3.one);
+            var back = m.MultiplyVector(Vector3.forward).normalized;
+            var centre = m.MultiplyPoint3x4(Vector3.zero);
+            // Objects moved in the editor reach physics only when it's told.
+            Physics.SyncTransforms();
+
+            var c = GapAt(centre, back);
+            var h = size * 0.48f; // just inside the edges, so a frame round the wall's opening isn't hit
+            float? near = c, far = c;
+            bool allHit = c.HasValue;
+            foreach (var corner in new[] { new Vector3(-h.x, -h.y), new Vector3(-h.x, h.y), new Vector3(h.x, h.y), new Vector3(h.x, -h.y) })
+            {
+                var d = GapAt(m.MultiplyPoint3x4(corner), back);
+                if (!d.HasValue) { allHit = false; continue; }
+                near = near.HasValue ? Mathf.Min(near.Value, d.Value) : d;
+                far = far.HasValue ? Mathf.Max(far.Value, d.Value) : d;
+            }
+
+            // At the centre, where the line to the wall starts: under the screen are the buttons.
+            var labelAt = centre;
+            if (!near.HasValue)
+            {
+                GapLabel(labelAt, $"No wall within {WallLookAhead:0.#} m behind (walls need a collider)", GapNone);
+                return;
+            }
+
+            string text;
+            Color colour;
+            if (float.IsNegativeInfinity(near.Value))
+            {
+                text = $"More than {Cm(WallDeepLookBack)} into the wall: move it forward out of it";
+                colour = GapWarn;
+            }
+            else if (near.Value < 0)
+            {
+                text = $"{Cm(-near.Value)} into the wall: move it {Cm(-near.Value + SuggestedGap)} forward";
+                colour = GapWarn;
+            }
+            else if (near.Value < SuggestedGap * 0.5f)
+            {
+                text = $"{Cm(near.Value)} from the wall: too close, it may flicker. Leave about {Cm(SuggestedGap)}";
+                colour = GapWarn;
+            }
+            else
+            {
+                text = c.HasValue ? $"Wall {Cm(c.Value)} behind" : $"Wall {Cm(near.Value)} behind";
+                colour = GapGood;
+            }
+            // Corners at different distances: it isn't parallel to the wall (or the wall isn't flat).
+            if (allHit && !float.IsInfinity(near.Value) && far.Value - near.Value > 0.005f) text += $" (corners {Cm(near.Value)} to {Cm(far.Value)}: not parallel)";
+            else if (!allHit) text += " (not all of it is in front of the wall)";
+
+            Handles.color = colour;
+            if (c.HasValue && !float.IsInfinity(c.Value)) Handles.DrawDottedLine(centre, centre + back * c.Value, 2f);
+            GapLabel(labelAt, text, colour);
+        }
+
+        static GUIStyle _gapStyle;
+
+        /// <summary>
+        /// The distance label: large bold text on a dark box, the same size on screen at any zoom or
+        /// scale, just under a point (so the move handle there doesn't cover it).
+        /// </summary>
+        /// <param name="at">The point in the world it hangs under.</param>
+        /// <param name="text">What it says.</param>
+        /// <param name="colour">The text's colour.</param>
+        static void GapLabel(Vector3 at, string text, Color colour)
+        {
+            var cam = Camera.current;
+            // Behind the Scene view's camera: nowhere to put it.
+            if (cam != null && cam.WorldToViewportPoint(at).z <= 0) return;
+            if (_gapStyle == null)
+            {
+                var background = new Texture2D(1, 1) { hideFlags = HideFlags.HideAndDontSave };
+                background.SetPixel(0, 0, new Color(0f, 0f, 0f, 0.75f));
+                background.Apply();
+                _gapStyle = new GUIStyle(EditorStyles.boldLabel)
+                {
+                    fontSize = 16,
+                    alignment = TextAnchor.MiddleCenter,
+                    padding = new RectOffset(10, 10, 5, 5),
+                    wordWrap = false,
+                };
+                _gapStyle.normal.background = background;
+            }
+            _gapStyle.normal.textColor = colour;
+            var content = new GUIContent(text);
+            var size = _gapStyle.CalcSize(content);
+            var p = HandleUtility.WorldToGUIPoint(at);
+            Handles.BeginGUI();
+            GUI.Label(new Rect(p.x - size.x / 2, p.y + 40, size.x, size.y), content, _gapStyle);
+            Handles.EndGUI();
+        }
+
+        /// <summary>
+        /// The distance from a point to the nearest surface straight behind it, or (negative) how far it has
+        /// gone into a wall: negative infinity when it's deeper in than can be measured. Null when there's none.
+        /// </summary>
+        /// <param name="from">The point.</param>
+        /// <param name="back">The direction behind it.</param>
+        static float? GapAt(Vector3 from, Vector3 back)
+        {
+            // A ray doesn't hit the collider it starts in, so a point deep inside a wall would see no wall
+            // (or one further behind). For each collider the point is really inside (not just touching),
+            // measure back to the face it went in through; moving out of the deepest clears them all.
+            float? depth = null;
+            foreach (var col in Physics.OverlapSphere(from, 0.0005f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+            {
+                if (!Contains(col, from)) continue;
+                var ray = new Ray(from - back * WallDeepLookBack, back);
+                // No face within reach (the ray starts inside it too): deeper than that, by how much isn't known.
+                var d = col.Raycast(ray, out var hit, WallDeepLookBack) ? WallDeepLookBack - hit.distance : float.PositiveInfinity;
+                if (!depth.HasValue || d > depth.Value) depth = d;
+            }
+            if (depth.HasValue) return -depth.Value;
+
+            var start = from - back * WallLookBack;
+            float? best = null;
+            foreach (var hit in Physics.RaycastAll(start, back, WallLookBack + WallLookAhead, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+            {
+                var d = hit.distance - WallLookBack;
+                if (!best.HasValue || Mathf.Abs(d) < Mathf.Abs(best.Value)) best = d;
+            }
+            return best;
+        }
+
+        /// <summary>
+        /// Whether a point is inside a collider, not only near its surface. Only solid colliders have an
+        /// inside: a mesh collider that isn't convex (or a terrain) is just a surface.
+        /// </summary>
+        /// <param name="col">The collider.</param>
+        /// <param name="p">The point.</param>
+        static bool Contains(Collider col, Vector3 p)
+        {
+            if (!(col is BoxCollider || col is SphereCollider || col is CapsuleCollider || col is MeshCollider mesh && mesh.convex)) return false;
+            // The closest point on a solid collider to a point inside it is the point itself.
+            return (col.ClosestPoint(p) - p).sqrMagnitude < 1e-10f;
+        }
+
+        /// <summary>A distance in centimetres, to a tenth.</summary>
+        static string Cm(float metres) => (metres * 100f).ToString("0.0", CultureInfo.InvariantCulture) + " cm";
 
         // ---- reading the snippet's values (Unity axes, as typed in the inspector)
 

@@ -439,7 +439,12 @@ namespace FireVPlayer.EditorTools
 
             string text;
             Color colour;
-            if (near.Value < 0)
+            if (float.IsNegativeInfinity(near.Value))
+            {
+                text = $"More than {Cm(WallDeepLookBack)} into the wall: move it forward out of it";
+                colour = GapWarn;
+            }
+            else if (near.Value < 0)
             {
                 text = $"{Cm(-near.Value)} into the wall: move it {Cm(-near.Value + SuggestedGap)} forward";
                 colour = GapWarn;
@@ -455,11 +460,11 @@ namespace FireVPlayer.EditorTools
                 colour = GapGood;
             }
             // Corners at different distances: it isn't parallel to the wall (or the wall isn't flat).
-            if (allHit && far.Value - near.Value > 0.005f) text += $" (corners {Cm(near.Value)} to {Cm(far.Value)}: not parallel)";
+            if (allHit && !float.IsInfinity(near.Value) && far.Value - near.Value > 0.005f) text += $" (corners {Cm(near.Value)} to {Cm(far.Value)}: not parallel)";
             else if (!allHit) text += " (not all of it is in front of the wall)";
 
             Handles.color = colour;
-            if (c.HasValue) Handles.DrawDottedLine(centre, centre + back * c.Value, 2f);
+            if (c.HasValue && !float.IsInfinity(c.Value)) Handles.DrawDottedLine(centre, centre + back * c.Value, 2f);
             GapLabel(labelAt, text, colour);
         }
 
@@ -502,23 +507,25 @@ namespace FireVPlayer.EditorTools
 
         /// <summary>
         /// The distance from a point to the nearest surface straight behind it, or (negative) how far it has
-        /// gone into a wall. Null when there's none.
+        /// gone into a wall: negative infinity when it's deeper in than can be measured. Null when there's none.
         /// </summary>
         /// <param name="from">The point.</param>
         /// <param name="back">The direction behind it.</param>
         static float? GapAt(Vector3 from, Vector3 back)
         {
             // A ray doesn't hit the collider it starts in, so a point deep inside a wall would see no wall
-            // (or one further behind). Inside a collider, measure back to the face it went in through.
-            if (Physics.CheckSphere(from, 0.0005f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+            // (or one further behind). For each collider the point is really inside (not just touching),
+            // measure back to the face it went in through; moving out of the deepest clears them all.
+            float? depth = null;
+            foreach (var col in Physics.OverlapSphere(from, 0.0005f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
             {
-                var outside = from - back * WallDeepLookBack;
-                float? face = null;
-                foreach (var hit in Physics.RaycastAll(outside, back, WallDeepLookBack, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
-                    if (!face.HasValue || hit.distance > face.Value) face = hit.distance;
-                // No face within reach: at least that deep.
-                return face.HasValue ? face.Value - WallDeepLookBack : -WallDeepLookBack;
+                if (!Contains(col, from)) continue;
+                var ray = new Ray(from - back * WallDeepLookBack, back);
+                // No face within reach (the ray starts inside it too): deeper than that, by how much isn't known.
+                var d = col.Raycast(ray, out var hit, WallDeepLookBack) ? WallDeepLookBack - hit.distance : float.PositiveInfinity;
+                if (!depth.HasValue || d > depth.Value) depth = d;
             }
+            if (depth.HasValue) return -depth.Value;
 
             var start = from - back * WallLookBack;
             float? best = null;
@@ -528,6 +535,19 @@ namespace FireVPlayer.EditorTools
                 if (!best.HasValue || Mathf.Abs(d) < Mathf.Abs(best.Value)) best = d;
             }
             return best;
+        }
+
+        /// <summary>
+        /// Whether a point is inside a collider, not only near its surface. Only solid colliders have an
+        /// inside: a mesh collider that isn't convex (or a terrain) is just a surface.
+        /// </summary>
+        /// <param name="col">The collider.</param>
+        /// <param name="p">The point.</param>
+        static bool Contains(Collider col, Vector3 p)
+        {
+            if (!(col is BoxCollider || col is SphereCollider || col is CapsuleCollider || col is MeshCollider mesh && mesh.convex)) return false;
+            // The closest point on a solid collider to a point inside it is the point itself.
+            return (col.ClosestPoint(p) - p).sqrMagnitude < 1e-10f;
         }
 
         /// <summary>A distance in centimetres, to a tenth.</summary>

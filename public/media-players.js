@@ -150,6 +150,76 @@ class BaseMediaSource {
 }
 
 /**
+ * What a radio station shows on the screen while its sound plays: its name, the site it's from,
+ * and bars that move while it's playing (still while paused or loading).
+ * @class RadioCard
+ */
+class RadioCard {
+  /**
+   * @param {Object} opts - The source's options (container, title, thumbnail, link).
+   * @param {Object} media - What MediaSources.detect found for the link.
+   * @param {HTMLMediaElement} el - The element playing the sound.
+   */
+  constructor(opts, media, el) {
+    const sites = { shoutcast: 'Shoutcast', radiobrowser: 'Radio Browser', somafm: 'SomaFM' };
+    let site = sites[media.site] || '';
+    if (!site) { try { site = new URL(opts.link).hostname.replace(/^www\./, ''); } catch (e) {} }
+    const name = String(opts.title || '').replace(/\s*\(radio\)\s*$/i, '').trim()
+      || (window.MediaSources ? MediaSources.nameFromLink(opts.link) : '') || 'Radio station';
+    if (!document.getElementById('fvp-radio-style')) {
+      const style = document.createElement('style');
+      style.id = 'fvp-radio-style';
+      style.textContent = '@keyframes fvpRadioBar{0%,100%{transform:scaleY(0.25)}50%{transform:scaleY(1)}}'
+        + '.fvp-radio-bars span{display:inline-block;width:2.2vw;height:9vw;margin:0 0.6vw;border-radius:1vw;background:#4fc3f7;transform-origin:50% 100%;transform:scaleY(0.25)}'
+        + '.fvp-radio-bars.on span{animation:fvpRadioBar 1s ease-in-out infinite}';
+      document.head.appendChild(style);
+    }
+    const card = this.el = document.createElement('div');
+    Object.assign(card.style, { position: 'absolute', inset: '0', zIndex: '1', display: 'flex', flexDirection: 'column',
+      alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '0 8%', boxSizing: 'border-box',
+      color: '#fff', font: '3vw sans-serif', background: 'radial-gradient(circle at 50% 40%, #1a237e 0%, #0d1033 55%, #000 100%)' });
+    if (/^https:\/\//.test(opts.thumbnail || '')) {
+      const img = document.createElement('img');
+      img.src = opts.thumbnail;
+      img.referrerPolicy = 'no-referrer';
+      Object.assign(img.style, { maxWidth: '18vw', maxHeight: '18vw', borderRadius: '2vw', marginBottom: '3vw', objectFit: 'contain' });
+      img.onerror = () => img.remove();
+      card.appendChild(img);
+    }
+    const bars = this.bars = document.createElement('div');
+    bars.className = 'fvp-radio-bars';
+    bars.style.marginBottom = '3vw';
+    for (let i = 0; i < 5; i++) {
+      const b = document.createElement('span');
+      b.style.animationDelay = `${(i * 0.17) % 0.8}s`;
+      bars.appendChild(b);
+    }
+    card.appendChild(bars);
+    const title = document.createElement('div');
+    title.textContent = name;
+    Object.assign(title.style, { font: 'bold 5.5vw sans-serif', lineHeight: '1.15', maxHeight: '13vw', overflow: 'hidden', wordBreak: 'break-word' });
+    card.appendChild(title);
+    const sub = this.sub = document.createElement('div');
+    Object.assign(sub.style, { marginTop: '2vw', color: '#b3e5fc' });
+    card.appendChild(sub);
+    this.site = site;
+    opts.container.appendChild(card);
+    const update = () => this.show(!el.paused && el.readyState >= 2, el.paused && el.readyState >= 2);
+    ['playing', 'pause', 'waiting', 'stalled', 'canplay', 'loadstart', 'emptied'].forEach(n => el.addEventListener(n, update));
+    el.addEventListener('error', () => this.show(false, false, true));
+    this.show(false, false);
+  }
+
+  show(playing, paused, failed) {
+    this.bars.classList.toggle('on', playing);
+    const state = failed ? "Couldn't play this station" : playing ? 'Live radio' : paused ? 'Paused' : 'Tuning in...';
+    this.sub.textContent = this.site ? `${state}  ·  ${this.site}` : state;
+  }
+
+  destroy() { this.el.remove(); }
+}
+
+/**
  * Player adapter for direct HTML5 video/audio files (.mp4, .webm, etc.), HLS streams (.m3u8),
  * DASH streams (.mpd) and MPEG-TS streams (VRCDN's .live.ts).
  * @class VideoElementSource
@@ -176,6 +246,8 @@ class VideoElementSource extends BaseMediaSource {
     opts.container.appendChild(el);
     this.setVolume(opts.volume);
     this.setMuted(opts.muted);
+    // A station is only sound: the screen shows what's on instead of a black picture.
+    if (media.type === 'radio') this.radioCard = new RadioCard(opts, media, el);
 
     el.addEventListener('loadedmetadata', () => {
       this.ready = true;
@@ -388,6 +460,7 @@ class VideoElementSource extends BaseMediaSource {
   setVolume(v) { this.el.volume = Math.max(0, Math.min(1, Number(v) / 100)); }
   setMuted(m) { this.wantMuted = !!m; if (!this.autoMuted) this.el.muted = !!m; }
   destroy() {
+    if (this.radioCard) { this.radioCard.destroy(); this.radioCard = null; }
     this.destroyed = true;
     if (this.unmuteOnClick) {
       document.removeEventListener('pointerdown', this.unmuteOnClick, true);
@@ -1287,8 +1360,9 @@ class MediaSwitch {
    * Loads and initiates playback for a media URL with the appropriate player adapter.
    * @param {string} link - Canonical playback URL.
    * @param {number} start - Start playback offset in seconds.
+   * @param {Object} [item] - The playlist item (its title and picture, shown for a radio station).
    */
-  loadMedia(link, start) {
+  loadMedia(link, start, item) {
     const media = window.MediaSources ? MediaSources.detect(link) : null;
     if (!media || media.type === 'youtube') {
       this.loadVideoById(this.opts.getId(link), start);
@@ -1306,6 +1380,7 @@ class MediaSwitch {
     const opts = {
       container: this.container, link, start: Number(start) || 0, volume: this.volume, muted: this.muted,
       captions: this.captions,
+      title: String((item && item.title) || ''), thumbnail: String((item && item.thumbnail) || ''),
       onDuration: seconds => this.opts.onDuration(link, seconds),
       onError: message => this.opts.onError(message),
       requestClick: () => { if (this.opts.requestClick) this.opts.requestClick(); },

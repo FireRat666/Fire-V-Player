@@ -426,6 +426,8 @@ var Core = class {
   async answerTubiStream(data) {
     const n = data && data.n;
     const link = String((data && data.link) || '').slice(0, 300);
+    // The page that asked: a page made since (another track, a rejoin) didn't ask, so isn't told.
+    const asker = this.browser;
     let answer = { ok: false, reason: 'No Tubi lookup on this device.' };
     try {
       const tubi = await this.tubiResolver();
@@ -436,6 +438,7 @@ var Core = class {
     } catch (e) {
       answer = { ok: false, reason: String(e && e.message || e) };
     }
+    if (this.destroyed || !asker || asker !== this.browser || asker.removed) return;
     Promise.resolve(this.sendBrowserMessage({ path: Commands.TUBI_STREAM_RESULT, data: Object.assign({ n }, answer) })).catch(() => {});
   }
   // The sharpest YouTube quality for this viewer, from the screen's resolution (the snippet's, or

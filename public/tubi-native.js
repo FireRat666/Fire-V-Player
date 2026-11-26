@@ -13,7 +13,7 @@ var FireTubiResolver = (() => {
   /** The page the hidden browser sits on: on Tubi's own site, and tiny. */
   const PAGE_URL = 'https://tubitv.com/robots.txt';
   /** Bump when tubi-resolve.js changes, so browsers don't keep an old copy. */
-  const SCRIPT_VERSION = 1;
+  const SCRIPT_VERSION = 2;
   const INJECT_EVERY_MS = 500;
   const READY_TIMEOUT_MS = 20000;
   /** The longest a search, and any other lookup, may take. */
@@ -34,6 +34,8 @@ var FireTubiResolver = (() => {
       this.isReady = false;
       this.failed = null;
       this.createdAt = performance.now();
+      // The page must be ready in time, making its object and browser included (they can stall).
+      this.readyTimer = setTimeout(() => this.giveUp("The Tubi lookup page didn't start."), READY_TIMEOUT_MS);
       this.ready = this.create().catch(e => this.giveUp(`Couldn't make the Tubi lookup browser: ${e && e.message || e}`));
     }
 
@@ -51,10 +53,15 @@ var FireTubiResolver = (() => {
       const t = core.screenTransform();
       // Out of sight (52 m below the screen) and too small to see or click.
       const position = new BS.Vector3(t.position.x, t.position.y - 52, t.position.z);
-      const go = this.go = await core.makeObject('FireVPlayer_TubiLookup', { position, scale: new BS.Vector3(0.0001, 0.0001, 0.0001) });
+      const go = await core.makeObject('FireVPlayer_TubiLookup', { position, scale: new BS.Vector3(0.0001, 0.0001, 0.0001) });
+      if (this.destroyed) { core.destroyObject(go); return; }
+      this.go = go;
       go.On('browser-message', e => this.onMessage(e));
-      const component = this.component = await core.addComponent(go, core.bsComponent('Browser',
+      const component = await core.addComponent(go, core.bsComponent('Browser',
         { url: PAGE_URL, pageWidth: 320, pageHeight: 180 }, 'BanterBrowser', [PAGE_URL, false, 1300, 320, 180, null]));
+      // Removed meanwhile: destroy() has already destroyed the object (this.go).
+      if (this.destroyed) return;
+      this.component = component;
       try { if (typeof component.ToggleInteraction === 'function') component.ToggleInteraction(false); } catch (e) {}
       // Quiet: Tubi's search page has no sound, but it's a browser all the same.
       try { if ('volume' in component) component.volume = 0; } catch (e) {}
@@ -63,13 +70,8 @@ var FireTubiResolver = (() => {
         + `var s=document.createElement("script");s.src=${JSON.stringify(this.scriptUrl())};`
         + `(document.head||document.documentElement).appendChild(s);})();`;
       const json = JSON.stringify({ actions: [{ actionType: 'runscript', strParam1: code }] });
-      const started = performance.now();
       const inject = () => {
         if (this.isReady || this.destroyed || this.failed) return;
-        if (performance.now() - started > READY_TIMEOUT_MS) {
-          this.giveUp("The Tubi lookup page didn't start.");
-          return;
-        }
         try { component.RunActions(json); } catch (e) {}
         this.injectTimer = setTimeout(inject, INJECT_EVERY_MS);
       };
@@ -80,6 +82,7 @@ var FireTubiResolver = (() => {
       if (this.isReady || this.failed) return;
       this.failed = reason;
       clearTimeout(this.injectTimer);
+      clearTimeout(this.readyTimer);
       console.warn(`[TubiNative] ${reason}`);
       this.readyWaiters.splice(0).forEach(w => w(false));
     }
@@ -101,6 +104,7 @@ var FireTubiResolver = (() => {
         this.isReady = true;
         this.failed = null;
         clearTimeout(this.injectTimer);
+        clearTimeout(this.readyTimer);
         console.log(`[TubiNative] The lookup page is ready (${Math.round(performance.now() - this.createdAt)} ms).`);
         this.readyWaiters.splice(0).forEach(w => w(true));
         return;
@@ -221,6 +225,7 @@ var FireTubiResolver = (() => {
     destroy() {
       this.destroyed = true;
       clearTimeout(this.injectTimer);
+      clearTimeout(this.readyTimer);
       this.pending.forEach(p => { clearTimeout(p.timer); p.resolve({ ok: false, reason: 'The player was removed.' }); });
       this.pending.clear();
       this.readyWaiters.splice(0).forEach(w => w(false));

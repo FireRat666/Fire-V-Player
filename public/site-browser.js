@@ -42,6 +42,33 @@ var FireSiteBrowser = (() => {
       if (++tries < 200) setTimeout(attempt, 50);
     })();
   }
+  // The page's sound plays at the Fire Player's volume (window.__fvpSetVolume, from the panel):
+  // each audio or video element's own volume is scaled by it, whatever the site sets.
+  var level = 1;
+  var desc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'volume');
+  function apply(el) { try { desc.set.call(el, Math.max(0, Math.min(1, (el.__fvpWant == null ? 1 : el.__fvpWant) * level))); } catch (e) {} }
+  var made = [];
+  if (desc && desc.set) {
+    Object.defineProperty(HTMLMediaElement.prototype, 'volume', {
+      configurable: true, enumerable: desc.enumerable,
+      get: function () { return this.__fvpWant == null ? 1 : this.__fvpWant; },
+      set: function (v) { this.__fvpWant = Number(v); apply(this); }
+    });
+    var play = HTMLMediaElement.prototype.play;
+    HTMLMediaElement.prototype.play = function () {
+      if (made.indexOf(this) < 0) { made.push(this); if (made.length > 50) made.shift(); }
+      apply(this);
+      return play.apply(this, arguments);
+    };
+  }
+  window.__fvpSetVolume = function (v) {
+    v = Math.max(0, Math.min(1, Number(v)));
+    if (!isFinite(v) || v === level) return;
+    level = v;
+    made.forEach(apply);
+    var els = document.querySelectorAll('audio,video');
+    for (var i = 0; i < els.length; i++) apply(els[i]);
+  };
   // A site that changes page without loading one (Tubi) sets the new title a moment later.
   var last = '', timer = 0;
   function checkPage() {
@@ -101,7 +128,9 @@ var FireSiteBrowser = (() => {
     (document.body || document.documentElement).appendChild(bar);
   }
   window.addEventListener('bsmessage', function (e) {
+    // The action's text comes as e.detail.message.
     var msg = e && e.detail;
+    if (msg && typeof msg === 'object' && 'message' in msg) msg = msg.message;
     if (typeof msg === 'string') { try { msg = JSON.parse(msg); } catch (err) { return; } }
     if (msg && msg.type === 'offer') offer(msg);
   });
@@ -114,6 +143,7 @@ var FireSiteBrowser = (() => {
      * @param {Object} opts.parent - The object the window is placed in (the panel's mover).
      * @param {Object} opts.position - Its place there (BS.Vector3), the window's middle.
      * @param {function(Object)} opts.onMessage - Gets each message from the page.
+     * @param {function(): number} opts.getVolume - The Fire Player's volume (0-100), for the page's sound.
      */
     constructor(core, opts) {
       this.core = core;
@@ -143,9 +173,16 @@ var FireSiteBrowser = (() => {
         'BanterBrowser', [url, false, PIXELS_PER_M, PAGE_W, PAGE_H, null]));
       if (this.destroyed) { core.destroyObject(go); return; }
       try { if (typeof component.ToggleInteraction === 'function') component.ToggleInteraction(true); } catch (e) {}
-      const json = JSON.stringify({ actions: [{ actionType: 'runscript', strParam1: PAGE_SCRIPT }] });
       const inject = () => {
         if (this.destroyed) return;
+        // The page's sound follows the Fire Player's volume (see __fvpSetVolume in PAGE_SCRIPT).
+        let volume = 1;
+        try { volume = Math.max(0, Math.min(100, Number(this.opts.getVolume()))) / 100; } catch (e) {}
+        if (!Number.isFinite(volume)) volume = 1;
+        const json = JSON.stringify({ actions: [
+          { actionType: 'runscript', strParam1: PAGE_SCRIPT },
+          { actionType: 'runscript', strParam1: `window.__fvpSetVolume&&window.__fvpSetVolume(${volume})` }
+        ] });
         try { component.RunActions(json); } catch (e) {}
         this.injectTimer = setTimeout(inject, INJECT_EVERY_MS);
       };

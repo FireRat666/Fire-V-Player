@@ -300,17 +300,13 @@ async function relay(req, res, allowed) {
     res.status(429).json({ error: 'Too many radio streams at once. Try again in a moment.' });
     return;
   }
-  let s;
-  try {
-    s = await station(link);
-  } catch (e) {
-    res.status(422).json({ error: e.message });
-    return;
-  }
+  // The slot is taken before the station is looked up, so requests waiting on the same lookup
+  // see it and are held to the limits too.
   relays.total++;
   relays.byIp.set(ip, (relays.byIp.get(ip) || 0) + 1);
   const controller = new AbortController();
   let released = false;
+  let firstByte = 0, longest = 0;
   const release = () => {
     if (released) return;
     released = true;
@@ -321,9 +317,19 @@ async function relay(req, res, allowed) {
     const n = (relays.byIp.get(ip) || 1) - 1;
     if (n > 0) relays.byIp.set(ip, n); else relays.byIp.delete(ip);
   };
-  const firstByte = setTimeout(() => controller.abort(), TIMEOUT_MS);
-  const longest = setTimeout(release, MAX_RELAY_MS);
-  req.on('close', release);
+  // The reply's close is the viewer leaving (or the reply ending).
+  res.on('close', release);
+  let s;
+  try {
+    s = await station(link);
+  } catch (e) {
+    release();
+    if (!res.headersSent && !res.destroyed) res.status(422).json({ error: e.message });
+    return;
+  }
+  if (released || res.destroyed) { release(); return; }
+  firstByte = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  longest = setTimeout(release, MAX_RELAY_MS);
   let lastError = 'The station sent no sound.';
   for (const url of s.streams.slice(0, 3)) {
     if (released) return;

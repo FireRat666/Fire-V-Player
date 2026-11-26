@@ -1694,7 +1694,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         this.readyToPlay = true;
         clearTimeout(this.syncTimeout);
         try { this.player.setPlaybackRate(1.0); } catch (e) {}
-        if (this.player.loadMedia) this.player.loadMedia(video.link, 0);
+        if (this.player.loadMedia) this.player.loadMedia(video.link, 0, video);
         else this.player.loadVideoById(this.core.getId(video.link), 0);
         this.player.playVideo();
         this.restartLoading();
@@ -1749,7 +1749,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         if(this.lastUrl !== video.link || force) {
           const start = this.startAt(video, currentTime);
           this.liveJumped = null; // see onYouTubeState
-          if (this.player.loadMedia) this.player.loadMedia(video.link, start);
+          if (this.player.loadMedia) this.player.loadMedia(video.link, start, video);
           else this.player.loadVideoById(this.core.getId(video.link), start);
           this.restartLoading();
           if (this.playerData.paused) {

@@ -1372,6 +1372,8 @@ var FirePlaylistPanel = class {
       this.sourceDropdown = this.kitDropdown(this.searchRow, [], k => {
         this.searchSource = k;
         this.setStatus(this.tr('Search will look on {source}.', { source: SEARCH_SOURCES[k].label }), 4000);
+        // Browse shows for Shoutcast and Tubi (and while a window is open, so it can be closed).
+        this.render();
       }, { width: '200px', marginRight: '6px' });
       this.fillLookChoices();
     }
@@ -2507,6 +2509,13 @@ var FirePlaylistPanel = class {
     this.render();
   }
 
+  // Takes a list opened for this visit out of the Lists tab.
+  removeExtraList(id) {
+    this.extraLists = this.extraLists.filter(l => l.id !== id);
+    if (this.openListId === id) this.openListId = null;
+    this.render();
+  }
+
   // Search covers the whole panel; Back returns to where it was opened from.
   openSearch() {
     if (this.tab !== 'search') this.tabBeforeSearch = this.tab;
@@ -2588,7 +2597,9 @@ var FirePlaylistPanel = class {
     const browser = this.siteBrowser = new FireSiteBrowser(this.core, {
       parent: this.mover,
       position: new BS.Vector3(x, this.handleDrop, 0),
-      onMessage: msg => this.onBrowseMessage(msg)
+      onMessage: msg => this.onBrowseMessage(msg),
+      // The site's own sound plays at the volume this viewer hears the Fire Player at.
+      getVolume: () => (typeof this.core.heardVolume === 'function' ? this.core.heardVolume() : 100)
     });
     try {
       await browser.open(site);
@@ -2659,6 +2670,9 @@ var FirePlaylistPanel = class {
     if (o.kind === 'series') { this.showEpisodes(o.link); return; }
     if (now && !this.isHost()) { this.setStatus('Only the host can play something now.'); return; }
     if (!now && !this.canAdd() && !this.addWaits()) { this.setStatus('The player is locked: only the host can add videos.'); return; }
+    // Done with the site: it closes (Browse opens it again for more).
+    this.closeBrowse();
+    this.render();
     let what = o.link;
     if (o.kind === 'video' && window.isBanter && typeof this.core.tubiResolver === 'function') {
       this.setBrowseOffer(null);
@@ -2677,13 +2691,16 @@ var FirePlaylistPanel = class {
       this.send(Commands.ADD_TO_PLAYLIST, what);
       this.setStatus(this.addWaits() ? this.tr('Asking the host to add "{title}"...', { title: o.title }) : this.tr('Adding "{title}"...', { title: o.title }));
     }
-    this.setBrowseOffer(null);
+    // A page opened during the lookup may have put up its own offer since: that one stays.
+    if (this.browseOffer === o) this.setBrowseOffer(null);
   }
 
   // A Tubi series' episodes, in the Lists tab: each one to add, play or play next, or all of them.
   showEpisodes(link) {
     if (!link) return;
-    this.setBrowseOffer(null);
+    // Browse's series: its episodes are picked in the panel, so the site closes (Browse opens it again).
+    if (this.browseOffer && this.browseOffer.link === link) this.closeBrowse();
+    else this.setBrowseOffer(null);
     this.browseList(link);
     this.setStatus('The episodes are in Lists: add the ones you want, or + All.', 6000);
   }
@@ -3116,6 +3133,8 @@ var FirePlaylistPanel = class {
   // Replaces the playlist with a list (the host only).
   replaceWithList(id) {
     if (!this.isHost()) { this.setStatus('Only the host can load a playlist.'); return; }
+    const data = this.listData.get(id);
+    if (data && data.device) { this.setStatus('Use + All to add these episodes.'); return; }
     this.send(Commands.FROM_PLAYLIST, { id, shouldClear: true, fromPlaylist: true });
     this.setStatus('Loading playlist...', 0);
   }
@@ -3765,7 +3784,8 @@ var FirePlaylistPanel = class {
     else {
       if (canAdd) defs.push({ text: '+ All', fn: () => this.appendList(list.id) });
       // A row has 4 buttons: a viewer's own list uses the last two for Share and Remove.
-      if (host && !list.user) defs.push({ text: '⇄ Replace', color: '#2e7d32', fn: () => this.replaceWithList(list.id) });
+      // A list read on this device (a Tubi series) is one the server may not be able to load.
+      if (host && !list.user && !data.device) defs.push({ text: '⇄ Replace', color: '#2e7d32', fn: () => this.replaceWithList(list.id) });
     }
     // Shared lists can be taken out by whoever may add (the host, or anyone while unlocked); a
     // viewer's own list can be shared, or taken out again.
@@ -3774,6 +3794,9 @@ var FirePlaylistPanel = class {
     } else if (list.user) {
       if (canAdd && data.state !== 'error') defs.push({ text: '★ Share', color: '#6a1b9a', fn: () => this.shareList(list.id) });
       defs.push({ text: '✕', color: '#c62828', fn: () => this.removeList(list.id) });
+    } else if (this.extraLists.some(l => l.id === list.id)) {
+      // One opened for this visit (a pasted link, a Tubi series from Browse) can be closed too.
+      defs.push({ text: '✕', color: '#c62828', fn: () => this.removeExtraList(list.id) });
     }
     this.setButtons(slot, defs);
   }

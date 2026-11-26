@@ -47,7 +47,7 @@
 
   // "1h 56m" or "45m" as milliseconds.
   function parseLength(text) {
-    var m = /(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?/i.exec(String(text || ''));
+    var m = /^(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?/i.exec(String(text || '').trim());
     if (!m || (!m[1] && !m[2])) return 0;
     return ((Number(m[1]) || 0) * 3600 + (Number(m[2]) || 0) * 60) * 1000;
   }
@@ -197,7 +197,9 @@
   }
 
   window.addEventListener('bsmessage', function (e) {
+    // The action's text comes as e.detail.message (as yt-resolve.js reads it).
     var msg = e && e.detail;
+    if (msg && typeof msg === 'object' && 'message' in msg) msg = msg.message;
     if (typeof msg === 'string') { try { msg = JSON.parse(msg); } catch (err) { return; } }
     if (!msg || typeof msg !== 'object' || typeof msg.n !== 'number') return;
     if (msg.type === 'search' && typeof msg.term === 'string') search(msg.n, clean(msg.term, 100));

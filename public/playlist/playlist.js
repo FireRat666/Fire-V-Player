@@ -244,7 +244,7 @@ var Playlist = class {
         }
         break;
       case Commands.READY_START:
-        // Every screen has loaded the new track, so it starts sooner than its wait said.
+        // Every screen has loaded the new track, so it starts at a new time (see the server's releaseIfReady).
         if (this.core.player && json.data && !this.core.player.paused) {
           const track = this.core.player.playlist && this.core.player.playlist[this.core.player.currentTrack];
           if (track && track.link === json.data.link) {

@@ -976,12 +976,21 @@ class App {
     }
     if (gate.waiting.size) return;
     player.readyGate = null;
-    // Karaoke counts down in full from here (gate.lead), once everyone has the song.
-    const start = now + (gate.lead > 0 ? gate.lead : READY_LEAD_S);
-    if (start >= player.lastStartTime) return;
+    let start;
+    if (gate.lead > 0) {
+      // Karaoke counts down in full from here (gate.lead), once everyone has the song, even when
+      // that's later than the wait's end: ready at 2 s of a 3 s countdown starts at 5 s, ready at
+      // 6 s starts at 9 s. Readiness only counts before the wait's end (above), so a song starts
+      // at most gate.lead after it.
+      start = Math.min(now + gate.lead, gate.start + gate.lead);
+      if (start === player.lastStartTime) return;
+    } else {
+      start = now + READY_LEAD_S;
+      if (start >= player.lastStartTime) return;
+    }
     player.lastStartTime = start;
     player.currentTime = now - start;
-    console.log(`[READY] Every screen loaded "${track.title || track.link}" in ${(now - gate.since).toFixed(1)}s; starting it for ${instanceId}.`);
+    console.log(`[READY] Every screen loaded "${track.title || track.link}" in ${(now - gate.since).toFixed(1)}s; starting it in ${(start - now).toFixed(1)}s for ${instanceId}.`);
     player.sockets.forEach(socket => {
       this.send(socket, Commands.READY_START, {
         link: track.link, newLastStartTime: player.lastStartTime, newCurrentTime: player.currentTime

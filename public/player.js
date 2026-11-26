@@ -931,7 +931,8 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         }
         break;
       case Commands.READY_START: {
-        // Every screen has loaded the new track (see holdStart), so the wait ends sooner.
+        // Every screen has loaded the new track (see holdStart), so the wait ends at a new time:
+        // sooner, or for karaoke a full countdown from now, which can be later.
         const d = json.data;
         if (!d || !this.playerData) break;
         const track = this.playerData.playlist && this.playerData.playlist[this.playerData.currentTrack];

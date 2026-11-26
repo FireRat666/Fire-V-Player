@@ -27,8 +27,11 @@ var FireNativeScreen = (() => {
   const PREPARE_TIMEOUT_MS = 20000;
   /** The same for WebM, which most often fails for its codec (VP9), and loads as fast as MP4 when it plays. */
   const WEBM_PREPARE_TIMEOUT_MS = 10000;
-  /** The same for YouTube, which starts in about 2 s when it plays (youtube-native.js). */
-  const YOUTUBE_PREPARE_TIMEOUT_MS = 15000;
+  /**
+   * The same for YouTube, counted from the start of its lookup (youtube-native.js), which takes
+   * a few seconds, and the video starts in about 2 s after that when it plays.
+   */
+  const YOUTUBE_PREPARE_TIMEOUT_MS = 20000;
   /**
    * A YouTube video whose time stands still this long while it should be playing is stalling.
    * STALLS of them within STALL_WINDOW_MS, or one of LONG_STALL_MS, drops it a quality for this viewer.
@@ -86,6 +89,7 @@ var FireNativeScreen = (() => {
       // every jump lands that far behind, which is out of step again, so it jumps for ever.
       this.seekLead = Number(core.nativeSeekLead) || 0; // kept on the core, so the next file starts with it
       this.lastJumpAt = -Infinity;
+      this.startedAt = performance.now(); // a YouTube video's deadline counts its lookup too (see create)
       this.holdFromCore();
       this.ready = this.create().catch(e => {
         console.error('[NativeScreen] Could not set up the video player.', e);
@@ -114,8 +118,22 @@ var FireNativeScreen = (() => {
       let url = this.link;
       if (this.youtubeId) {
         this.maxHeight = core.youtubeMaxHeight();
-        const found = await core.youtubeResolver().resolve(this.youtubeId, this.maxHeight);
+        // One deadline for the lookup and the loading: past it the browser plays it, and a lookup
+        // that answers later is ignored.
+        let late;
+        const left = YOUTUBE_PREPARE_TIMEOUT_MS - (performance.now() - this.startedAt);
+        const found = await Promise.race([
+          core.youtubeResolver().resolve(this.youtubeId, this.maxHeight),
+          new Promise(resolve => { late = setTimeout(() => resolve(null), Math.max(0, left)); })
+        ]);
+        clearTimeout(late);
         if (this.destroyed) return;
+        if (!found) {
+          this.warned = true;
+          console.warn(`[NativeScreen] ${this.link} wasn't looked up after ${YOUTUBE_PREPARE_TIMEOUT_MS / 1000}s.`);
+          core.playFileInBrowser(this.link, 'not loaded in time');
+          return;
+        }
         if (!found.ok) {
           // Live streams, Shorts, and anything else it can't play go to YouTube's own player.
           core.playFileInBrowser(this.link, found.live ? 'live' : found.shorts ? 'shorts' : found.reason);
@@ -146,7 +164,7 @@ var FireNativeScreen = (() => {
       try { vp.WatchProperties([P.time]); } catch (e) {}
       this.state = { isPrepared: false, isPlaying: false, duration: 0 };
       this.lastRaw = vp.time;
-      this.startedAt = performance.now();
+      if (!this.youtubeId) this.startedAt = performance.now();
       this.pollTimer = setInterval(() => this.poll(), POLL_MS);
       this.syncTimer = setInterval(() => { if (this.autoSync && !this.wantPaused) this.requestSync(false); }, SYNC_EVERY_MS);
       console.log(`[NativeScreen] Playing ${this.link}${this.youtubeId ? ` (${this.height}p)` : ''} on the world's video player.`);
@@ -210,9 +228,9 @@ var FireNativeScreen = (() => {
       const reported = isPlaying >= 0 && values[isPlaying] !== undefined && values[isPlaying] !== null;
       if (reported && this.state.isPlaying) this.seenPlaying = true;
       // A YouTube video stops by itself while it waits for more of the stream too, so there only
-      // a stop near its (known) end is the end.
+      // a stop near its end is the end, and with no known length it never is (the server moves on).
       else if (reported && this.seenPlaying && !this.wantPaused && this.endedAt == null
-        && !(this.youtubeId && this.duration() && this.localTimeAt(true) < this.duration() - 3)) {
+        && (!this.youtubeId || (this.duration() > 0 && this.localTimeAt(true) >= this.duration() - 3))) {
         this.endedAt = this.localTimeAt(true);
       }
     }
@@ -273,7 +291,7 @@ var FireNativeScreen = (() => {
       if (this.preparedAt == null) this.preparedAt = now;
       if (this.lastMovedAt == null) this.lastMovedAt = now;
       const d = this.duration();
-      const calm = now - Math.max(this.preparedAt, this.lastToggleAt, this.lastSeekAt || -Infinity) > STALL_GRACE_MS;
+      const calm = now - Math.max(this.preparedAt, this.lastPlayPauseAt || -Infinity, this.lastSeekAt || -Infinity) > STALL_GRACE_MS;
       const shouldPlay = calm && !this.wantPaused && !this.held() && this.endedAt == null && !(d && this.localTimeAt(false) >= d - 2);
       const still = now - this.lastMovedAt;
       if (!shouldPlay || still < STALL_MS) {
@@ -424,6 +442,9 @@ var FireNativeScreen = (() => {
       const now = performance.now();
       if (now - this.lastToggleAt < TOGGLE_COOLDOWN_MS) return;
       const paused = this.wantPaused || this.held(); // a countdown keeps the room's track paused too
+      // A play or pause, for watchStalls' grace: not a retry of the same one, as a stalling
+      // video that says it isn't playing is retried every few seconds and would never be calm.
+      if (paused !== this.lastWantPaused) { this.lastWantPaused = paused; this.lastPlayPauseAt = now; }
       if (this.playing() === !paused) return;
       // At the end, playing again would start the file over. The server moves on instead.
       const d = this.duration();

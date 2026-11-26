@@ -3045,7 +3045,8 @@ var Core = class {
         }
         break;
       case Commands.READY_START:
-        // Every screen has loaded the new track, so it starts sooner than its wait said.
+        // Every screen has loaded the new track, so it starts at a new time: sooner than its wait
+        // said, or for karaoke, a full countdown from now (see the server's releaseIfReady).
         if (this.player && json.data) {
           const track = this.player.playlist && this.player.playlist[this.player.currentTrack];
           if (track && track.link === json.data.link && !this.player.paused) {

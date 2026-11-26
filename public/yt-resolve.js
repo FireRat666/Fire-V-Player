@@ -27,6 +27,8 @@
   var QUALITIES = [1080, 720, 480, 360, 240];
   // The longest packed parameter the server takes (server/youtube/hls.js), as it goes in an address.
   var MAX_PARAM = 14000;
+  // And the server's other limits: the unpacked JSON's length, and each stream's fragments.
+  var MAX_UNPACKED = 200000, MAX_REFS = 6000;
   // A long video's fragments are joined into longer segments until it fits: each n in a row as one
   // (a segment may hold several fragments). Longer segments make seeking a little slower.
   var JOINS = [1, 2, 3, 4, 6, 8];
@@ -206,8 +208,10 @@
     i = i || 0;
     var k = JOINS[i];
     var joined = { v: Object.assign({}, spec.v, { refs: joinRefs(spec.v.refs, k) }), a: Object.assign({}, spec.a, { refs: joinRefs(spec.a.refs, k) }), durMs: spec.durMs };
-    return pack(joined).then(function (m) {
-      if (m.length <= MAX_PARAM) {
+    var fits = joined.v.refs.length <= MAX_REFS && joined.a.refs.length <= MAX_REFS
+      && new TextEncoder().encode(JSON.stringify(joined)).length <= MAX_UNPACKED;
+    return (fits ? pack(joined) : Promise.resolve(null)).then(function (m) {
+      if (m && m.length <= MAX_PARAM) {
         if (k > 1) log('Joined each ' + k + ' fragments to fit.');
         return m;
       }

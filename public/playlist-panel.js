@@ -2574,7 +2574,6 @@ var FirePlaylistPanel = class {
   async toggleBrowse() {
     if (this.siteBrowser || this.browseOpening) {
       this.closeBrowse();
-      this.render();
       return;
     }
     const site = this.searchSource;
@@ -2615,11 +2614,18 @@ var FirePlaylistPanel = class {
     this.render();
   }
 
+  // Closes the browser window. The panel forgets it first, so Close works even if removing the
+  // window fails.
   closeBrowse() {
     this.browseOpening = false;
-    if (this.siteBrowser) this.siteBrowser.destroy();
+    const browser = this.siteBrowser;
     this.siteBrowser = null;
-    this.setBrowseOffer(null);
+    this.browseOffer = null;
+    if (browser) {
+      try { browser.destroy(); } catch (e) { console.warn('[PlaylistPanel] Could not close the browser window:', e); }
+      console.log('[PlaylistPanel] Closed the browser window.');
+    }
+    this.renderSoon();
   }
 
   // A message from the browser window's page: the page it moved to, or a station played there.
@@ -2672,7 +2678,6 @@ var FirePlaylistPanel = class {
     if (!now && !this.canAdd() && !this.addWaits()) { this.setStatus('The player is locked: only the host can add videos.'); return; }
     // Done with the site: it closes (Browse opens it again for more).
     this.closeBrowse();
-    this.render();
     let what = o.link;
     if (o.kind === 'video' && window.isBanter && typeof this.core.tubiResolver === 'function') {
       this.setBrowseOffer(null);
@@ -3242,7 +3247,8 @@ var FirePlaylistPanel = class {
     if (this.renderTimer) return;
     this.renderTimer = setTimeout(() => {
       this.renderTimer = null;
-      this.render();
+      // One failed redraw is logged, and doesn't stop the next.
+      try { this.render(); } catch (e) { console.warn('[PlaylistPanel] Redraw failed:', e && e.stack || e); }
     }, 100);
   }
 

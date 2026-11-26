@@ -29,6 +29,10 @@ var FireSiteBrowser = (() => {
   /** As the screen's browser: a page this many pixels wide is 1 m at scale 1 (see core.js). */
   const PIXELS_PER_M = 1300;
   const INJECT_EVERY_MS = 1000;
+  /** Once the page has the script, only a tiny check (and the volume) goes, this often. */
+  const CHECK_EVERY_MS = 2000;
+  /** The whole script is sent again every this many checks anyway, in case a page can't say it's gone. */
+  const RESEND_EVERY = 5;
 
   // Put on each page. It runs once per page (window.__fvpBrowse), so the injection can repeat.
   const PAGE_SCRIPT = `(function () {
@@ -42,6 +46,8 @@ var FireSiteBrowser = (() => {
       if (++tries < 200) setTimeout(attempt, 50);
     })();
   }
+  // The panel stops sending this whole script once the page says it has it.
+  send({ type: 'hello' });
   // The page's sound plays at the Fire Player's volume (window.__fvpSetVolume, from the panel):
   // each audio or video element's own volume is scaled by it, whatever the site sets.
   var level = 1;
@@ -173,18 +179,22 @@ var FireSiteBrowser = (() => {
         'BanterBrowser', [url, false, PIXELS_PER_M, PAGE_W, PAGE_H, null]));
       if (this.destroyed) { core.destroyObject(go); return; }
       try { if (typeof component.ToggleInteraction === 'function') component.ToggleInteraction(true); } catch (e) {}
+      // The whole script goes until the page says it has it ('hello'); after that only a tiny
+      // check, which says when a new page has lost it ('gone'), and the volume. A busy page (a
+      // headset's browser starting a stream) isn't sent 5 KB every second that way.
+      this.scriptIn = false;
+      let ticks = 0;
       const inject = () => {
         if (this.destroyed) return;
         // The page's sound follows the Fire Player's volume (see __fvpSetVolume in PAGE_SCRIPT).
         let volume = 1;
         try { volume = Math.max(0, Math.min(100, Number(this.opts.getVolume()))) / 100; } catch (e) {}
         if (!Number.isFinite(volume)) volume = 1;
-        const json = JSON.stringify({ actions: [
-          { actionType: 'runscript', strParam1: PAGE_SCRIPT },
-          { actionType: 'runscript', strParam1: `window.__fvpSetVolume&&window.__fvpSetVolume(${volume})` }
-        ] });
-        try { component.RunActions(json); } catch (e) {}
-        this.injectTimer = setTimeout(inject, INJECT_EVERY_MS);
+        const actions = [];
+        if (!this.scriptIn || ++ticks % RESEND_EVERY === 0) actions.push({ actionType: 'runscript', strParam1: PAGE_SCRIPT });
+        actions.push({ actionType: 'runscript', strParam1: `window.__fvpBrowse?(window.__fvpSetVolume&&window.__fvpSetVolume(${volume})):(window.O&&O.sendMessage&&O.sendMessage('app','{"from":"fvp-browse","type":"gone"}'))` });
+        try { component.RunActions(JSON.stringify({ actions })); } catch (e) {}
+        this.injectTimer = setTimeout(inject, this.scriptIn ? CHECK_EVERY_MS : INJECT_EVERY_MS);
       };
       inject();
     }
@@ -212,15 +222,19 @@ var FireSiteBrowser = (() => {
         try { msg = JSON.parse(msg); } catch (err) { return; }
       }
       if (!msg || typeof msg !== 'object' || msg.from !== 'fvp-browse') return;
+      if (msg.type !== 'hello' && msg.type !== 'gone') console.log(`[SiteBrowser] From the page: ${msg.type}${msg.url ? ` ${String(msg.url).slice(0, 120)}` : ''}${msg.id ? ` ${msg.id}` : ''}`);
+      if (msg.type === 'gone') { this.scriptIn = false; return; }
+      if (msg.type === 'hello') { this.scriptIn = true; return; }
       try { this.opts.onMessage(msg); } catch (err) { console.warn('[SiteBrowser] Message failed:', err); }
     }
 
     destroy() {
       this.destroyed = true;
       clearTimeout(this.injectTimer);
-      if (this.go) this.core.destroyObject(this.go);
+      const go = this.go;
       this.go = null;
       this.component = null;
+      try { if (go) this.core.destroyObject(go); } catch (e) { console.warn('[SiteBrowser] Could not remove the window:', e); }
     }
   };
 })();

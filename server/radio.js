@@ -16,6 +16,7 @@
  */
 
 const { Readable } = require('stream');
+const httpsLib = require('https');
 const { TtlCache } = require('./cache.js');
 const MediaSources = require('../public/media-sources.js');
 
@@ -179,9 +180,15 @@ function fetchAddress(link, media) {
 function station(link) {
   const media = MediaSources.detect(link);
   if (!media || media.type !== 'radio') return Promise.reject(new Error("That isn't a radio station's link."));
-  const key = media.site === 'shoutcast' ? `shoutcast:${media.id}` : `link:${fetchAddress(link, media)}`;
+  const key = media.site ? `${media.site}:${media.id}` : `link:${fetchAddress(link, media)}`;
   return cache.remember(`station:${key}`, STATION_TTL_MS, async () => {
     try {
+      if (media.site === 'radiobrowser') return await radioBrowserStation(media.id);
+      if (media.site === 'somafm') {
+        const s = await readStation(`https://api.somafm.com/${media.id}.pls`);
+        // "SomaFM: Groove Salad (#1): A nicely chilled plate of..." is each stream's title.
+        return { title: s.title.replace(/\s*\(#\d+\).*$/, ''), streams: s.streams };
+      }
       return await readStation(fetchAddress(link, media));
     } catch (e) {
       console.warn(`[RADIO] ${key}: ${e.message}`);
@@ -201,7 +208,9 @@ async function resolveLink(link) {
   const media = MediaSources.detect(link);
   if (!media || media.type !== 'radio') return null;
   const s = await station(link);
-  const keep = media.site === 'shoutcast' ? stationLink(media.id) : String(link).trim();
+  const keep = media.site === 'shoutcast' ? stationLink(media.id)
+    : media.site === 'radiobrowser' ? `https://www.radio-browser.info/history/${media.id}`
+      : media.site === 'somafm' ? `https://somafm.com/${media.id}/` : String(link).trim();
   return { title: `${stationTitle(s.title) || MediaSources.nameFromLink(keep)} (radio)`, thumbnail: '', duration: 0, link: keep };
 }
 
@@ -265,6 +274,11 @@ function httpsVersion(url) {
 async function streamFor(link) {
   const s = await station(link);
   for (const url of s.streams.slice(0, 3)) {
+    // A station that streams HLS (some on Radio Browser) plays as an HLS stream, over https only.
+    if (/\.m3u8($|\?)/i.test(url)) {
+      if (/^https:/i.test(url)) return { url, live: true };
+      continue;
+    }
     const https = await httpsVersion(url);
     if (https) return { url: https, live: true, audio: true };
   }
@@ -374,4 +388,159 @@ function searchShoutcast(term) {
   });
 }
 
-module.exports = { parsePlaylist, looksLikeRadio, resolveLink, sniff, streamFor, relay, searchShoutcast, stationLink };
+// ------------------------------------------------------------------ Radio Browser
+
+/** Radio Browser asks its users to say who they are. */
+const RB_UA = 'FireVPlayer/1.0';
+/** Its API servers, looked up from all.api.radio-browser.info (these if that fails). */
+const RB_FALLBACK = ['de1.api.radio-browser.info', 'de2.api.radio-browser.info', 'fi1.api.radio-browser.info'];
+
+/**
+ * JSON from a Radio Browser server. Its servers have IPv6 addresses that some hosts can't reach,
+ * and fetch() waits on those, so this tries IPv6 and IPv4 side by side (autoSelectFamily).
+ */
+function rbJson(url) {
+  return new Promise((resolve, reject) => {
+    const req = httpsLib.get(url, {
+      headers: { 'user-agent': RB_UA, accept: 'application/json' },
+      autoSelectFamily: true, autoSelectFamilyAttemptTimeout: 500, timeout: TIMEOUT_MS
+    }, res => {
+      if (res.statusCode !== 200) { res.resume(); reject(new Error(`HTTP ${res.statusCode}`)); return; }
+      const chunks = [];
+      let total = 0;
+      res.on('data', c => {
+        total += c.length;
+        if (total > 4 * 1024 * 1024) { req.destroy(new Error('Too big')); return; }
+        chunks.push(c);
+      });
+      res.on('end', () => {
+        try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); } catch (e) { reject(e); }
+      });
+      res.on('error', reject);
+    });
+    req.on('timeout', () => req.destroy(new Error('Timed out')));
+    req.on('error', reject);
+  });
+}
+
+function radioBrowserServers() {
+  return cache.remember('rb:servers', 24 * 60 * 60 * 1000, async () => {
+    try {
+      const list = (await rbJson('https://all.api.radio-browser.info/json/servers')).map(x => String(x && x.name || '')).filter(n => /^[a-z0-9.-]+\.api\.radio-browser\.info$/.test(n));
+      const unique = [...new Set(list)];
+      return unique.length ? unique : RB_FALLBACK;
+    } catch (e) {
+      return RB_FALLBACK;
+    }
+  });
+}
+
+/** A Radio Browser API answer (path like "stations/search?..."), from the first server that answers. */
+async function radioBrowserApi(path) {
+  let lastError;
+  for (const host of (await radioBrowserServers()).slice(0, 3)) {
+    try {
+      return await rbJson(`https://${host}/json/${path}`);
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  throw lastError || new Error("Couldn't reach Radio Browser.");
+}
+
+async function radioBrowserStation(id) {
+  const list = await radioBrowserApi(`stations/byuuid/${id}`);
+  const st = Array.isArray(list) && list[0];
+  if (!st) throw new Error("That Radio Browser station doesn't exist (any more).");
+  const streams = [st.url_resolved, st.url].map(u => String(u || '')).filter(u => /^https?:\/\//i.test(u));
+  if (!streams.length) throw new Error('That Radio Browser station has no stream.');
+  return { title: clean(st.name, 120), streams: [...new Set(streams)] };
+}
+
+function radioBrowserItem(st) {
+  const tags = String(st.tags || '').split(',').map(t => t.trim()).filter(Boolean).slice(0, 3).join(', ');
+  const bits = [tags, st.countrycode, Number(st.bitrate) > 0 ? `${st.bitrate} kbps` : ''].filter(Boolean);
+  const icon = String(st.favicon || '');
+  return {
+    id: String(st.stationuuid),
+    title: `${clean(st.name, 120) || 'Radio station'} (radio)`,
+    thumbnail: /^https:\/\//i.test(icon) ? icon : '',
+    duration: 0,
+    link: `https://www.radio-browser.info/history/${st.stationuuid}`,
+    channel: { name: bits.length ? `Radio Browser: ${clean(bits.join(', '), 120)}` : 'Radio Browser', link: '' },
+    description: '',
+    source: 'radiobrowser'
+  };
+}
+
+/**
+ * Searches Radio Browser's stations by name and by tag (genre), most listened to first. With the
+ * relay off (the default), only stations that stream over https are asked for, as no other can play.
+ */
+function searchRadioBrowser(term) {
+  const q = clean(term, 100);
+  if (!q) return Promise.resolve([]);
+  const https = relayOn() ? '' : '&is_https=true';
+  return cache.remember(`rb:search:${https}:${q.toLowerCase()}`, SEARCH_TTL_MS, async () => {
+    const common = `limit=${MAX_RESULTS}&hidebroken=true&order=clickcount&reverse=true${https}`;
+    const [byName, byTag] = await Promise.all([
+      radioBrowserApi(`stations/search?name=${encodeURIComponent(q)}&${common}`),
+      radioBrowserApi(`stations/search?tag=${encodeURIComponent(q.toLowerCase())}&${common}`).catch(() => [])
+    ]);
+    const seen = new Map();
+    for (const st of [...(Array.isArray(byName) ? byName : []), ...(Array.isArray(byTag) ? byTag : [])]) {
+      if (!st || !/^[0-9a-f-]{36}$/i.test(String(st.stationuuid)) || seen.has(st.stationuuid)) continue;
+      if (Number(st.ssl_error) && !relayOn()) continue; // its https certificate is broken
+      seen.set(st.stationuuid, st);
+    }
+    return [...seen.values()].sort((a, b) => (Number(b.clickcount) || 0) - (Number(a.clickcount) || 0))
+      .slice(0, MAX_RESULTS).map(radioBrowserItem);
+  });
+}
+
+// ------------------------------------------------------------------ SomaFM
+
+/** SomaFM's channels (about 50), kept for ten minutes. */
+function somaChannels() {
+  return cache.remember('soma:channels', SEARCH_TTL_MS, async () => {
+    const res = await fetch('https://api.somafm.com/channels.json', { headers: { 'user-agent': UA }, signal: AbortSignal.timeout(TIMEOUT_MS) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const list = ((await res.json()) || {}).channels;
+    return (Array.isArray(list) ? list : []).filter(c => c && /^[a-z0-9]{2,40}$/.test(String(c.id)));
+  });
+}
+
+function somaItem(c) {
+  const listeners = Number(c.listeners) || 0;
+  const bits = [clean(c.genre, 60).replace(/\|/g, ', '), listeners ? `${listeners} listening` : ''].filter(Boolean);
+  return {
+    id: String(c.id),
+    title: `SomaFM: ${clean(c.title, 100)} (radio)`,
+    thumbnail: String(c.largeimage || c.image || ''),
+    duration: 0,
+    link: `https://somafm.com/${c.id}/`,
+    channel: { name: bits.length ? `SomaFM: ${bits.join(', ')}` : 'SomaFM', link: '' },
+    description: clean(c.description, 200),
+    source: 'somafm'
+  };
+}
+
+/**
+ * Searches SomaFM's channels by name, genre, description and DJ, most listened to first. "somafm"
+ * (or "soma") lists them all.
+ */
+async function searchSomaFM(term) {
+  const words = clean(term, 100).toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  const all = await somaChannels();
+  const everything = words.every(w => /^(soma|somafm|all|\*)$/.test(w));
+  const text = c => [c.title, c.genre, c.description, c.dj, c.id].map(x => String(x || '').toLowerCase()).join(' ');
+  return all.filter(c => everything || words.every(w => text(c).includes(w)))
+    .sort((a, b) => (Number(b.listeners) || 0) - (Number(a.listeners) || 0))
+    .slice(0, 100).map(somaItem); // all of them: SomaFM has about 50
+}
+
+module.exports = {
+  parsePlaylist, looksLikeRadio, resolveLink, sniff, streamFor, relay, stationLink,
+  searchShoutcast, searchRadioBrowser, searchSomaFM
+};

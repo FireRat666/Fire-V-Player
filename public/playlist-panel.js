@@ -70,6 +70,8 @@ var SEARCH_SOURCES = {
   eso: { label: 'ESO', status: "Searching ESO's videos." },
   esodome: { label: 'ESO Fulldome', status: "Searching ESO's fulldome videos, for domes." },
   shoutcast: { label: 'Shoutcast', status: "Searching Shoutcast's radio stations." },
+  radiobrowser: { label: 'Radio Browser', status: "Searching Radio Browser's radio stations." },
+  somafm: { label: 'SomaFM', status: "Searching SomaFM's radio channels. Search somafm to see them all." },
   // A room on screen.sdq.st, by its code or a link to it. Only with untrusted-links, as screen
   // shares can't play without it (see searchSources).
   screen: { label: 'Screen Share', status: 'Searching screen.sdq.st: type a room code, or paste its link.' }
@@ -1374,7 +1376,7 @@ var FirePlaylistPanel = class {
       this.fillLookChoices();
     }
     // Shoutcast's or Tubi's own site in a browser window beside the panel (see toggleBrowse).
-    if (!this.karaoke) this.browseBtn = await this.button(this.searchRow, 'Browse', () => this.toggleBrowse(), { backgroundColor: '#00838f' });
+    if (!this.karaoke) this.browseBtn = await this.button(this.searchRow, '@fvp:web Browse', () => this.toggleBrowse(), { backgroundColor: '#00838f' });
     // Turns while a search is waiting for its results (see render).
     this.searchSpinner = this.ui.CreateKitSpinner(this.searchRow);
     this.searchSpinner.size = 'lg';
@@ -1490,9 +1492,9 @@ var FirePlaylistPanel = class {
     ];
     // Each name has the icon its button shows, as the button shows it. Search and Lists are tabs,
     // which have no icon, so they are just their tab's name.
-    const TABS = { '+ Search Songs': 'Search Songs', '+ Search & Add': 'Search', '☰ Lists': 'Lists', Browse: 'Browse' };
+    const TABS = { '+ Search Songs': 'Search Songs', '+ Search & Add': 'Search', '☰ Lists': 'Lists' };
     // The host is the padlock at the top (the crown is Take Over, in More).
-    const TIP_ICONS = { '♪ Sing It': '@mic', '♛ Host': '@lock' };
+    const TIP_ICONS = { '♪ Sing It': '@mic', '♛ Host': '@lock', Browse: '@fvp:web' };
     for (const [name, text] of tips) {
       const tip = await row(howCol, { alignItems: 'flex-start', marginTop: '8px' });
       const nameBox = await row(tip, { width: '190px', flexShrink: 0, alignItems: 'center' });
@@ -3363,7 +3365,7 @@ var FirePlaylistPanel = class {
     }
     if (this.browseBtn) {
       this.display(this.browseBtn, onSearch && this.canBrowse() && (BROWSE_SITES.includes(this.searchSource) || !!this.siteBrowser));
-      this.setText(this.browseBtn, this.siteBrowser ? '✕ Close Browser' : 'Browse');
+      this.setText(this.browseBtn, this.siteBrowser ? '✕ Close Browser' : '@fvp:web Browse');
     }
 
     // A pasted playlist's question.

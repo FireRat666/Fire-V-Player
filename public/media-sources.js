@@ -15,7 +15,8 @@
  *   or handle, which the server turns into the film's video file on tile.loc.gov. 'eso' is an ESO or
  *   ESA/Hubble video page, which the server turns into the video's .mp4 on cdn.eso.org (or
  *   cdn.esahubble.org): a fulldome video's dome preview, or any other's 1080p file. 'radio' is an
- *   internet radio station: a Shoutcast tune-in link (site 'shoutcast'), a .pls or .xspf playlist
+ *   internet radio station: a Shoutcast tune-in link (site 'shoutcast'), a Radio Browser station
+ *   page (site 'radiobrowser'), a SomaFM channel (site 'somafm'), a .pls or .xspf playlist
  *   file, or a link the server found to be a station (a radio .m3u, or the stream itself), which it
  *   marks with #radio. The player asks the server for the station's stream when it plays.
  * @property {string} [channel] - Twitch channel name if applicable.
@@ -39,12 +40,17 @@
  * @property {'movie'|'episode'|'series'} [kind] - For Tubi: what the page is. A series is a list of episodes.
  * @property {string} [slug] - For NASA+: the video's name in its address.
  * @property {boolean} [stream] - True when the player gets the stream from the server (/api/stream).
- * @property {'shoutcast'} [site] - For 'radio': a station in Shoutcast's directory, by its `id`.
+ * @property {'shoutcast'|'radiobrowser'|'somafm'} [site] - For 'radio': a station in Shoutcast's or
+ *   Radio Browser's directory, or a SomaFM channel, by its `id`.
  */
 
 var MediaSources = (() => {
   /** Regular expression matching supported direct media file extensions. */
   const FILE_EXT = /\.(mp4|webm|ogv|ogg|mov|m4v|mp3|m4a|wav|flac|aac|opus)$/i;
+
+  /** somafm.com's pages that aren't channels. */
+  const SOMAFM_PAGES = new Set(['about', 'support', 'contact', 'faq', 'news', 'listen', 'player', 'player24', 'merch', 'store',
+    'donate', 'privacy', 'legal', 'playlists', 'recent', 'songhistory', 'shop', 'app', 'apps', 'login', 'search', 'popular', 'archive']);
 
   /** Non-channel page segments for twitch.tv. */
   const TWITCH_PAGES = new Set(['videos', 'directory', 'p', 'downloads', 'jobs', 'settings', 'subscriptions',
@@ -227,6 +233,18 @@ var MediaSources = (() => {
       const id = u.searchParams.get('id') || '';
       return /^\d{1,12}$/.test(id) ? { type: 'radio', site: 'shoutcast', id, stream: true } : null;
     }
+    // A Radio Browser station's page (www.radio-browser.info/history/<uuid>), and a SomaFM channel
+    // (somafm.com/<channel>/, or its api.somafm.com/<channel>.pls playlist).
+    if (host === 'radio-browser.info' && parts[0] === 'history') {
+      const id = (parts[1] || '').toLowerCase();
+      return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id) ? { type: 'radio', site: 'radiobrowser', id, stream: true } : null;
+    }
+    if (host === 'somafm.com' && parts.length === 1 && /^[a-z0-9]{2,40}$/.test(parts[0]) && !SOMAFM_PAGES.has(parts[0])) {
+      return { type: 'radio', site: 'somafm', id: parts[0], stream: true };
+    }
+    if (host === 'api.somafm.com' && parts.length === 1 && /^[a-z]{2,40}\d*\.pls$/i.test(parts[0])) {
+      return { type: 'radio', site: 'somafm', id: parts[0].replace(/\d*\.pls$/i, '').toLowerCase(), stream: true };
+    }
     if (u.hash === '#radio' || /\.(pls|xspf)$/i.test(u.pathname)) return { type: 'radio', stream: true };
 
     if (/\.m3u8$/i.test(u.pathname)) return { type: 'hls' };
@@ -264,9 +282,9 @@ var MediaSources = (() => {
    * Commons films, not an arbitrary server, much like Vimeo. So are Tubi (a free, licensed
    * streaming service) and NASA+ (NASA's own videos), whose streams the server looks up, and the
    * Library of Congress's films (its pages and its tile.loc.gov files), and ESO's and ESA/Hubble's
-   * videos (their pages and their own servers' files). Shoutcast's stations are too, as they come
-   * from its directory (by its id) rather than from an address anyone typed; other radio links
-   * aren't.
+   * videos (their pages and their own servers' files). Shoutcast's and Radio Browser's stations
+   * are too, as they come from their directories (by id) rather than from an address anyone typed,
+   * and SomaFM's channels; other radio links aren't.
    */
   const TRUSTED = new Set(['youtube', 'twitch', 'twitchclip', 'vimeo', 'archive', 'loc', 'tubi', 'nasa', 'eso']);
 
@@ -278,11 +296,11 @@ var MediaSources = (() => {
    */
   function isTrusted(media) {
     return !!media && (TRUSTED.has(media.type) || (media.type === 'file' && (!!media.archive || !!media.loc || !!media.eso))
-      || (media.type === 'radio' && media.site === 'shoutcast'));
+      || (media.type === 'radio' && !!media.site));
   }
 
   /** Rejection message displayed when untrusted direct media links are queued in restricted rooms. */
-  const UNTRUSTED_MESSAGE = 'This world only plays YouTube, Twitch, Vimeo, Tubi, NASA+, Internet Archive, Library of Congress, ESO and Shoutcast links. Its owner can allow other links with the untrusted-links snippet setting.';
+  const UNTRUSTED_MESSAGE = 'This world only plays YouTube, Twitch, Vimeo, Tubi, NASA+, Internet Archive, Library of Congress, ESO and radio directory (Shoutcast, Radio Browser, SomaFM) links. Its owner can allow other links with the untrusted-links snippet setting.';
 
   /**
    * The 11-character id of a YouTube video, from a bare id or a YouTube link (with or without

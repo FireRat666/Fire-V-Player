@@ -1637,6 +1637,13 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       this.resumeSyncTimer = setTimeout(resync, 500);
     }
 
+    /** A new load (of a track or a preview, the same link again too): the "Loading..." counts from now (see updateLoading). */
+    restartLoading() {
+      this.loadedLink = null;
+      this.loadingFor = null;
+      this.loadingSince = 0;
+    }
+
     /**
      * Starts or stops a local song preview on this viewer's screen.
      * While previewing, room playback updates are recorded in `this.playerData` without
@@ -1662,6 +1669,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         if (this.player.loadMedia) this.player.loadMedia(video.link, 0);
         else this.player.loadVideoById(this.core.getId(video.link), 0);
         this.player.playVideo();
+        this.restartLoading();
         this.setVolume("spatial");
         this.lastUrl = video.link;
         this.currentVideo = video;
@@ -1715,6 +1723,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
           this.liveJumped = null; // see onYouTubeState
           if (this.player.loadMedia) this.player.loadMedia(video.link, start);
           else this.player.loadVideoById(this.core.getId(video.link), start);
+          this.restartLoading();
           if (this.playerData.paused) {
             this.player.pauseVideo();
           } else {

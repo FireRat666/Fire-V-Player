@@ -22,6 +22,10 @@ const MAX_PARAM = 14000;
 const MAX_UNPACKED = 200000;
 /** The most fragments one stream may have (about 8 hours of 5-second fragments). */
 const MAX_REFS = 6000;
+/** The most one stream's playlist may be: each fragment repeats the stream's address. */
+const MAX_PLAYLIST = 16 * 1024 * 1024;
+/** Per fragment, the playlist lines around its address (#EXTINF and #EXT-X-BYTERANGE), at most. */
+const LINES_PER_REF = 80;
 
 /** A whole number from 0 up to the largest a byte offset can safely be. */
 function isCount(n) {
@@ -60,6 +64,7 @@ function checkTrack(t, video) {
   if (!isRange(t.init) || !isRange(t.idx) || !isCount(t.first) || !isCount(t.bw)) return null;
   if (typeof t.codecs !== 'string' || !/^[A-Za-z0-9.]{1,40}$/.test(t.codecs)) return null;
   if (!Array.isArray(t.refs) || !t.refs.length || t.refs.length > MAX_REFS) return null;
+  if (t.refs.length * (t.u.length + LINES_PER_REF) > MAX_PLAYLIST) return null;
   if (!t.refs.every(r => Array.isArray(r) && r.length === 2 && isCount(r[0]) && r[0] > 0 && isCount(r[1]) && r[1] > 0)) return null;
   if (video && !(isCount(t.w) && t.w > 0 && isCount(t.h) && t.h > 0)) return null;
   return t;

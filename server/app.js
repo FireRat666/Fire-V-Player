@@ -11,6 +11,7 @@ const compression = require('compression');
 const http = require('http');
 const path = require('path');
 const { searchVideos, videoById } = require('./youtube/search.js');
+const youtubeHls = require('./youtube/hls.js');
 const archive = require('./archive.js');
 const streaming = require('./streaming.js');
 const eso = require('./eso.js');
@@ -250,6 +251,8 @@ class App {
         res.status(422).json({ error: e.message || "Couldn't find that video's stream." });
       }
     });
+    // A YouTube video's stream as HLS, for the world's own video player (see youtube/hls.js).
+    youtubeHls.setupRoutes(this.app);
     // A browser may keep the files, but checks with the server each time a page loads: an
     // unchanged file is answered "not changed" with no body, and an updated one is sent in full,
     // so nobody is left on an older version after an update.

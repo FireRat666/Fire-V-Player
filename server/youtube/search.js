@@ -69,6 +69,10 @@ function clockSeconds(t) {
  */
 function parseVideoRenderer(r) {
   if (!r || typeof r.videoId !== 'string') return null;
+  // Shorts: vertical, so a 16:9 screen stretches them (and the world's video player won't take them).
+  const nav = r.navigationEndpoint || {};
+  const navUrl = nav.commandMetadata && nav.commandMetadata.webCommandMetadata && nav.commandMetadata.webCommandMetadata.url;
+  if (nav.reelWatchEndpoint || (typeof navUrl === 'string' && navUrl.startsWith('/shorts/'))) return null;
   const id = r.videoId;
   const durationRaw = text(r.lengthText);
   const seconds = clockSeconds(durationRaw);

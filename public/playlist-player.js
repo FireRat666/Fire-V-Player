@@ -145,6 +145,8 @@
         // Files play on the world's own video player instead of the browser (native-video.js).
         await core.setupScript(null, "media-sources");
         await core.setupScript(null, "native-video");
+        // And YouTube, looked up by each viewer's own device (youtube-native.js).
+        await core.setupScript(null, "youtube-native");
         await this.core.setupBrowserElement(url);
         if (karaoke) {
           try { await this.core.setupJoinLeaveButton(); }

@@ -27,6 +27,15 @@ var FireNativeScreen = (() => {
   const PREPARE_TIMEOUT_MS = 20000;
   /** The same for WebM, which most often fails for its codec (VP9), and loads as fast as MP4 when it plays. */
   const WEBM_PREPARE_TIMEOUT_MS = 10000;
+  /** The same for YouTube, which starts in about 2 s when it plays (youtube-native.js). */
+  const YOUTUBE_PREPARE_TIMEOUT_MS = 15000;
+  /**
+   * A YouTube video whose time stands still this long while it should be playing is stalling.
+   * STALLS of them within STALL_WINDOW_MS, or one of LONG_STALL_MS, drops it a quality for this viewer.
+   */
+  const STALL_MS = 2500, LONG_STALL_MS = 8000, STALLS = 3, STALL_WINDOW_MS = 60000;
+  /** Not counted as stalls: the time just after it starts, a seek, or a play or pause. */
+  const STALL_GRACE_MS = 6000;
   /** Skip jump increment in seconds for standard and karaoke mode. */
   const SKIP_S = 5, SKIP_KARAOKE_S = 0.25;
   /**
@@ -48,6 +57,8 @@ var FireNativeScreen = (() => {
     constructor(core, link) {
       this.core = core;
       this.link = link;
+      // A YouTube video plays from the HLS playlists this viewer's own lookup gives (see create).
+      this.youtubeId = typeof MediaSources !== 'undefined' ? MediaSources.youtubeId(link) || null : null;
       this.destroyed = false;
       this.prepared = false;
       // The viewer's Auto Sync choice (off unless they turn it on, as on the browser screen). Off,
@@ -92,6 +103,21 @@ var FireNativeScreen = (() => {
     async create() {
       const core = this.core;
       if (!core.inWorld() || !(BS.VideoPlayer || BS.BanterVideoPlayer)) throw new Error('No BS SDK scene or video player.');
+      // YouTube: this viewer's own streams first. Each viewer looks a video up for themselves, as
+      // YouTube ties the addresses to whoever asked; the room shares only the link and the time.
+      let url = this.link;
+      if (this.youtubeId) {
+        this.maxHeight = core.youtubeMaxHeight();
+        const found = await core.youtubeResolver().resolve(this.youtubeId, this.maxHeight);
+        if (this.destroyed) return;
+        if (!found.ok) {
+          // Live streams, Shorts, and anything else it can't play go to YouTube's own player.
+          core.playFileInBrowser(this.link, found.live ? 'live' : found.shorts ? 'shorts' : found.reason);
+          return;
+        }
+        this.height = found.height;
+        url = found.url;
+      }
       // In the browser screen's place, under the world's video home if it has one (see HOME_NAME).
       const t = core.screenTransform();
       const home = this.findHome();
@@ -102,7 +128,7 @@ var FireNativeScreen = (() => {
       await core.addComponent(go, core.bsComponent('Plane', { width: w, height: h }, 'BanterPlane', [w, h]));
       await core.addComponent(go, core.bsComponent('Material', { shaderName: 'Unlit/Diffuse' }, 'BanterMaterial', ['Unlit/Diffuse']));
       if (this.destroyed) return;
-      const settings = { url: this.link, volume: this.unityVolume(), loop: false, playOnAwake: !this.wantPaused && !this.held(), skipOnDrop: true, waitForFirstFrame: true };
+      const settings = { url, volume: this.unityVolume(), loop: false, playOnAwake: !this.wantPaused && !this.held(), skipOnDrop: true, waitForFirstFrame: true };
       const vp = await core.addComponent(go, core.bsComponent('VideoPlayer', settings,
         'BanterVideoPlayer', [settings.url, settings.volume, settings.loop, settings.playOnAwake, settings.skipOnDrop, settings.waitForFirstFrame]));
       if (this.destroyed) return;
@@ -117,7 +143,7 @@ var FireNativeScreen = (() => {
       this.startedAt = performance.now();
       this.pollTimer = setInterval(() => this.poll(), POLL_MS);
       this.syncTimer = setInterval(() => { if (this.autoSync && !this.wantPaused) this.requestSync(false); }, SYNC_EVERY_MS);
-      console.log(`[NativeScreen] Playing ${this.link} on the world's video player.`);
+      console.log(`[NativeScreen] Playing ${this.link}${this.youtubeId ? ` (${this.height}p)` : ''} on the world's video player.`);
     }
 
     /**
@@ -177,7 +203,10 @@ var FireNativeScreen = (() => {
       const isPlaying = names.indexOf('isPlaying');
       const reported = isPlaying >= 0 && values[isPlaying] !== undefined && values[isPlaying] !== null;
       if (reported && this.state.isPlaying) this.seenPlaying = true;
-      else if (reported && this.seenPlaying && !this.wantPaused && this.endedAt == null) {
+      // A YouTube video stops by itself while it waits for more of the stream too, so there only
+      // a stop near its (known) end is the end.
+      else if (reported && this.seenPlaying && !this.wantPaused && this.endedAt == null
+        && !(this.youtubeId && this.duration() && this.localTimeAt(true) < this.duration() - 3)) {
         this.endedAt = this.localTimeAt(true);
       }
     }
@@ -198,6 +227,7 @@ var FireNativeScreen = (() => {
         this.lastRaw = vp.time;
         this.baseTime = Number(vp.time) || 0;
         this.baseAt = now;
+        this.lastMovedAt = now;
       }
       // Loaded once Unity says so, or once the time starts moving (in case it never does).
       if (!this.prepared && (this.state.isPrepared || this.state.duration > 0 || Number(vp.time) > 0)) {
@@ -211,16 +241,47 @@ var FireNativeScreen = (() => {
       // The path only, as core.js's wantsNativeScreen reads it, so a query can't make a link look like WebM.
       const u = typeof MediaSources !== 'undefined' ? MediaSources.parseUrl(String(this.link)) : null;
       const webm = !!u && /\.webm$/i.test(u.pathname);
-      const timeout = webm ? WEBM_PREPARE_TIMEOUT_MS : PREPARE_TIMEOUT_MS;
+      const timeout = this.youtubeId ? YOUTUBE_PREPARE_TIMEOUT_MS : webm ? WEBM_PREPARE_TIMEOUT_MS : PREPARE_TIMEOUT_MS;
       if (!this.prepared && now - this.startedAt > timeout && !this.warned) {
         this.warned = true;
         console.warn(`[NativeScreen] ${this.link} hasn't loaded after ${timeout / 1000}s.`);
-        if (typeof this.core.playFileInBrowser === 'function') this.core.playFileInBrowser(this.link);
+        if (typeof this.core.playFileInBrowser === 'function') this.core.playFileInBrowser(this.link, this.youtubeId ? 'not loaded in time' : undefined);
         else this.core.showToast("This file won't load on the world's video player. The link may be wrong, or the format unsupported.", 8000);
       }
       if (this.prepared) {
         if (!this.durationReported) this.reportDuration(); // the length may come later than the first frame
         this.applyPaused();
+        if (this.youtubeId) this.watchStalls(now);
+      }
+    }
+
+    /**
+     * YouTube only: whether the video keeps stalling for this viewer (its time standing still while
+     * it should be playing), and if so, a quality down (core.js dropYouTubeQuality). The world's
+     * player says nothing of buffering, so the time is all there is to go by.
+     * @param {number} now - performance.now()
+     */
+    watchStalls(now) {
+      if (this.stallsDone) return;
+      if (this.preparedAt == null) this.preparedAt = now;
+      if (this.lastMovedAt == null) this.lastMovedAt = now;
+      const d = this.duration();
+      const calm = now - Math.max(this.preparedAt, this.lastToggleAt, this.lastSeekAt || -Infinity) > STALL_GRACE_MS;
+      const shouldPlay = calm && !this.wantPaused && !this.held() && this.endedAt == null && !(d && this.localTimeAt(false) >= d - 2);
+      const still = now - this.lastMovedAt;
+      if (!shouldPlay || still < STALL_MS) {
+        this.inStall = false;
+        return;
+      }
+      if (!this.inStall) {
+        this.inStall = true;
+        this.stalls = (this.stalls || []).filter(t => now - t < STALL_WINDOW_MS);
+        this.stalls.push(now);
+        console.log(`[NativeScreen] Stalling at ${this.height}p (${this.stalls.length} in the last minute).`);
+      }
+      if (this.stalls.length >= STALLS || still >= LONG_STALL_MS) {
+        this.stallsDone = true;
+        this.core.dropYouTubeQuality(this.height);
       }
     }
 
@@ -364,6 +425,7 @@ var FireNativeScreen = (() => {
         this.seenPlaying = false; // still stopped until it's started again
       }
       this.vp.time = t;
+      this.lastSeekAt = performance.now();
       this.lastRaw = this.vp.time; // the setter keeps the new value until Unity sends its own
       this.baseTime = t;
       this.baseAt = performance.now();

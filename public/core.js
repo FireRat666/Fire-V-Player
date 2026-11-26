@@ -357,8 +357,9 @@ var Core = class {
   wantsNativeScreen(link) {
     if (!link || !window.isBanter || typeof FireNativeScreen === 'undefined' || !window.MediaSources) return false;
     if (!this.inWorld() || !(BS.VideoPlayer || BS.BanterVideoPlayer)) return false;
-    // Files come from anywhere, so only where the world's owner allows them (as in the browser).
     const media = MediaSources.detect(link);
+    if (media && media.type === 'youtube') return this.wantsNativeYouTube(link);
+    // Files come from anywhere, so only where the world's owner allows them (as in the browser).
     if (!media || media.type !== 'file' || this.allowUntrusted !== true) return false;
     // Audio files play in the browser: Unity's player on Quest doesn't play audio without video,
     // and can't play Ogg or Opus anywhere.
@@ -372,12 +373,67 @@ var Core = class {
   }
   // The world's video player couldn't start this file (native-video.js gives up on it), so it plays
   // in the browser for this viewer from now on, as the browser plays more formats (VP9, AV1...).
-  playFileInBrowser(link) {
+  // A YouTube video it couldn't play goes back to YouTube's own player in the browser the same way.
+  playFileInBrowser(link, why) {
     if (!link) return;
     (this.browserFiles = this.browserFiles || new Set()).add(link);
-    console.log(`[Core] The world's video player couldn't start ${link}, so it plays in the browser.`);
-    this.showToast("The world's video player can't play this file, so it plays in the browser instead.", 6000);
+    const youtube = !!(window.MediaSources && MediaSources.youtubeId(link));
+    console.log(`[Core] The world's video player couldn't start ${link}${why ? ` (${why})` : ''}, so it plays in the browser.`);
+    if (youtube) {
+      // Live streams always go this way, so they get no toast.
+      if (why !== 'live') this.showToast(`This video can't play on the world's video player${why === 'shorts' ? " (it's a Short)" : ''}, so it plays in the browser instead.`, 6000);
+    } else {
+      this.showToast("The world's video player can't play this file, so it plays in the browser instead.", 6000);
+    }
     if (this.currentLink() === link) this.updateScreen();
+  }
+
+  // ------------------------------------------------------------- YouTube on the world's player
+  // YouTube links play on the world's video player too (youtube-native.js), where the client has
+  // a BS Browser to look them up with. The `youtube-native` setting turns it on or off: on by
+  // default in snippets, off by default on the old script tag.
+  wantsNativeYouTube(link) {
+    if (String(this.params['youtube-native']).toLowerCase() !== 'true') return false;
+    if (typeof FireYouTubeResolver === 'undefined' || !MediaSources.youtubeId(link)) return false;
+    if (typeof BS.Browser !== 'function' && typeof BS.BanterBrowser !== 'function') return false;
+    // The lookup page never started here (see youtube-native.js): YouTube's own player for the visit.
+    if (this.ytResolver && this.ytResolver.failed && !this.ytResolver.isReady) return false;
+    // Once it couldn't play for this viewer, it stays on YouTube's own player for them.
+    return !(this.browserFiles && this.browserFiles.has(link));
+  }
+  // The hidden browser that looks YouTube videos up, made the first time one is wanted.
+  youtubeResolver() {
+    if (!this.ytResolver) this.ytResolver = new FireYouTubeResolver(this);
+    return this.ytResolver;
+  }
+  // The sharpest YouTube quality for this viewer, from the screen's resolution (the snippet's, or
+  // theirs from the panel): the quality nearest its width, so 1600 and up is 1080p, 1280 is 720p.
+  // Lower after it kept stalling for them (see dropYouTubeQuality).
+  youtubeMaxHeight() {
+    const w = this.screenResolution();
+    const fromWidth = w >= 1600 ? 1080 : w >= 1100 ? 720 : w >= 740 ? 480 : w >= 520 ? 360 : 240;
+    return Math.min(fromWidth, this.youtubeQualityCap || Infinity);
+  }
+  // The video kept stalling on the world's player at `height`: this viewer gets the next quality
+  // down from now on (not below 360p), and the screen starts again at it, where the world is.
+  dropYouTubeQuality(height) {
+    const ladder = [1080, 720, 480, 360];
+    const next = ladder.find(q => q < (Number(height) || this.youtubeMaxHeight()));
+    if (!next) return false;
+    this.youtubeQualityCap = next;
+    console.log(`[Core] YouTube kept stalling at ${height}p, so it drops to ${next}p for this viewer.`);
+    this.showToast(`The video kept stalling, so it drops to ${next}p.`, 4000);
+    this.rebuildNativeScreen();
+    return true;
+  }
+  // The world's video player made again for the same link (a new quality), where the world is.
+  rebuildNativeScreen() {
+    if (!this.nativeScreen || !this.screenReady) return;
+    const link = this.nativeScreen.link;
+    this.nativeScreen.destroy();
+    this.nativeScreen = new FireNativeScreen(this, link);
+    this.audioBusyUntil = Date.now() + 20000;
+    this.syncSecondScreens();
   }
   // Twitch won't start until someone clicks its player, and the space-page screen can't be clicked
   // (it's a picture of a page nobody can reach), so Twitch gets a BS Browser screen, as on clients
@@ -441,7 +497,7 @@ var Core = class {
       }
       this.removeBrowser();
       if (this.nativeScreen) this.nativeScreen.destroy();
-      console.log('[Core] A file is playing, so the world\'s video player takes the browser\'s place.');
+      console.log('[Core] This track plays on the world\'s video player, so it takes the browser\'s place.');
       this.nativeScreen = new FireNativeScreen(this, link);
       this.audioBusyUntil = Date.now() + 20000; // its speakers appear as it starts (see applyAudio)
       this.syncSecondScreens();
@@ -1020,6 +1076,9 @@ var Core = class {
   }
   // Resizes the page and rescales the screen, so it stays the same size in the world.
   applyScreenResolution() {
+    // A YouTube video on the world's player starts again at the quality the new size wants.
+    const native = this.nativeScreen;
+    if (native && native.youtubeId && native.maxHeight && native.maxHeight !== this.youtubeMaxHeight()) this.rebuildNativeScreen();
     const browser = this.browser;
     if (browser && browser.surface) {
       // The space page is the page: it's resized, and the screen keeps its size in metres.
@@ -2539,6 +2598,9 @@ var Core = class {
     this.setOrDefault("space-screen", 'auto');
     // The world video player's size for files (native-video.js); empty matches the browser.
     this.setOrDefault("native-screen-size", '');
+    // YouTube on the world's video player (youtube-native.js) instead of the browser: on by default
+    // in snippets (snippet.js), off by default on the old script tag.
+    this.setOrDefault("youtube-native", this.currentScript && this.currentScript.snippet ? 'true' : 'false');
     this.setOrDefault("one-for-each-instance", "false");
     // The longest a new playlist track waits for every screen to load it, in seconds (0: no wait).
     this.setOrDefault("ready-delay", '5');
@@ -3274,6 +3336,10 @@ var Core = class {
     if (this.nativeScreen) {
       this.nativeScreen.destroy();
       this.nativeScreen = null;
+    }
+    if (this.ytResolver) {
+      this.ytResolver.destroy();
+      this.ytResolver = null;
     }
     this.screenReady = false;
 

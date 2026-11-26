@@ -162,8 +162,10 @@ class VideoElementSource extends BaseMediaSource {
    */
   constructor(opts, media) {
     super(opts);
-    // A Tubi or NASA+ page: its HLS stream comes from the server first (see loadStream).
-    const hls = media.type === 'hls' || !!media.stream;
+    // A Tubi or NASA+ page: its HLS stream comes from the server first (see loadStream). A radio
+    // station's stream comes from there too, but is sound, played as a file.
+    const hls = media.type === 'hls' || (!!media.stream && media.type !== 'radio');
+    if (media.type === 'radio') this.live = true;
     // A live MPEG-TS stream has no length or position to seek to, as with a live .m3u8.
     if (media.type === 'mpegts' && media.live) this.live = true;
     const el = this.el = document.createElement('video');
@@ -199,7 +201,10 @@ class VideoElementSource extends BaseMediaSource {
     this.load(opts, media, el, opts.link);
   }
 
-  /** Asks the server for a Tubi or NASA+ page's stream, then plays it as an HLS stream. */
+  /**
+   * Asks the server for a Tubi or NASA+ page's stream, then plays it as an HLS stream, or for a
+   * radio station's stream (`audio`), played as a file that never ends.
+   */
   loadStream(opts, el) {
     fetch(`/api/stream?link=${encodeURIComponent(opts.link)}`)
       .then(res => res.json().catch(() => ({})).then(body => {
@@ -209,7 +214,7 @@ class VideoElementSource extends BaseMediaSource {
       .then(body => {
         if (this.destroyed) return;
         if (body.live) this.live = true;
-        this.load(opts, { type: 'hls', noReferrer: !!body.noReferrer }, el, body.url);
+        this.load(opts, { type: body.audio ? 'file' : 'hls', noReferrer: !!body.noReferrer }, el, body.url);
       })
       .catch(err => { if (!this.destroyed) opts.onError(err.message); });
   }

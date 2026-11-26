@@ -26,7 +26,7 @@ const CATALOG_TTL_MS = 6 * 60 * 60 * 1000;
 const CATALOG_RETRY_MS = 5 * 60 * 1000;
 const NASA_TTL_MS = 60 * 60 * 1000;
 /** Most episodes a Tubi series gives, and results a search gives. */
-const MAX_EPISODES = 200;
+const MAX_EPISODES = 300;
 const MAX_RESULTS = 40;
 /** Categories that depend on who's watching, or repeat others, aren't searched. */
 const SKIP_CATEGORIES = new Set(['recommended_for_you', 'continue_watching', 'queue', 'weekly_watchlist']);
@@ -134,18 +134,31 @@ async function tubiStream(kind, id) {
   return { url: pick.manifest.url, live: false };
 }
 
-/** Every episode of a Tubi series, in order. */
+/**
+ * A Tubi series' episodes, season 1 first and each season in order. Tubi's page lists the newest
+ * season first, and only the first 20 episodes of each season (the rest need a signed-in app's
+ * token). An episode's title says its season and number ("S01:E03 - Name").
+ */
 async function tubiSeries(id) {
   const data = await tubiPage(`series/${id}`);
   const byId = (data.video && data.video.byId) || {};
   const series = byId[`0${id}`] || byId[id];
   if (!series) throw new Error("That Tubi series isn't available.");
+  const num = (v, fallback) => (Number.isFinite(Number(v)) && String(v).trim() !== '' ? Number(v) : fallback);
+  const seasons = (series.seasons || []).map((season, i) => ({ season, n: num(season.number, 1000 + i) })).sort((a, b) => a.n - b.n);
   const items = [];
-  for (const season of series.seasons || []) {
-    for (const ep of season.episodes || []) {
+  for (const { season, n } of seasons) {
+    const episodes = (season.episodes || []).map((ep, i) => ({ c: byId[ep.id] || ep, i }))
+      .filter(e => e.c && e.c.id)
+      .sort((a, b) => num(a.c.episode_number, 1000 + a.i) - num(b.c.episode_number, 1000 + b.i));
+    for (const { c } of episodes) {
       if (items.length >= MAX_EPISODES) break;
-      const c = byId[ep.id] || ep;
-      if (c && c.id) items.push(tubiItem(c, 'episode'));
+      const item = tubiItem(c, 'episode');
+      // Most titles already say "S01:E03 - ..."; one that doesn't gets it.
+      if (!/^S\d+\s*:?\s*E\d+/i.test(item.title) && n < 1000 && Number(c.episode_number) > 0) {
+        item.title = clean(`S${String(n).padStart(2, '0')}:E${String(c.episode_number).padStart(2, '0')} - ${item.title}`);
+      }
+      items.push(item);
     }
   }
   return { title: clean(series.title, 120) || 'Tubi series', items };

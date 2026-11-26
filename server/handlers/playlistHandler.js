@@ -34,6 +34,12 @@ async function resolveVideoData(app, ws, v) {
       if (media.detect(v) && !media.allowedFor(ws, v)) throw new Error(media.UNTRUSTED_MESSAGE);
       const other = await media.resolveMediaLink(v); // Twitch, Vimeo, a file or stream
       if (other) return other;
+      // A link that turns out to be a radio station (a radio .m3u, or a stream's own address).
+      const station = /^https?:\/\//i.test(v.trim()) ? await media.sniffRadio(v) : null;
+      if (station) {
+        if (!media.allowedFor(ws, station.link)) throw new Error(media.UNTRUSTED_MESSAGE);
+        return station;
+      }
       throw new Error("Invalid YouTube URL or ID");
     }
     const resolved = await videoById(videoId);

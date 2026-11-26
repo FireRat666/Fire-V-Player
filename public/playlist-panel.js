@@ -59,6 +59,8 @@ var SETUP_GUIDE_QR = [
   '1000001011100010110001000',
   '1111111001110111111100011'
 ];
+// Sources whose site can be opened in a browser window beside the panel (Browse, site-browser.js).
+var BROWSE_SITES = ['shoutcast', 'tubi'];
 // What Search can search, in the order its dropdown lists them.
 var SEARCH_SOURCES = {
   youtube: { label: 'YouTube', status: 'Searching YouTube.' },
@@ -67,6 +69,7 @@ var SEARCH_SOURCES = {
   nasa: { label: 'NASA+', status: 'Searching NASA+.' },
   eso: { label: 'ESO', status: "Searching ESO's videos." },
   esodome: { label: 'ESO Fulldome', status: "Searching ESO's fulldome videos, for domes." },
+  shoutcast: { label: 'Shoutcast', status: "Searching Shoutcast's radio stations." },
   // A room on screen.sdq.st, by its code or a link to it. Only with untrusted-links, as screen
   // shares can't play without it (see searchSources).
   screen: { label: 'Screen Share', status: 'Searching screen.sdq.st: type a room code, or paste its link.' }
@@ -1327,6 +1330,17 @@ var FirePlaylistPanel = class {
     this.promptVideoBtn = await this.button(promptBtns, '+ Just This Video', () => this.answerListPrompt('video'));
     await this.button(promptBtns, '✕ Cancel', () => this.answerListPrompt(null), { backgroundColor: GREY });
 
+    // Browse: what the browser window has open that can be added (see onBrowseMessage).
+    this.browseOfferRow = await this.div(rootEl, {
+      display: 'none', flexDirection: 'row', alignItems: 'center', flexShrink: 0, marginTop: '6px', backgroundColor: '#004d40',
+      borderRadius: '10px', paddingLeft: '12px', paddingRight: '8px', paddingTop: '6px', paddingBottom: '6px'
+    });
+    this.browseOfferLabel = await this.label(this.browseOfferRow, '', { fontSize: '20px', flexGrow: 1, flexShrink: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' });
+    this.browseNowBtn = await this.button(this.browseOfferRow, '▶ Now', () => this.addBrowseOffer(true), { backgroundColor: '#2e7d32' });
+    this.browseAddBtn = await this.button(this.browseOfferRow, '+ Add', () => this.addBrowseOffer(false));
+    this.browseEpisodesBtn = await this.button(this.browseOfferRow, '▼ Episodes', () => this.showEpisodes(this.browseOffer && this.browseOffer.link), { backgroundColor: '#6a1b9a' });
+    await this.button(this.browseOfferRow, '✕', () => this.setBrowseOffer(null), { backgroundColor: GREY });
+
     // ---- Main view: playlist / search
     this.mainView = await this.div(rootEl, { display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, overflow: 'hidden' });
 
@@ -1350,8 +1364,8 @@ var FirePlaylistPanel = class {
     this.searchRow = await row(this.mainView, { marginTop: '4px' });
     const searchHint = this.karaoke ? 'Search for a song to sing, or paste a video link' : 'Search YouTube, or paste a YouTube / Twitch / Vimeo / video link';
     this.searchField = await this.textField(this.searchRow, searchHint, v => { this.searchQuery = v; }, () => this.doSearch(), true);
-    // What to search: YouTube, Internet Archive films and TV, Tubi, NASA+, ESO or a screen share
-    // (not for karaoke).
+    // What to search: YouTube, Internet Archive films and TV, Tubi, NASA+, ESO, Shoutcast radio or a
+    // screen share (not for karaoke).
     if (!this.karaoke) {
       this.sourceDropdown = this.kitDropdown(this.searchRow, [], k => {
         this.searchSource = k;
@@ -1359,6 +1373,8 @@ var FirePlaylistPanel = class {
       }, { width: '200px', marginRight: '6px' });
       this.fillLookChoices();
     }
+    // Shoutcast's or Tubi's own site in a browser window beside the panel (see toggleBrowse).
+    if (!this.karaoke) this.browseBtn = await this.button(this.searchRow, 'Browse', () => this.toggleBrowse(), { backgroundColor: '#00838f' });
     // Turns while a search is waiting for its results (see render).
     this.searchSpinner = this.ui.CreateKitSpinner(this.searchRow);
     this.searchSpinner.size = 'lg';
@@ -1466,6 +1482,7 @@ var FirePlaylistPanel = class {
       ['+ Search & Add', this.core.allowUntrusted === true
         ? 'Search YouTube, Internet Archive, Tubi, NASA+, ESO or a screen share by its room code: pick the source from the drop-down beside the box. Or paste a link.'
         : 'Search YouTube, Internet Archive, Tubi, NASA+ or ESO: pick the source from the drop-down beside the box. Or paste a link.'],
+      ['Browse', "With Shoutcast or Tubi picked, opens its site beside the panel. Play a station, or open a movie or series, and it offers to add it."],
       ['☎ Phone', 'Shows a code. Send a link from your phone into your search, no typing in VR.'],
       ['☰ Lists', 'Saved playlists for this room. + All puts a whole list on the end.'],
       ['♛ Host', 'Runs the player for everyone. Press the host name at the top to see who else can control it, or to take over.'],
@@ -1473,7 +1490,7 @@ var FirePlaylistPanel = class {
     ];
     // Each name has the icon its button shows, as the button shows it. Search and Lists are tabs,
     // which have no icon, so they are just their tab's name.
-    const TABS = { '+ Search Songs': 'Search Songs', '+ Search & Add': 'Search', '☰ Lists': 'Lists' };
+    const TABS = { '+ Search Songs': 'Search Songs', '+ Search & Add': 'Search', '☰ Lists': 'Lists', Browse: 'Browse' };
     // The host is the padlock at the top (the crown is Take Over, in More).
     const TIP_ICONS = { '♪ Sing It': '@mic', '♛ Host': '@lock' };
     for (const [name, text] of tips) {
@@ -1916,6 +1933,7 @@ var FirePlaylistPanel = class {
     if (typeof this.core.removeMessageListener === 'function') this.core.removeMessageListener(this.onMessageFn);
     clearTimeout(this.speechTimer);
     clearTimeout(this.pasteCodeTimer);
+    if (this.siteBrowser) { this.siteBrowser.destroy(); this.siteBrowser = null; }
     if (this.onTranscription) {
       const scene = this.core.banterScene();
       try { if (scene && typeof scene.Off === 'function') scene.Off('transcription', this.onTranscription); } catch (e) {}
@@ -2159,6 +2177,8 @@ var FirePlaylistPanel = class {
    */
   async close() {
     this.stopPreview(true);
+    // The Browse window closes with the panel: on Quest its sound isn't placed, so it would carry on.
+    if (this.siteBrowser || this.browseOpening) this.closeBrowse();
     if (this.held && this.mover && typeof this.mover.ReleaseGrab === 'function') {
       try { await this.mover.ReleaseGrab(); } catch (e) {}
     }
@@ -2529,6 +2549,128 @@ var FirePlaylistPanel = class {
     this.setTabStart(start);
     if (changed) this.resetScroll();
     this.render();
+  }
+
+  // ---------------------------------------------------------------- Browse (site-browser.js)
+
+  // Whether this client can open a site in a browser window (a BS Browser).
+  canBrowse() {
+    return !this.karaoke && typeof BS !== 'undefined' && (typeof BS.Browser === 'function' || typeof BS.BanterBrowser === 'function');
+  }
+
+  // Opens the picked source's site (Shoutcast or Tubi) in a window beside the panel, or closes the
+  // one that's open.
+  async toggleBrowse() {
+    if (this.siteBrowser || this.browseOpening) {
+      this.closeBrowse();
+      this.render();
+      return;
+    }
+    const site = this.searchSource;
+    if (!BROWSE_SITES.includes(site)) {
+      this.setStatus('Pick Shoutcast or Tubi in the drop-down to browse its site.');
+      return;
+    }
+    if (!this.canBrowse()) { this.setStatus("This app can't open a browser window here."); return; }
+    if (typeof FireSiteBrowser === 'undefined') {
+      this.setStatus('Opening the browser...', 0);
+      this.browseOpening = true;
+      await this.core.setupScript(null, 'site-browser');
+      const cancelled = !this.browseOpening;
+      this.browseOpening = false;
+      if (this.destroyed || cancelled) return;
+      if (typeof FireSiteBrowser === 'undefined') { this.setStatus("Couldn't open the browser."); return; }
+    }
+    // Beside the panel on its right, level with its middle, in the panel's mover so it moves with it.
+    const x = this.panelWidthM / 2 + 0.06 + 0.8;
+    const browser = this.siteBrowser = new FireSiteBrowser(this.core, {
+      parent: this.mover,
+      position: new BS.Vector3(x, this.handleDrop, 0),
+      onMessage: msg => this.onBrowseMessage(msg)
+    });
+    try {
+      await browser.open(site);
+    } catch (e) {
+      if (this.siteBrowser === browser) this.siteBrowser = null;
+      this.setStatus("Couldn't open the browser.");
+      this.render();
+      return;
+    }
+    this.setStatus(site === 'tubi'
+      ? 'Tubi is open beside the panel. Open a movie or a series there to add it.'
+      : 'Shoutcast is open beside the panel. Press Play on a station there to add it.', 8000);
+    this.render();
+  }
+
+  closeBrowse() {
+    this.browseOpening = false;
+    if (this.siteBrowser) this.siteBrowser.destroy();
+    this.siteBrowser = null;
+    this.setBrowseOffer(null);
+  }
+
+  // A message from the browser window's page: the page it moved to, or a station played there.
+  onBrowseMessage(msg) {
+    if (msg.type === 'add') { this.addBrowseOffer(false); return; }
+    if (msg.type === 'extra') { this.showEpisodes(this.browseOffer && this.browseOffer.link); return; }
+    if (msg.type === 'station' && /^\d{1,12}$/.test(String(msg.id || ''))) {
+      const name = String(msg.name || '').trim().slice(0, 120) || this.tr('Radio station');
+      this.setBrowseOffer({ link: `https://directory.shoutcast.com/sbin/tunein-station.m3u?id=${msg.id}`, title: name, kind: 'station' });
+      return;
+    }
+    if (msg.type !== 'page') return;
+    const media = window.MediaSources ? MediaSources.detect(String(msg.url || '')) : null;
+    if (!media || media.type !== 'tubi') {
+      // Moving to another page leaves a Shoutcast station's offer up, but not a Tubi title's.
+      if (this.browseOffer && this.browseOffer.kind !== 'station') this.setBrowseOffer(null);
+      return;
+    }
+    // The page's title: "Name (2020) - Stream Free | Tubi" (a movie) or "Watch Name Streaming
+    // Online | Tubi Free TV" (a series).
+    const title = String(msg.title || '').replace(/^Watch\s+/i, '').replace(/\s*\|\s*Tubi.*$/i, '')
+      .replace(/\s+[-–]\s+Stream(ing)? Free.*$/i, '').replace(/\s+Streaming Online$/i, '').replace(/\s*\(\d{4}\)\s*$/, '').trim().slice(0, 120)
+      || this.tr(media.kind === 'series' ? 'Tubi series' : 'Tubi video');
+    const path = media.kind === 'series' ? 'series' : media.kind === 'episode' ? 'tv-shows' : 'movies';
+    this.setBrowseOffer({ link: `https://tubitv.com/${path}/${media.id}`, title, kind: media.kind === 'series' ? 'series' : 'video' });
+  }
+
+  // Shows what Browse found, in the panel and as a bar on the page, or hides it (null).
+  setBrowseOffer(offer) {
+    this.browseOffer = offer;
+    if (this.siteBrowser) {
+      this.siteBrowser.offer(offer ? {
+        text: this.tr(offer.kind === 'series' ? 'Add episodes of "{title}" to the playlist?' : 'Add "{title}" to the playlist?', { title: offer.title }),
+        add: offer.kind === 'series' ? '' : this.tr('Add to Playlist'),
+        extra: offer.kind === 'series' ? this.tr('Pick Episodes') : '',
+        what: offer.kind
+      } : null);
+    }
+    this.renderSoon();
+  }
+
+  // Adds what Browse found (the server looks its title and length up), or plays it now (the host).
+  addBrowseOffer(now) {
+    const o = this.browseOffer;
+    if (!o) return;
+    if (o.kind === 'series') { this.showEpisodes(o.link); return; }
+    if (now) {
+      if (!this.isHost()) { this.setStatus('Only the host can play something now.'); return; }
+      this.send(Commands.ADD_AND_PLAY, o.link);
+      this.setStatus(this.tr('Playing "{title}"', { title: o.title }));
+    } else {
+      if (!this.canAdd() && !this.addWaits()) { this.setStatus('The player is locked: only the host can add videos.'); return; }
+      this.send(Commands.ADD_TO_PLAYLIST, o.link);
+      this.setStatus(this.addWaits() ? this.tr('Asking the host to add "{title}"...', { title: o.title }) : this.tr('Adding "{title}"...', { title: o.title }));
+    }
+    this.setBrowseOffer(null);
+  }
+
+  // A Tubi series' episodes, in the Lists tab: each one to add, play or play next, or all of them.
+  showEpisodes(link) {
+    if (!link) return;
+    this.setBrowseOffer(null);
+    this.browseList(link);
+    this.setStatus('The episodes are in Lists: add the ones you want, or + All.', 6000);
   }
 
   // The sources this world can use: a screen share needs links from other sites (untrusted-links).
@@ -3210,6 +3352,20 @@ var FirePlaylistPanel = class {
     this.showSearchSource();
     this.display(this.searchSpinner, onSearch && !!this.searchTimer);
 
+    // What the browser window has open that can be added, and the Browse button (Shoutcast and Tubi).
+    const bo = this.browseOffer;
+    this.display(this.browseOfferRow, !!bo);
+    if (bo) {
+      this.setText(this.browseOfferLabel, this.tr(bo.kind === 'series' ? 'In the browser: "{title}" (series)' : 'In the browser: "{title}"', { title: bo.title }));
+      this.display(this.browseNowBtn, bo.kind !== 'series' && host);
+      this.display(this.browseAddBtn, bo.kind !== 'series' && (this.canAdd() || this.addWaits()));
+      this.display(this.browseEpisodesBtn, bo.kind === 'series');
+    }
+    if (this.browseBtn) {
+      this.display(this.browseBtn, onSearch && this.canBrowse() && (BROWSE_SITES.includes(this.searchSource) || !!this.siteBrowser));
+      this.setText(this.browseBtn, this.siteBrowser ? '✕ Close Browser' : 'Browse');
+    }
+
     // A pasted playlist's question.
     const pl = this.pendingList;
     this.display(this.listPromptRow, !!pl);
@@ -3486,6 +3642,12 @@ var FirePlaylistPanel = class {
       this.setButtons(slot, defs);
       return;
     }
+    // A Tubi series is a list of episodes: they open in Lists, to pick from.
+    const media = window.MediaSources ? MediaSources.detect(v.link) : null;
+    if (media && media.type === 'tubi' && media.kind === 'series') {
+      this.setButtons(slot, [{ text: '▼ Episodes', color: '#6a1b9a', fn: () => this.showEpisodes(v.link) }]);
+      return;
+    }
     // Adding stays on the results, so several can be added from one search.
     // Play comes first, on the left, as in the playlist.
     const defs = [];
@@ -3571,7 +3733,7 @@ var FirePlaylistPanel = class {
     if (m.drive) return 'Google Drive';
     if (/dropbox/i.test(String(link))) return 'Dropbox';
     if (/archive\.org/i.test(String(link))) return 'archive.org';
-    return ({ youtube: 'YouTube', twitch: 'Twitch', twitchclip: 'Twitch clip', vimeo: 'Vimeo', vdoninja: 'VDO.Ninja', sdq: 'Screen share', hls: 'Stream', mpegts: 'Stream', file: 'File' })[m.type] || '';
+    return ({ youtube: 'YouTube', twitch: 'Twitch', twitchclip: 'Twitch clip', vimeo: 'Vimeo', vdoninja: 'VDO.Ninja', sdq: 'Screen share', hls: 'Stream', mpegts: 'Stream', file: 'File', radio: 'Radio', tubi: 'Tubi' })[m.type] || '';
   }
 };
 window.FirePlaylistPanel = FirePlaylistPanel;

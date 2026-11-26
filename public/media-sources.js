@@ -7,14 +7,17 @@
 
 /**
  * @typedef {Object} DetectedMedia
- * @property {'youtube'|'file'|'hls'|'dash'|'mpegts'|'twitch'|'twitchclip'|'vimeo'|'vdoninja'|'sdq'|'archive'|'loc'|'tubi'|'nasa'|'eso'} type - The detected media stream/source type.
+ * @property {'youtube'|'file'|'hls'|'dash'|'mpegts'|'twitch'|'twitchclip'|'vimeo'|'vdoninja'|'sdq'|'archive'|'loc'|'tubi'|'nasa'|'eso'|'radio'} type - The detected media stream/source type.
  *   'tubi' is a Tubi movie, episode or series page, and 'nasa' a NASA+ video page: the player asks the
  *   server for the page's stream when it plays (`stream` is true), as Tubi's stream links expire.
  *   'archive' is an Internet Archive page or item (or a publicdomainmovie.net page) that the server
  *   turns into one of the item's files before it is played. 'loc' is a Library of Congress film page
  *   or handle, which the server turns into the film's video file on tile.loc.gov. 'eso' is an ESO or
  *   ESA/Hubble video page, which the server turns into the video's .mp4 on cdn.eso.org (or
- *   cdn.esahubble.org): a fulldome video's dome preview, or any other's 1080p file.
+ *   cdn.esahubble.org): a fulldome video's dome preview, or any other's 1080p file. 'radio' is an
+ *   internet radio station: a Shoutcast tune-in link (site 'shoutcast'), a .pls or .xspf playlist
+ *   file, or a link the server found to be a station (a radio .m3u, or the stream itself), which it
+ *   marks with #radio. The player asks the server for the station's stream when it plays.
  * @property {string} [channel] - Twitch channel name if applicable.
  * @property {string} [video] - Twitch VOD ID if applicable.
  * @property {string} [clip] - Twitch clip slug if applicable.
@@ -36,6 +39,7 @@
  * @property {'movie'|'episode'|'series'} [kind] - For Tubi: what the page is. A series is a list of episodes.
  * @property {string} [slug] - For NASA+: the video's name in its address.
  * @property {boolean} [stream] - True when the player gets the stream from the server (/api/stream).
+ * @property {'shoutcast'} [site] - For 'radio': a station in Shoutcast's directory, by its `id`.
  */
 
 var MediaSources = (() => {
@@ -215,6 +219,16 @@ var MediaSources = (() => {
       return { type: 'file', url: url.href };
     }
 
+    // Internet radio: a Shoutcast station's tune-in link (sbin/tunein-station.m3u, .pls or .xspf
+    // with ?id=), a .pls or .xspf playlist, or a link the server marked as a station (#radio). An
+    // .m3u is usually a list of videos (server/lists.js), so only the server, reading it, can tell
+    // it's a station.
+    if (/^(directory|yp)\.shoutcast\.com$/.test(host) && /^\/sbin\/tunein-station\.(m3u|pls|xspf)$/i.test(u.pathname)) {
+      const id = u.searchParams.get('id') || '';
+      return /^\d{1,12}$/.test(id) ? { type: 'radio', site: 'shoutcast', id, stream: true } : null;
+    }
+    if (u.hash === '#radio' || /\.(pls|xspf)$/i.test(u.pathname)) return { type: 'radio', stream: true };
+
     if (/\.m3u8$/i.test(u.pathname)) return { type: 'hls' };
     // A DASH stream; browsers need dash.js to play it.
     if (/\.mpd$/i.test(u.pathname)) return { type: 'dash' };
@@ -250,7 +264,9 @@ var MediaSources = (() => {
    * Commons films, not an arbitrary server, much like Vimeo. So are Tubi (a free, licensed
    * streaming service) and NASA+ (NASA's own videos), whose streams the server looks up, and the
    * Library of Congress's films (its pages and its tile.loc.gov files), and ESO's and ESA/Hubble's
-   * videos (their pages and their own servers' files).
+   * videos (their pages and their own servers' files). Shoutcast's stations are too, as they come
+   * from its directory (by its id) rather than from an address anyone typed; other radio links
+   * aren't.
    */
   const TRUSTED = new Set(['youtube', 'twitch', 'twitchclip', 'vimeo', 'archive', 'loc', 'tubi', 'nasa', 'eso']);
 
@@ -261,11 +277,12 @@ var MediaSources = (() => {
    * @returns {boolean} True if media source is trusted without requiring untrusted-links override.
    */
   function isTrusted(media) {
-    return !!media && (TRUSTED.has(media.type) || (media.type === 'file' && (!!media.archive || !!media.loc || !!media.eso)));
+    return !!media && (TRUSTED.has(media.type) || (media.type === 'file' && (!!media.archive || !!media.loc || !!media.eso))
+      || (media.type === 'radio' && media.site === 'shoutcast'));
   }
 
   /** Rejection message displayed when untrusted direct media links are queued in restricted rooms. */
-  const UNTRUSTED_MESSAGE = 'This world only plays YouTube, Twitch, Vimeo, Tubi, NASA+, Internet Archive, Library of Congress and ESO links. Its owner can allow other links with the untrusted-links snippet setting.';
+  const UNTRUSTED_MESSAGE = 'This world only plays YouTube, Twitch, Vimeo, Tubi, NASA+, Internet Archive, Library of Congress, ESO and Shoutcast links. Its owner can allow other links with the untrusted-links snippet setting.';
 
   /**
    * The 11-character id of a YouTube video, from a bare id or a YouTube link (with or without

@@ -19,6 +19,7 @@ const { Readable } = require('stream');
 const MediaSources = require('../public/media-sources.js');
 const media = require('./media.js');
 const streaming = require('./streaming.js');
+const radio = require('./radio.js');
 const loc = require('./loc.js');
 const eso = require('./eso.js');
 const { getInnertube } = require('./youtube/youtubeiService.js');
@@ -296,7 +297,7 @@ function publicLookup(hostname, options, callback) {
 }
 
 /** One request through publicLookup, as a fetch Response (redirects not followed). */
-function requestPublic(url, signal) {
+function requestPublic(url, signal, extraHeaders) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const lib = u.protocol === 'https:' ? https : http;
@@ -304,7 +305,7 @@ function requestPublic(url, signal) {
       method: 'GET',
       lookup: publicLookup,
       signal,
-      headers: { 'User-Agent': USER_AGENT, 'Accept': 'text/plain, */*;q=0.8', 'Accept-Encoding': 'gzip, deflate, br' }
+      headers: { 'User-Agent': USER_AGENT, 'Accept': 'text/plain, */*;q=0.8', 'Accept-Encoding': 'gzip, deflate, br', ...(extraHeaders || {}) }
     }, res => {
       const headers = new Headers();
       for (const [name, value] of Object.entries(res.headers)) {
@@ -329,12 +330,16 @@ function requestPublic(url, signal) {
   });
 }
 
-/** Fetches a public link, following up to 5 redirects and checking each one. */
-async function fetchPublic(url) {
-  const signal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+/**
+ * Fetches a public link, following up to 5 redirects and checking each one. `opts.signal` replaces
+ * the 10-second limit on the whole request (a radio stream, which never ends, brings its own), and
+ * `opts.headers` adds request headers.
+ */
+async function fetchPublic(url, opts = {}) {
+  const signal = opts.signal || AbortSignal.timeout(FETCH_TIMEOUT_MS);
   for (let hop = 0; hop < 6; hop++) {
     assertPublicUrl(url);
-    const res = await requestPublic(url, signal);
+    const res = await requestPublic(url, signal, opts.headers);
     if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
       try { await res.body?.cancel(); } catch (e) {}
       url = new URL(res.headers.get('location'), url).href;
@@ -390,7 +395,7 @@ async function fetchListText(url) {
   }
   const text = Buffer.concat(chunks).toString('utf8');
   if (/^\s*<(!doctype|html)/i.test(text)) throw new ListError('That link opens a web page, not a text file of links. Share it publicly, or use its direct or download link.');
-  return { text, name: dispositionName(res) };
+  return { text, name: dispositionName(res), type };
 }
 
 async function fetchJson(url) {
@@ -614,7 +619,22 @@ function loadList(src, limit = MAX_ITEMS) {
       if (!list.items.length) throw new ListError('That list has nothing in it that can play here.');
       return { title: list.title, items: list.items.slice(0, limit), truncated: list.items.length > limit, dropped: 0 };
     }
-    const { text, name } = await fetchListText(source.url);
+    let fetched;
+    try {
+      fetched = await fetchListText(source.url);
+    } catch (e) {
+      // The address of a radio stream itself: that station, as one item.
+      const station = /media file/.test(e.message) ? await media.sniffRadio(src) : null;
+      if (station) return { title: clean(station.title, 120), items: [station], truncated: false, dropped: 0 };
+      throw e;
+    }
+    const { text, name, type } = fetched;
+    // A radio station's .m3u (its streams have no file name the player knows): the station, as one
+    // item marked #radio (see server/radio.js).
+    if (radio.looksLikeRadio(text, type)) {
+      const station = await media.sniffRadio(src);
+      if (station) return { title: clean(station.title, 120), items: [station], truncated: false, dropped: 0 };
+    }
     const parsed = parseLinkList(text);
     const entries = parsed.entries.slice(0, MAX_ITEMS);
     if (!entries.length) throw new ListError('That file has no links in it.');
@@ -682,5 +702,6 @@ module.exports = {
   errorMessage,
   isPrivateAddress,
   ListError,
+  fetchPublic,
   MAX_ITEMS
 };

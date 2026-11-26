@@ -3208,7 +3208,7 @@ var Core = class {
     if (single && single.type !== 'archive') {
       const names = { youtube: 'YouTube video', twitch: single.channel ? `Twitch: ${single.channel}` : 'Twitch video', twitchclip: 'Twitch clip',
         vimeo: 'Vimeo video', vdoninja: 'VDO.Ninja stream', sdq: `Screen share: ${single.room}`, hls: 'Stream', mpegts: single.live ? 'Live stream' : 'Video', file: 'Video file',
-        tubi: single.kind === 'series' ? 'Tubi series' : 'Tubi video', nasa: 'NASA+ video', eso: 'ESO video' };
+        tubi: single.kind === 'series' ? 'Tubi series' : 'Tubi video', nasa: 'NASA+ video', eso: 'ESO video', radio: 'Radio station' };
       return names[single.type] || 'Video';
     }
     try {

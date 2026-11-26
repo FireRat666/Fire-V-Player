@@ -10,6 +10,7 @@ const archive = require('./archive.js');
 const loc = require('./loc.js');
 const eso = require('./eso.js');
 const streaming = require('./streaming.js');
+const radio = require('./radio.js');
 
 const FETCH_TIMEOUT_MS = 5000;
 
@@ -139,6 +140,10 @@ async function resolveMediaLink(link) {
   // Tubi and NASA+ pages keep their page link; the player asks for the stream (/api/stream).
   if (media.type === 'tubi' || media.type === 'nasa') return streaming.resolveLink(link);
 
+  // A radio station (Shoutcast, or a .pls or .xspf file) keeps its link too: the player asks for
+  // its stream (/api/stream), as a station's stream address can change.
+  if (media.type === 'radio') return radio.resolveLink(link);
+
   if (media.type === 'vdoninja') {
     return { title: `VDO.Ninja: ${media.name}`, thumbnail: '', duration: 0, link };
   }
@@ -187,4 +192,15 @@ function allowedFor(ws, link) {
   return MediaSources.isTrusted(m) || !!(ws && ws.allowUntrusted);
 }
 
-module.exports = { resolveMediaLink, resolveMediaLinks, detect: MediaSources.detect, allowedFor, UNTRUSTED_MESSAGE: MediaSources.UNTRUSTED_MESSAGE };
+/**
+ * A link the player doesn't know (detect gives null) that is a radio station after all, found by
+ * what it sends (a radio .m3u, or the stream itself), as a playlist item whose link is marked
+ * #radio, or null. Such a link isn't trusted: check allowedFor on the item's link.
+ * @param {string} link
+ * @returns {Promise<PlaylistItem|null>}
+ */
+function sniffRadio(link) {
+  return radio.sniff(String(link || '').trim());
+}
+
+module.exports = { resolveMediaLink, resolveMediaLinks, sniffRadio, detect: MediaSources.detect, allowedFor, UNTRUSTED_MESSAGE: MediaSources.UNTRUSTED_MESSAGE };

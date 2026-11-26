@@ -13,7 +13,8 @@
     "shared": "geteilt",
     "Save for Everyone": "Für alle speichern",
     "Search YouTube, Internet Archive, Tubi, NASA+ or ESO: pick the source from the drop-down beside the box. Or paste a link.": "Suche auf YouTube, Internet Archive, Tubi, NASA+ oder ESO: Wähle die Quelle im Dropdown neben dem Feld. Oder füge einen Link ein.",
-    "Search YouTube, Internet Archive, Tubi, NASA+, ESO or a screen share by its room code: pick the source from the drop-down beside the box. Or paste a link.": "Suche auf YouTube, Internet Archive, Tubi, NASA+, ESO oder nach einer Bildschirmfreigabe über ihren Raumcode: Wähle die Quelle im Dropdown neben dem Feld. Oder füge einen Link ein."
+    "Search YouTube, Internet Archive, Tubi, NASA+, ESO or a screen share by its room code: pick the source from the drop-down beside the box. Or paste a link.": "Suche auf YouTube, Internet Archive, Tubi, NASA+, ESO oder nach einer Bildschirmfreigabe über ihren Raumcode: Wähle die Quelle im Dropdown neben dem Feld. Oder füge einen Link ein.",
+    "Close Browser": "Browser schließen"
   },
   "fr": {
     "Save for Me": "Enregistrer pour moi",
@@ -31,7 +32,8 @@
     "Someone": "誰か",
     "someone": "誰か",
     "loading...": "読み込み中...",
-    "mine": "自分の"
+    "mine": "自分の",
+    "Browse": "閲覧"
   },
   "es": {
     "Accent": "Color de acento",

@@ -738,6 +738,9 @@ var FireNativeScreen = (() => {
           // A viewer's own skip: stop pulling them back into step until the next track or host seek.
           clearTimeout(this.settleTimer); // a check still to come would undo the skip
           clearTimeout(this.startTimer);  // so would the check that it started after its countdown (watchStart)
+          // and the answer to a forced sync that check already asked for, unless a host seek or
+          // track change is waiting for its sync, which still moves everyone.
+          if (!this.hostSyncPending) this.pendingSync = null;
           this.settleLeft = 0;
           this.settling = false; // and so would the answer to a check already asked for
           if (this.autoSync) {

@@ -223,7 +223,9 @@ class VideoElementSource extends BaseMediaSource {
         if (this.destroyed) return;
         if (!window.mpegts || !mpegts.isSupported()) { opts.onError("This browser can't play this stream."); return; }
         const m = this.mpegts = mpegts.createPlayer({ type: 'mpegts', isLive: !!media.live, url: media.url || url },
-          { liveBufferLatencyChasing: !!media.live, lazyLoad: !media.live });
+          // Live, it starts on the first data rather than waiting to gather some (the stash), so
+          // a VRCDN stream starts in a second or two instead of many.
+          media.live ? { liveBufferLatencyChasing: true, lazyLoad: false, enableStashBuffer: false } : { lazyLoad: true });
         m.on(mpegts.Events.ERROR, () => opts.onError("Couldn't play this stream. It may be offline, or the site may not allow it here."));
         m.attachMediaElement(el);
         m.load();

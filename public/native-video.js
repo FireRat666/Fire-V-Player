@@ -54,6 +54,13 @@ var FireNativeScreen = (() => {
    * origin, unturned and unscaled, as the screen's place is given in world terms.
    */
   const HOME_NAME = 'fire-v-player world video';
+  /**
+   * The words over the screen while a track loads, or a karaoke song counts down (see
+   * overlayState): a UI panel just in front of the picture, as the browser page that shows them
+   * elsewhere is gone while this player is up. Laid out on OVERLAY_W pixels across, updated every
+   * OVERLAY_TICK_MS. The numbers come in the last COUNTDOWN_NUMBERS_S, as on the browser page.
+   */
+  const OVERLAY_W = 1600, OVERLAY_TICK_MS = 200, COUNTDOWN_NUMBERS_S = 3;
 
   /**
    * Controller class managing the lifecycle of an in-world native video screen.
@@ -89,6 +96,8 @@ var FireNativeScreen = (() => {
       // every jump lands that far behind, which is out of step again, so it jumps for ever.
       this.seekLead = Number(core.nativeSeekLead) || 0; // kept on the core, so the next file starts with it
       this.lastJumpAt = -Infinity;
+      // Played as a viewer's preview: back on the room's track it's made again (see core.js updateScreen).
+      this.previewed = this.isPreview();
       this.startedAt = performance.now(); // a YouTube video's deadline counts its lookup too (see create)
       this.holdFromCore();
       this.ready = this.create().catch(e => {
@@ -167,6 +176,8 @@ var FireNativeScreen = (() => {
       if (!this.youtubeId) this.startedAt = performance.now();
       this.pollTimer = setInterval(() => this.poll(), POLL_MS);
       this.syncTimer = setInterval(() => { if (this.autoSync && !this.wantPaused) this.requestSync(false); }, SYNC_EVERY_MS);
+      this.overlayTimer = setInterval(() => this.updateOverlay(), OVERLAY_TICK_MS);
+      this.updateOverlay();
       console.log(`[NativeScreen] Playing ${this.link}${this.youtubeId ? ` (${this.height}p)` : ''} on the world's video player.`);
     }
 
@@ -379,6 +390,114 @@ var FireNativeScreen = (() => {
         if (!track || track.link !== this.link) return;
         this.core.sendMessage({ path: Commands.TRACK_READY, data: { link: this.link, native: true } });
       }, standalone ? SETTLE_STANDALONE_MS : SETTLE_MS);
+    }
+
+    /**
+     * Whether this player has played the file away from its start. Held at the start again, Unity's
+     * player on Quest then plays its sound with a black picture, so a countdown makes it anew.
+     * @returns {boolean}
+     */
+    hasPlayed() {
+      return this.previewed || (this.prepared && (this.endedAt != null || this.localTime() > 0.5));
+    }
+
+    /**
+     * What the words over the screen should say now, or null for none (see OVERLAY_W): a karaoke
+     * countdown, or that the track is still loading or waiting for the room to load it.
+     * @returns {{key: string, big: string, top: string, bottom: string, karaoke: boolean}|null}
+     */
+    overlayState() {
+      if (this.destroyed) return null;
+      const preview = this.isPreview();
+      const track = preview ? this.core.previewVideo : this.currentTrack();
+      const title = (track && track.title) || '';
+      const karaoke = this.core.isKaraoke === true && !preview;
+      if (karaoke && this.held()) {
+        const left = Math.ceil((this.holdUntil - performance.now()) / 1000);
+        const singer = track && track.user && track.user.name;
+        const big = left <= COUNTDOWN_NUMBERS_S ? String(Math.max(1, left)) : '';
+        return { key: `k|${big}|${title}|${singer || ''}`, karaoke: true, top: singer ? `Now singing: ${singer}` : '', big, bottom: big ? title : `Get ready\n${title}` };
+      }
+      if (!this.prepared) return { key: `l|${title}|${karaoke}`, karaoke, top: '', big: 'Loading...', bottom: title };
+      if (this.held()) return { key: `w|${title}`, karaoke, top: '', big: 'Starting soon', bottom: 'Waiting for everyone to load it' };
+      return null;
+    }
+
+    /** Puts up, changes or takes down the words over the screen (see overlayState). */
+    updateOverlay() {
+      if (this.destroyed || !this.go) return;
+      const want = this.overlayState();
+      const key = want ? want.key : '';
+      if (key === this.overlayKey) return;
+      if (!want && !this.overlay) { this.overlayKey = key; return; }
+      if (this.overlayBuilding) return; // the next tick picks it up
+      this.overlayKey = key;
+      if (!want) { this.showOverlay(false); return; }
+      this.overlayBuilding = true;
+      this.buildOverlay().then(o => {
+        if (!o || this.destroyed) return;
+        const set = (el, text) => { try { if (el.text !== text) el.text = text; } catch (e) {} };
+        set(o.top, want.top);
+        set(o.big, want.big);
+        set(o.bottom, want.bottom);
+        try {
+          o.root.SetStyles({ backgroundColor: want.karaoke ? 'rgba(40, 12, 80, 0.94)' : 'rgba(0, 0, 0, 0.78)' });
+          o.big.SetStyles({ fontSize: /^\d$/.test(want.big) ? `${Math.round(o.h * 0.45)}px` : `${Math.round(o.h * 0.12)}px`, color: /^\d$/.test(want.big) ? '#00e5ff' : '#ffffff' });
+        } catch (e) {}
+        this.showOverlay(true);
+      }).catch(e => {
+        console.warn("[NativeScreen] Couldn't show the words over the screen:", e);
+        this.overlayFailed = true;
+      }).finally(() => { this.overlayBuilding = false; });
+    }
+
+    /**
+     * The panel for the words over the screen, made the first time it's wanted, in front of the
+     * picture and the same size. Null on a client without the SDK's UI panels.
+     * @returns {Promise<Object|null>}
+     */
+    async buildOverlay() {
+      if (this.overlay) return this.overlay;
+      if (this.overlayFailed) return null;
+      const UIClass = BS.UI || BS.BanterUI;
+      if (typeof UIClass !== 'function' || !this.go) return null;
+      const [w, h] = this.size();
+      const W = OVERLAY_W, H = Math.round(OVERLAY_W * h / w);
+      const s = w / (W / 100); // a panel is 100 pixels per metre
+      // Just in front of the picture (Unity's -z), so it covers it.
+      const go = await this.core.makeObject('FireVPlayer_VideoScreenWords', {
+        parent: this.go, position: new BS.Vector3(0, 0, -0.01), scale: new BS.Vector3(s, s, s)
+      });
+      if (this.destroyed) { this.core.destroyObject(go); return null; }
+      const made = new UIClass(new BS.Vector2(W, H), false);
+      const ui = (await go.AddComponent(made)) || made;
+      if (this.destroyed) return null;
+      if (typeof ui.SetBackgroundColor === 'function') ui.SetBackgroundColor(new BS.Vector4(0, 0, 0, 0));
+      const root = await ui.CreateVisualElement();
+      root.SetStyles({ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', backgroundColor: 'rgba(0, 0, 0, 0.78)' });
+      const label = async (styles) => {
+        const el = await ui.CreateLabel(undefined, root);
+        el.SetStyles(Object.assign({ color: '#ffffff', backgroundColor: 'rgba(0,0,0,0)', textAlign: 'center', whiteSpace: 'normal', maxWidth: '90%' }, styles));
+        el.text = '';
+        return el;
+      };
+      const top = await label({ fontSize: `${Math.round(H * 0.08)}px`, color: '#ffd54f', fontWeight: 'bold' });
+      const big = await label({ fontSize: `${Math.round(H * 0.12)}px`, fontWeight: 'bold' });
+      const bottom = await label({ fontSize: `${Math.round(H * 0.055)}px`, color: '#dddddd', marginTop: `${Math.round(H * 0.02)}px` });
+      if (this.destroyed) return null;
+      this.overlay = { go, ui, root, top, big, bottom, h: H };
+      return this.overlay;
+    }
+
+    /** Shows or hides the words over the screen (moves them out of sight, so they're kept for the next track). */
+    showOverlay(on) {
+      const o = this.overlay;
+      if (!o || o.shown === on) return;
+      o.shown = on;
+      try {
+        if (typeof o.go.SetActive === 'function') o.go.SetActive(on);
+        else o.root.SetStyles({ display: on ? 'flex' : 'none' });
+      } catch (e) {}
     }
 
     /** True while a karaoke song is counting down to its start: the file waits, paused, at 0:00. */
@@ -644,6 +763,7 @@ var FireNativeScreen = (() => {
       clearTimeout(this.countdownTimer);
       clearTimeout(this.settleTimer);
       clearTimeout(this.readyTimer);
+      clearInterval(this.overlayTimer);
       // Destroying the object destroys the video player with it.
       if (this.go) this.core.destroyObject(this.go);
       this.go = null;

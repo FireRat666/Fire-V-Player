@@ -459,6 +459,7 @@ var Core = class {
     if (!this.nativeScreen && this.browser && this.browser === hadBrowser) {
       Promise.resolve(this.sendBrowserMessage({ path: Commands.PREVIEW_VIDEO, data: video })).catch(() => {});
     } else if (sameNative) {
+      this.nativeScreen.previewed = true;
       this.nativeScreen.wantPaused = false;
       this.nativeScreen.seek(0);
       this.nativeScreen.applyPaused();
@@ -490,11 +491,18 @@ var Core = class {
     const link = this.currentLink();
     const path = json && json.path;
     if (this.wantsNativeScreen(link)) {
-      if (this.nativeScreen && this.nativeScreen.link === link) {
+      const same = this.nativeScreen && this.nativeScreen.link === link;
+      // Back on the room's track from a preview of it, or counting down to a start again after it
+      // has played: made anew, as Unity's player on Quest plays the sound over a black picture
+      // when it's taken back to its start and held there (see native-video.js hasPlayed).
+      const countingDown = (Number(this.countdownUntil) || 0) > performance.now();
+      const fresh = same && !this.previewVideo && (this.nativeScreen.previewed || (countingDown && this.nativeScreen.hasPlayed()));
+      if (same && !fresh) {
         // The same file again (a restart, a one-song playlist), or the host moved it.
         if (path === Commands.TRACK_CHANGED || path === Commands.HOST_SEEK || path === Commands.READY_START) this.nativeScreen.resync();
         return;
       }
+      if (fresh) console.log('[Core] The world\'s video player starts this track again from scratch.');
       this.removeBrowser();
       if (this.nativeScreen) this.nativeScreen.destroy();
       console.log('[Core] This track plays on the world\'s video player, so it takes the browser\'s place.');

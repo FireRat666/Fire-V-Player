@@ -48,6 +48,8 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
 // Karaoke's countdown shows numbers for its last this many seconds (the server's karaoke
 // countdown). Before that the room is waiting for everyone's screen to load, which says Get ready.
 const COUNTDOWN_NUMBERS_S = 3;
+// How often the "Loading..." over the screen is checked, how long a track loads before it shows, and the longest it shows (see updateLoading).
+const LOADING_TICK_MS = 300, LOADING_SHOW_MS = 700, LOADING_MAX_MS = 45000;
 const STALL_CHECK_MS = 2000;
 const STALL_RELOAD_MS = 15000;
 // A live point report the server didn't take (it couldn't confirm the video is live) is sent again
@@ -121,6 +123,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       await this.setupBrowserMessaging();
       this.setupVisibilityHandler();
       this.setupStatusDisplay();
+      this.loadingTimer = setInterval(() => this.updateLoading(), LOADING_TICK_MS);
       this.isResumingFromPassthrough = false;
       this.initialSyncComplete = false;
       this.currentTime = 0;
@@ -1552,6 +1555,46 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       num.classList.remove('pop'); sweep.classList.remove('run');
       void num.offsetWidth;
       num.classList.add('pop'); sweep.classList.add('run');
+    }
+
+    /**
+     * "Loading..." over the screen while a track (or a preview) hasn't played yet, so viewers know
+     * it's coming: a stream (a VRCDN .live.ts) can take a while. Not over karaoke's countdown, nor
+     * once the track has played (a later stall is YouTube's own spinner). After LOADING_SHOW_MS,
+     * so a quick start doesn't flash it.
+     */
+    updateLoading() {
+      const video = this.previewVideo || this.currentVideo;
+      let want = !!(video && video.link) && !this.countdownEl && !(this.playerData && this.playerData.paused && !this.previewVideo);
+      if (want && this.player) {
+        try {
+          if (this.player.getPlayerState() === YT.PlayerState.PLAYING && this.hasTrackLoaded(video)) this.loadedLink = video.link;
+        } catch (e) {}
+      }
+      if (want && this.loadedLink === video.link) want = false;
+      if (want && this.loadingFor !== video.link) { this.loadingFor = video.link; this.loadingSince = Date.now(); }
+      // Twitch waits for a click on its own player, which this would hide; and past LOADING_MAX_MS
+      // something else is wrong, which the player itself may say.
+      if (want && window.MediaSources && /^twitch/.test((MediaSources.detect(video.link) || {}).type || '')) want = false;
+      if (want && (Date.now() - this.loadingSince < LOADING_SHOW_MS || Date.now() - this.loadingSince > LOADING_MAX_MS)) want = false;
+      let el = this.loadingEl;
+      if (!want) {
+        if (el) { el.remove(); this.loadingEl = null; }
+        return;
+      }
+      if (!el) {
+        el = this.loadingEl = document.createElement('div');
+        Object.assign(el.style, {
+          position: 'fixed', inset: '0', zIndex: '99990', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+          background: 'rgba(0, 0, 0, 0.72)', color: '#fff', fontFamily: "'Roboto', sans-serif", pointerEvents: 'none', textAlign: 'center'
+        });
+        el.innerHTML = '<div style="font-size: 9vh; font-weight: 700; letter-spacing: 0.04em">Loading...</div>'
+          + '<div class="what" style="font-size: 4vh; margin-top: 2vh; opacity: 0.85; max-width: 85vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis"></div>';
+        document.body.appendChild(el);
+      }
+      const what = el.querySelector('.what');
+      const title = video.title || '';
+      if (what.textContent !== title) what.textContent = title;
     }
 
     /** Fades the countdown out and removes it. */

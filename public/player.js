@@ -1565,7 +1565,12 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
      */
     updateLoading() {
       const video = this.previewVideo || this.currentVideo;
-      let want = !!(video && video.link) && !this.countdownEl && !(this.playerData && this.playerData.paused && !this.previewVideo);
+      // Only for what should be playing now: the preview, or the room's current track (not a
+      // track that has gone from the playlist), and not one YouTube says can never play here.
+      const pd = this.playerData;
+      const roomTrack = pd && Array.isArray(pd.playlist) ? pd.playlist[pd.currentTrack] : null;
+      const active = !!(video && video.link) && (this.previewVideo ? true : !!(roomTrack && roomTrack.link === video.link));
+      let want = active && video.link !== this.unplayableLink && !this.countdownEl && !(pd && pd.paused && !this.previewVideo);
       if (want && this.player) {
         try {
           if (this.player.getPlayerState() === YT.PlayerState.PLAYING && this.hasTrackLoaded(video)) this.loadedLink = video.link;

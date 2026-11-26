@@ -2951,6 +2951,13 @@ var Core = class {
         json.volume = this.tempVolume;
         this.sendBrowserMessage(json);
         break;
+      // The viewer's own skips and Auto Sync from their menu page, sent here while the world's
+      // video player has the browser page's place (see the server's userScreens).
+      case Commands.SKIP_FORWARD:
+      case Commands.SKIP_BACK:
+      case Commands.AUTO_SYNC:
+        if (this.nativeScreen) this.nativeScreen.handle(json);
+        break;
       case Commands.SET_BROWSER_URL:
         if(window.isBanter && this.browser) {
           // console.log("SET_BROWSER_URL", {"url": json.data.link});

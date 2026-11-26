@@ -439,6 +439,14 @@ var FireNativeScreen = (() => {
       this.overlayBuilding = true;
       this.buildOverlay().then(o => {
         if (!o || this.destroyed) return;
+        // What's wanted may have changed while the panel was being made: put up only what's
+        // still wanted, and let the next tick show whatever is now.
+        const now = this.overlayState();
+        if (!now || now.key !== want.key) {
+          this.overlayKey = undefined;
+          this.showOverlay(false);
+          return;
+        }
         const set = (el, text) => { try { if (el.text !== text) el.text = text; } catch (e) {} };
         set(o.top, want.top);
         set(o.big, want.big);

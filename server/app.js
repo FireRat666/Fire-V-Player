@@ -736,10 +736,23 @@ class App {
    */
   localSkip(ws, isForward) {
     // This function relays a skip command from a UI to that user's specific player instance.
-    if (ws.user_video) {
-      const command = isForward ? Commands.SKIP_FORWARD : Commands.SKIP_BACK;
-      this.send(ws.user_video, command);
-    }
+    const command = isForward ? Commands.SKIP_FORWARD : Commands.SKIP_BACK;
+    this.userScreens(ws).forEach(screen => this.send(screen, command));
+  }
+
+  /**
+   * The sockets that play a user's screen: their browser page (user_video, see
+   * setUserVideoPlayer) while it's open, or else their space pages, which run the world's video
+   * player while it takes the browser page's place (core.js passes these on to it). A browser
+   * page that comes back registers again, and is the user's player once more.
+   * @param {Object} ws - A socket of the user's (their menu page, say).
+   * @returns {Object[]}
+   */
+  userScreens(ws) {
+    if (ws.user_video && ws.user_video.readyState === 1) return [ws.user_video];
+    const player = this.videoPlayers[ws.i];
+    if (!player || !ws.u || ws.u.id == null) return [];
+    return player.sockets.filter(s => s.type === 'space' && s.u && s.u.id === ws.u.id && s.readyState === 1);
   }
 
   /**
@@ -750,9 +763,7 @@ class App {
    * @returns {void}
    */
   setAutoSync(autoSync, ws) {
-    if (ws.user_video) {
-      this.send(ws.user_video, Commands.AUTO_SYNC, autoSync);
-    }
+    this.userScreens(ws).forEach(screen => this.send(screen, Commands.AUTO_SYNC, autoSync));
   }
 
   /**

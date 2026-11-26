@@ -206,6 +206,22 @@ class VideoElementSource extends BaseMediaSource {
    * radio station's stream (`audio`), played as a file that never ends.
    */
   loadStream(opts, el) {
+    // A Tubi stream is looked up from this viewer's own device first (Tubi serves only some
+    // countries, and the server may be in another), then by the server.
+    const media = MediaSources.detect(opts.link);
+    if (media && media.type === 'tubi' && typeof opts.deviceStream === 'function') {
+      Promise.resolve(opts.deviceStream(opts.link)).catch(() => null).then(url => {
+        if (this.destroyed) return;
+        if (url) this.load(opts, { type: 'hls' }, el, url);
+        else this.loadServerStream(opts, el);
+      });
+      return;
+    }
+    this.loadServerStream(opts, el);
+  }
+
+  /** The server's lookup of a stream (/api/stream). */
+  loadServerStream(opts, el) {
     fetch(`/api/stream?link=${encodeURIComponent(opts.link)}`)
       .then(res => res.json().catch(() => ({})).then(body => {
         if (!res.ok || !body.url) throw new Error(body.error || "Couldn't find this video's stream.");
@@ -1247,6 +1263,8 @@ class MediaSwitch {
    * @param {function(string): void} opts.onError - Error handling callback.
    * @param {function(): boolean} [opts.allowUntrusted] - Permission check for untrusted sources.
    * @param {function(): void} [opts.requestClick] - Requests synthetic gesture/click for sound.
+   * @param {function(string): Promise<string|null>} [opts.deviceStream] - A Tubi stream looked up
+   *   from this viewer's own device, or null (the server's lookup is used then).
    */
   constructor(yt, opts) {
     this.yt = yt;
@@ -1290,7 +1308,8 @@ class MediaSwitch {
       captions: this.captions,
       onDuration: seconds => this.opts.onDuration(link, seconds),
       onError: message => this.opts.onError(message),
-      requestClick: () => { if (this.opts.requestClick) this.opts.requestClick(); }
+      requestClick: () => { if (this.opts.requestClick) this.opts.requestClick(); },
+      deviceStream: this.opts.deviceStream
     };
     if (media.type === 'twitch') this.source = new TwitchSource(opts, media);
     else if (media.type === 'twitchclip') this.source = new TwitchClipSource(opts, media);

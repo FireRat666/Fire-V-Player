@@ -364,9 +364,31 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         allowUntrusted: () => this.core.allowUntrusted === true,
         // Asks this viewer's world to click the middle of their screen, for players (Twitch) that
         // won't start on their own until someone does.
-        requestClick: () => this.clickMiddle()
+        requestClick: () => this.clickMiddle(),
+        // A Tubi stream looked up from this viewer's own device (see askWorldForTubiStream).
+        deviceStream: link => this.askWorldForTubiStream(link)
       }) : this.yt;
       if (this.player.setCaptions) this.player.setCaptions(this.core.captions !== false);
+    }
+
+    /**
+     * Asks this viewer's world for a Tubi stream looked up from their own device (tubi-native.js),
+     * as the server may be in a country Tubi doesn't serve. Null when there's no world to ask, or
+     * it couldn't: the server's lookup is used then.
+     * @param {string} link - A Tubi movie or episode link.
+     * @returns {Promise<string|null>}
+     */
+    askWorldForTubiStream(link) {
+      const inWorld = !!(window.O && typeof window.O.sendMessage === 'function') || !!window.bantermessage || !!spaceFrame;
+      if (!inWorld) return Promise.resolve(null);
+      this.tubiAsks = this.tubiAsks || new Map();
+      const n = (this.tubiAskN = (this.tubiAskN || 0) + 1);
+      return new Promise(resolve => {
+        // The first lookup makes the hidden Tubi browser, which takes a few seconds.
+        const timer = setTimeout(() => { this.tubiAsks.delete(n); resolve(null); }, 30000);
+        this.tubiAsks.set(n, { resolve, timer });
+        this.sendBrowserMessage({ path: Commands.TUBI_STREAM, data: { n, link } });
+      });
     }
 
     /** The YouTube player's settings, for the first player and any that replaces it. */
@@ -812,6 +834,12 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
           this.sendBrowserMessage(json);
         }
         break;
+      case Commands.TUBI_STREAM_RESULT: {
+        const d = json.data || {};
+        const wait = this.tubiAsks && this.tubiAsks.get(d.n);
+        if (wait) { this.tubiAsks.delete(d.n); clearTimeout(wait.timer); wait.resolve(d.ok && /^https:\/\//.test(String(d.url || '')) ? d.url : null); }
+        break;
+      }
       case Commands.PREVIEW_VIDEO:
         this.applyPreview(json.data);
         break;

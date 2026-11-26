@@ -2650,18 +2650,31 @@ var FirePlaylistPanel = class {
     this.renderSoon();
   }
 
-  // Adds what Browse found (the server looks its title and length up), or plays it now (the host).
-  addBrowseOffer(now) {
+  // Adds what Browse found, or plays it now (the host). The server looks its title and length up,
+  // except a Tubi title's, which this device looks up when it can (the server may be in a country
+  // Tubi doesn't serve).
+  async addBrowseOffer(now) {
     const o = this.browseOffer;
     if (!o) return;
     if (o.kind === 'series') { this.showEpisodes(o.link); return; }
+    if (now && !this.isHost()) { this.setStatus('Only the host can play something now.'); return; }
+    if (!now && !this.canAdd() && !this.addWaits()) { this.setStatus('The player is locked: only the host can add videos.'); return; }
+    let what = o.link;
+    if (o.kind === 'video' && window.isBanter && typeof this.core.tubiResolver === 'function') {
+      this.setBrowseOffer(null);
+      this.setStatus(this.tr('Looking up "{title}"...', { title: o.title }), 0);
+      try {
+        const tubi = await this.core.tubiResolver();
+        const found = tubi ? await tubi.stream(o.link) : null;
+        if (found && found.ok) what = { title: found.title || o.title, link: o.link, duration: found.duration, thumbnail: found.thumbnail };
+      } catch (e) {}
+      if (this.destroyed) return;
+    }
     if (now) {
-      if (!this.isHost()) { this.setStatus('Only the host can play something now.'); return; }
-      this.send(Commands.ADD_AND_PLAY, o.link);
+      this.send(Commands.ADD_AND_PLAY, what);
       this.setStatus(this.tr('Playing "{title}"', { title: o.title }));
     } else {
-      if (!this.canAdd() && !this.addWaits()) { this.setStatus('The player is locked: only the host can add videos.'); return; }
-      this.send(Commands.ADD_TO_PLAYLIST, o.link);
+      this.send(Commands.ADD_TO_PLAYLIST, what);
       this.setStatus(this.addWaits() ? this.tr('Asking the host to add "{title}"...', { title: o.title }) : this.tr('Adding "{title}"...', { title: o.title }));
     }
     this.setBrowseOffer(null);
@@ -2732,7 +2745,10 @@ var FirePlaylistPanel = class {
     this.pendingSearchKey = isLink ? null : { key, query: q };
     const data = { term: q, searchId };
     if (this.searchSource !== 'youtube') data.source = this.searchSource;
-    this.send(Commands.SEARCH, data);
+    // Tubi is searched from this device first, as its own site does (the server may be in a
+    // country Tubi doesn't serve), then by the server.
+    if (this.searchSource === 'tubi' && !isLink && window.isBanter && typeof this.core.tubiResolver === 'function') this.searchTubiHere(q, data);
+    else this.send(Commands.SEARCH, data);
     console.log(`[PlaylistPanel] Searching for "${q}"...`);
     this.setStatus('Searching...', 0);
     // The first search after the server starts can take a while, so count up instead of giving up early.
@@ -2752,6 +2768,24 @@ var FirePlaylistPanel = class {
     }, 1000);
     this.tab = 'search';
     this.render();
+  }
+
+  // A Tubi search from this device (tubi-native.js); the server's search if it finds nothing or can't.
+  async searchTubiHere(q, data) {
+    let results = null;
+    try {
+      const tubi = await this.core.tubiResolver();
+      if (tubi) results = await tubi.search(q);
+    } catch (e) {
+      console.warn('[PlaylistPanel] Tubi search on this device failed:', e);
+    }
+    if (this.destroyed || data.searchId !== this.searchId) return; // a newer search replaced it
+    if (results && results.length) {
+      this.onMessage({ path: Commands.SEARCH_RESULTS, data: results, searchId: data.searchId });
+      return;
+    }
+    console.log('[PlaylistPanel] No Tubi results from this device, so the server searches.');
+    this.send(Commands.SEARCH, data);
   }
 
   // Karaoke: join the singer queue with this song.
@@ -2943,10 +2977,43 @@ var FirePlaylistPanel = class {
   // was shown before keeps its videos on screen while it's loaded again.
   requestList(id, force) {
     this.checkListRequests();
-    if (this.listsOut.has(id) || this.listQueue.includes(id)) return;
+    if (this.listsOut.has(id) || this.listQueue.includes(id) || (this.deviceLists && this.deviceLists.has(id))) return;
     const had = this.listData.get(id);
     if (had && had.state === 'ready' && !force && Date.now() - had.at < LIST_FRESH_MS) return;
     if (!(had && had.state === 'ready')) this.listData.set(id, { state: 'loading', at: Date.now() });
+    // A Tubi series is read from this device first (see loadSeriesHere).
+    if (this.isTubiSeries(id) && window.isBanter && typeof this.core.tubiResolver === 'function') {
+      this.loadSeriesHere(id);
+      return;
+    }
+    this.listQueue.push(id);
+    this.pumpLists();
+    this.renderSoon();
+  }
+
+  isTubiSeries(link) {
+    const m = window.MediaSources ? MediaSources.detect(String(link || '')) : null;
+    return !!m && m.type === 'tubi' && m.kind === 'series';
+  }
+
+  // A Tubi series' episodes from this device (tubi-native.js), as the server may be in a country
+  // Tubi doesn't serve; the server's list if this device can't.
+  async loadSeriesHere(id) {
+    (this.deviceLists = this.deviceLists || new Set()).add(id);
+    let list = null;
+    try {
+      const tubi = await this.core.tubiResolver();
+      if (tubi) list = await tubi.series(id);
+    } catch (e) {
+      console.warn('[PlaylistPanel] Tubi series on this device failed:', e);
+    }
+    this.deviceLists.delete(id);
+    if (this.destroyed) return;
+    if (list && list.items.length) {
+      this.listData.set(id, { state: 'ready', at: Date.now(), title: list.title, items: list.items, skipped: 0, truncated: false, device: true });
+      this.renderSoon();
+      return;
+    }
     this.listQueue.push(id);
     this.pumpLists();
     this.renderSoon();
@@ -3032,6 +3099,16 @@ var FirePlaylistPanel = class {
   // Adds a whole list to the end of the playlist (the host, or anyone while unlocked).
   appendList(id) {
     if (!this.canAdd()) { this.setStatus('The player is locked: only the host can add videos.'); return; }
+    // A list read on this device (a Tubi series) may be one the server can't read: its videos are
+    // added one by one, as they are.
+    const data = this.listData.get(id);
+    if (data && data.device && data.state === 'ready') {
+      const inPlaylist = new Set(((this.core.player && this.core.player.playlist) || []).map(v => v.link));
+      const items = data.items.filter(v => !inPlaylist.has(v.link)).slice(0, 300);
+      items.forEach(v => this.send(Commands.ADD_TO_PLAYLIST, v));
+      this.setStatus(this.tr(items.length === 1 ? 'Adding {count} video...' : 'Adding {count} videos...', { count: items.length }), 0);
+      return;
+    }
     this.send(Commands.FROM_PLAYLIST, { id, append: true, fromPlaylist: true });
     this.setStatus('Adding the list to the playlist...', 0);
   }

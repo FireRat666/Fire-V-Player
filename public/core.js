@@ -406,6 +406,38 @@ var Core = class {
     if (!this.ytResolver) this.ytResolver = new FireYouTubeResolver(this);
     return this.ytResolver;
   }
+  // The hidden browser that looks Tubi up from this viewer's device (tubi-native.js), made the
+  // first time it's wanted: search, streams and series, with the server as the fallback. Null
+  // where the client has no BS Browser, or after it couldn't start.
+  async tubiResolver() {
+    if (this.destroyed || !window.isBanter) return null;
+    if (typeof FireTubiResolver === 'undefined') {
+      if (!this.tubiScript) this.tubiScript = this.setupScript(null, 'tubi-native');
+      await this.tubiScript;
+      if (this.destroyed || typeof FireTubiResolver === 'undefined' || !FireTubiResolver.possible()) return null;
+    }
+    if (!FireTubiResolver.possible()) return null;
+    if (!this.tubiLookup) this.tubiLookup = new FireTubiResolver(this);
+    if (this.tubiLookup.failed && !this.tubiLookup.isReady) return null;
+    return this.tubiLookup;
+  }
+  // The player page asks for a Tubi stream looked up from this device; it falls back to the
+  // server's /api/stream when this says it couldn't.
+  async answerTubiStream(data) {
+    const n = data && data.n;
+    const link = String((data && data.link) || '').slice(0, 300);
+    let answer = { ok: false, reason: 'No Tubi lookup on this device.' };
+    try {
+      const tubi = await this.tubiResolver();
+      if (tubi) {
+        const found = await tubi.stream(link);
+        answer = found.ok ? { ok: true, url: found.url } : found;
+      }
+    } catch (e) {
+      answer = { ok: false, reason: String(e && e.message || e) };
+    }
+    Promise.resolve(this.sendBrowserMessage({ path: Commands.TUBI_STREAM_RESULT, data: Object.assign({ n }, answer) })).catch(() => {});
+  }
   // The sharpest YouTube quality for this viewer, from the screen's resolution (the snippet's, or
   // theirs from the panel): the quality nearest its width, so 1600 and up is 1080p, 1280 is 720p.
   // Lower after it kept stalling for them (see dropYouTubeQuality).
@@ -2778,6 +2810,9 @@ var Core = class {
         case Commands.ERROR:
           if (msg.data && msg.data.preview) this.notifyListeners(msg);
           break;
+        case Commands.TUBI_STREAM:
+          this.answerTubiStream(msg.data);
+          break;
       }
     }
   }
@@ -3352,6 +3387,10 @@ var Core = class {
     if (this.nativeScreen) {
       this.nativeScreen.destroy();
       this.nativeScreen = null;
+    }
+    if (this.tubiLookup) {
+      this.tubiLookup.destroy();
+      this.tubiLookup = null;
     }
     if (this.ytResolver) {
       this.ytResolver.destroy();

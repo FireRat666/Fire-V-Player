@@ -61,6 +61,8 @@ var FireNativeScreen = (() => {
    * OVERLAY_TICK_MS. The numbers come in the last COUNTDOWN_NUMBERS_S, as on the browser page.
    */
   const OVERLAY_W = 1600, OVERLAY_TICK_MS = 200, COUNTDOWN_NUMBERS_S = 3;
+  /** How long after a countdown its video must be moving, and how often it's nudged if not (see watchStart). */
+  const START_CHECK_MS = 3000, START_KICKS = 2;
 
   /**
    * Controller class managing the lifecycle of an in-world native video screen.
@@ -263,6 +265,7 @@ var FireNativeScreen = (() => {
         this.baseTime = Number(vp.time) || 0;
         this.baseAt = now;
         this.lastMovedAt = now;
+        this.timeReports = (this.timeReports || 0) + 1; // new times from Unity (see watchStart)
       }
       // Loaded once Unity says so, or once the time starts moving (in case it never does).
       if (!this.prepared && (this.state.isPrepared || this.state.duration > 0 || Number(vp.time) > 0)) {
@@ -523,7 +526,13 @@ var FireNativeScreen = (() => {
       this.countdownTimer = setTimeout(() => {
         this.clearHold();
         this.lastToggleAt = -Infinity;
+        // Taken to where it's held (its start) as it plays: on Quest a video held paused at its
+        // first frame can otherwise play on with that frame stuck, as a pause and play (which
+        // seeks) frees it.
+        if (this.prepared && this.endedAt == null) this.seek(this.localTime());
         this.applyPaused();
+        console.log(`[NativeScreen] Countdown over, playing (Unity says ${this.state && this.state.isPlaying ? 'playing' : 'not playing'}, at ${this.localTime().toFixed(2)}s).`);
+        this.watchStart(performance.now(), 0);
         // Once it has had a moment to start. Not a forced jump, which would be heard on every
         // screen as the song starts.
         this.countdownTimer = setTimeout(() => this.requestSync(false), 1000);
@@ -531,6 +540,30 @@ var FireNativeScreen = (() => {
       if (this.prepared && this.localTime() > 0.2) this.seek(0);
       this.lastToggleAt = -Infinity;
       this.applyPaused();
+    }
+
+    /**
+     * Checks that a video let go after its countdown really plays: its time moves. If it hasn't
+     * after START_CHECK_MS, it goes to where the world is (a seek) and plays, as a viewer's pause
+     * and play would, up to START_KICKS times.
+     * @param {number} since - performance.now() when it was let go.
+     * @param {number} kicks - How many times it has been nudged already.
+     */
+    watchStart(since, kicks) {
+      clearTimeout(this.startTimer);
+      const reports = this.timeReports || 0;
+      this.startTimer = setTimeout(() => {
+        if (this.destroyed || this.wantPaused || this.held() || this.isPreview() || this.endedAt != null) return;
+        // Two new times, as the first may be the seek's own.
+        const moved = (this.timeReports || 0) - reports >= 2;
+        console.log(`[NativeScreen] ${START_CHECK_MS / 1000}s after the countdown: time ${moved ? 'moving' : 'not moving'} (Unity: time ${Number(this.vp && this.vp.time).toFixed(2)}, ${this.state && this.state.isPlaying ? 'playing' : 'not playing'}).`);
+        if (moved || kicks >= START_KICKS) return;
+        console.warn('[NativeScreen] It hasn\'t started, so it goes to where the world is and plays.');
+        this.lastToggleAt = -Infinity;
+        this.requestSync(true);
+        this.applyPaused();
+        this.watchStart(performance.now(), kicks + 1);
+      }, START_CHECK_MS);
     }
 
     /** Ends a hold, so the next applyPaused may play. @returns {boolean} whether there was one. */
@@ -764,6 +797,7 @@ var FireNativeScreen = (() => {
       clearTimeout(this.settleTimer);
       clearTimeout(this.readyTimer);
       clearInterval(this.overlayTimer);
+      clearTimeout(this.startTimer);
       // Destroying the object destroys the video player with it.
       if (this.go) this.core.destroyObject(this.go);
       this.go = null;

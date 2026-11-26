@@ -908,8 +908,8 @@ class App {
    * browser page goes as the world's player takes its place, so counting pages would stop
    * waiting for exactly the screens that load slowest.
    *
-   * Karaoke waits too, for at least its countdown (`minWait`), then counts down from it again
-   * once everyone has loaded the song, so every singer gets a full countdown. A paused track
+   * Karaoke waits too, for up to its ready-delay, then counts down (`minWait`) from when everyone
+   * has loaded the song, or the wait is over, so every singer gets one full countdown. A paused track
    * waits for the host anyway, and a live video starts at its live point, so neither waits. Nor
    * does a room with no screen.
    * @param {Object} player - The room.
@@ -927,11 +927,15 @@ class App {
     const delay = player.readyDelay != null ? player.readyDelay : READY_DELAY_DEFAULT_S;
     const wait = Math.max(minWait, delay);
     const viewers = new Set(player.sockets.filter(App.isScreenSocket).map(App.viewerKey));
-    if (!(wait > minWait) || !viewers.size) return;
+    if (!(delay > 0) || !viewers.size) return;
     const now = new Date().getTime() / 1000;
-    player.lastStartTime = now + wait;
-    player.currentTime = -wait;
-    player.readyGate = { link: track.link, start: player.lastStartTime, since: now, waiting: viewers, lead: minWait };
+    // Karaoke's countdown comes after the wait, not inside it, so it never runs twice: everyone's
+    // screen shows its numbers only in the last minWait seconds, which start once all have loaded
+    // the song (see releaseIfReady), or when the wait for them is over.
+    const total = minWait > 0 ? delay + minWait : wait;
+    player.lastStartTime = now + total;
+    player.currentTime = -total;
+    player.readyGate = { link: track.link, start: player.lastStartTime, deadline: now + total - minWait, since: now, waiting: viewers, lead: minWait };
   }
 
   /** A socket that is, or speaks for, a viewer's screen: their browser page, or their space page (the world's video player). */
@@ -970,24 +974,17 @@ class App {
     if (!gate) return;
     const now = new Date().getTime() / 1000;
     const track = player.playlist[player.currentTrack];
-    if (!track || track.link !== gate.link || player.paused || player.lastStartTime !== gate.start || now >= gate.start) {
+    if (!track || track.link !== gate.link || player.paused || player.lastStartTime !== gate.start || now >= gate.deadline) {
       player.readyGate = null;
       return;
     }
     if (gate.waiting.size) return;
     player.readyGate = null;
-    let start;
-    if (gate.lead > 0) {
-      // Karaoke counts down in full from here (gate.lead), once everyone has the song, even when
-      // that's later than the wait's end: ready at 2 s of a 3 s countdown starts at 5 s, ready at
-      // 6 s starts at 9 s. Readiness only counts before the wait's end (above), so a song starts
-      // at most gate.lead after it.
-      start = Math.min(now + gate.lead, gate.start + gate.lead);
-      if (start === player.lastStartTime) return;
-    } else {
-      start = now + READY_LEAD_S;
-      if (start >= player.lastStartTime) return;
-    }
+    // Karaoke counts down in full from here (gate.lead), once everyone has the song: ready at 2 s
+    // starts at 5 s, at 6 s starts at 9 s. Readiness counts until the wait's end (gate.deadline),
+    // which is gate.lead before the start, so this is never later than the start it replaces.
+    const start = now + (gate.lead > 0 ? gate.lead : READY_LEAD_S);
+    if (start >= player.lastStartTime) return;
     player.lastStartTime = start;
     player.currentTime = now - start;
     console.log(`[READY] Every screen loaded "${track.title || track.link}" in ${(now - gate.since).toFixed(1)}s; starting it in ${(start - now).toFixed(1)}s for ${instanceId}.`);

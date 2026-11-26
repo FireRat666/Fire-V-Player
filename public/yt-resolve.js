@@ -105,6 +105,24 @@
   // The video stream: H.264 in MP4, as sharp as allowed. By the label, not the height (a widescreen
   // film's "1080p" is 1920x804), and never taller than wide (Shorts, which a 16:9 screen stretches).
   // Within a quality, the lowest frame rate, then the lowest bitrate.
+  // Every usable stream, the best choice first (as pickVideo), then the rest of that quality, then
+  // the qualities below: a stream whose index won't load is passed over for the next (see resolve).
+  function videoChoices(formats, maxHeight) {
+    var usable = formats.filter(function (f) {
+      return hasRanges(f) && /^video\/mp4/.test(f.mimeType || '') && /avc1/.test(f.mimeType || '')
+        && !(Number(f.width) < Number(f.height));
+    });
+    var ladder = QUALITIES.filter(function (q) { return q <= maxHeight; });
+    if (!ladder.length) ladder = [QUALITIES[QUALITIES.length - 1]];
+    var out = [];
+    ladder.forEach(function (q) {
+      var at = usable.filter(function (f) { return labelOf(f) === q; });
+      at.sort(function (a, b) { return (Number(a.fps) || 0) - (Number(b.fps) || 0) || (Number(a.bitrate) || 0) - (Number(b.bitrate) || 0); });
+      out = out.concat(at);
+    });
+    return out;
+  }
+
   function pickVideo(formats, maxHeight) {
     var usable = formats.filter(function (f) {
       return hasRanges(f) && /^video\/mp4/.test(f.mimeType || '') && /avc1/.test(f.mimeType || '')
@@ -151,7 +169,28 @@
     return refs.length ? { first: idxStart + off + boxSize + firstOffset, refs: refs } : null;
   }
 
-  function readIndex(f) {
+  // A stream's index, asked for again once if it fails: YouTube sometimes sends the request on to
+  // another of its servers, which the browser may not let this page read.
+  function readIndex(f, retried) {
+    return readIndexOnce(f).catch(function (e) {
+      if (retried) throw e;
+      log('The stream index failed (' + ((e && e.message) || e) + '), asking again.');
+      return new Promise(function (r) { setTimeout(r, 400); }).then(function () { return readIndex(f, true); });
+    });
+  }
+
+  // The video stream and its index: the first of `choices` whose index loads (at most 4 tried).
+  function firstVideo(choices, i) {
+    i = i || 0;
+    var f = choices[i];
+    return readIndex(f).then(function (sidx) { return { f: f, sidx: sidx }; }, function (e) {
+      if (i + 1 >= Math.min(choices.length, 4)) throw e;
+      log('Trying another stream (' + (labelOf(choices[i + 1]) || '?') + 'p) instead.');
+      return firstVideo(choices, i + 1);
+    });
+  }
+
+  function readIndexOnce(f) {
     var start = Number(f.indexRange.start), end = Number(f.indexRange.end);
     return fetch(f.url + '&range=' + start + '-' + end, { credentials: 'omit' })
       .then(function (r) {
@@ -247,8 +286,9 @@
         fail(n, tall ? "It's a vertical video (a Short)." : 'YouTube gave no H.264 and AAC streams for it.', { shorts: tall });
         return;
       }
-      return Promise.all([readIndex(v), readIndex(a)]).then(function (idx) {
-        var spec = { v: track(v, idx[0], true), a: track(a, idx[1], false), durMs: Number(v.approxDurationMs) || Number(a.approxDurationMs) || 0 };
+      return Promise.all([firstVideo(videoChoices(formats, maxHeight)), readIndex(a)]).then(function (idx) {
+        v = idx[0].f;
+        var spec = { v: track(v, idx[0].sidx, true), a: track(a, idx[1], false), durMs: Number(v.approxDurationMs) || Number(a.approxDurationMs) || 0 };
         return packToFit(spec).then(function (m) {
           send({ type: 'result', n: n, ok: true, m: m, title: details.title || '', height: labelOf(v), durMs: spec.durMs });
         });

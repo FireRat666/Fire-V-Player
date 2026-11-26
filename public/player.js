@@ -45,6 +45,9 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
 // without telling the page, and the screen stays on the error. A track that should be playing
 // but hasn't moved for this long is loaded again where the world is; if it still doesn't move,
 // the YouTube player is replaced with a new one, as reloading the page would.
+// Karaoke's countdown shows numbers for its last this many seconds (the server's karaoke
+// countdown). Before that the room is waiting for everyone's screen to load, which says Get ready.
+const COUNTDOWN_NUMBERS_S = 3;
 const STALL_CHECK_MS = 2000;
 const STALL_RELOAD_MS = 15000;
 // A live point report the server didn't take (it couldn't confirm the video is live) is sent again
@@ -1435,9 +1438,10 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
           this.syncAfterLoad();
           return;
         }
-        // A new number each second, over the whole screen.
+        // A new number each second, over the whole screen, for the last few: before that it's
+        // still waiting for everyone's screen to load the song (see the server's holdForReady).
         const left = Math.ceil((this.holdUntil - Date.now()) / 1000);
-        if (countdown && left !== shown) { shown = left; this.showCountdown(left); }
+        if (countdown && left !== shown && left <= COUNTDOWN_NUMBERS_S) { shown = left; this.showCountdown(left); }
         try {
           const state = this.player.getPlayerState();
           if (!this.hasTrackLoaded(video)) {

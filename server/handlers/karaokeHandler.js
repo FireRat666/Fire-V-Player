@@ -20,8 +20,9 @@ const { videoById } = require('../youtube/search.js');
  */
 const isApproved = singer => singer.approved !== false;
 /**
- * Seconds a karaoke song waits before it starts, so every device has loaded it and they all
- * start together. The song is sent with its time at minus this, counting up to 0.
+ * Seconds a karaoke song counts down before it starts. The song is sent with its time at minus
+ * this, counting up to 0. The room also waits for everyone's screen to load the song, for up to
+ * the snippet's ready-delay, and then counts this down in full (see App.holdForReady).
  */
 const KARAOKE_COUNTDOWN_S = 3;
 
@@ -222,7 +223,9 @@ async function playNextKaraokeSong(app, instanceId) {
   player.playlist.push(newVideo);
   
   player.lastStartTime = (new Date().getTime() / 1000) + KARAOKE_COUNTDOWN_S;
-  
+  // Waits for everyone's screen too (a Quest takes longest), so nobody starts the song late.
+  app.holdForReady(player, KARAOKE_COUNTDOWN_S);
+
   // Remove the singer from the upcoming queue *after* getting their info.
   player.singers.splice(index, 1);
   
@@ -365,6 +368,7 @@ async function restartSong(app, ws) {
     player.lastStartTime = (new Date().getTime() / 1000) + KARAOKE_COUNTDOWN_S;
     player.currentTime = -KARAOKE_COUNTDOWN_S;
     player.paused = false; // a restart plays from the start, like a new song
+    app.holdForReady(player, KARAOKE_COUNTDOWN_S);
 
     player.sockets.forEach(socket => {
       app.send(socket, Commands.TRACK_CHANGED, { newTrackIndex: player.currentTrack, track: player.playlist[player.currentTrack], paused: player.paused, newLastStartTime: player.lastStartTime, newCurrentTime: player.currentTime });

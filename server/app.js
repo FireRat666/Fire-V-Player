@@ -37,7 +37,7 @@ const SkipJumpTimeKaraoke = 0.25;
  * The longest a new playlist track waits for the room's screens to load it before it starts,
  * unless the snippet's ready-delay says otherwise (see holdForReady).
  */
-const READY_DELAY_DEFAULT_S = 5;
+const READY_DELAY_DEFAULT_S = 8;
 /** The most ready-delay can be. */
 const READY_DELAY_MAX_S = 15;
 /** How far ahead a track starts once every screen has loaded it, so the message reaches them first. */
@@ -343,10 +343,14 @@ class App {
 
     // Remove the disconnected socket
     videoPlayer.sockets = videoPlayer.sockets.filter(_ws => _ws !== ws);
-    // A screen that left can't load the track the room is waiting on.
-    if (videoPlayer.readyGate) {
-      videoPlayer.readyGate.waiting.delete(ws);
-      this.releaseIfReady(instanceId);
+    // A viewer who left can't load the track the room is waiting on. One still here with their
+    // other page (the browser page goes as the world's video player takes its place) still can.
+    if (videoPlayer.readyGate && App.isScreenSocket(ws)) {
+      const key = App.viewerKey(ws);
+      if (!videoPlayer.sockets.some(s => App.isScreenSocket(s) && App.viewerKey(s) === key)) {
+        videoPlayer.readyGate.waiting.delete(key);
+        this.releaseIfReady(instanceId);
+      }
     }
 
     // Handle host disconnection. This logic is specifically for when the host leaves the 3D space.
@@ -898,26 +902,46 @@ class App {
    * (TRACK_READY); once all have, it starts at once (READY_START). A screen that never says only
    * holds the room for the delay, and then catches up as before.
    *
-   * Karaoke has its own countdown, a paused track waits for the host anyway, and a live video
-   * starts at its live point, so none of them wait. Nor does a room with no screen.
+   * The room waits for each viewer, not each page: a viewer's screen is a browser page (a
+   * "player" socket) or the world's own video player, which reports over their space page's
+   * socket (TRACK_READY with native: true), so a viewer counts while either socket is here. The
+   * browser page goes as the world's player takes its place, so counting pages would stop
+   * waiting for exactly the screens that load slowest.
+   *
+   * Karaoke waits too, for at least its countdown (`minWait`), then counts down from it again
+   * once everyone has loaded the song, so every singer gets a full countdown. A paused track
+   * waits for the host anyway, and a live video starts at its live point, so neither waits. Nor
+   * does a room with no screen.
    * @param {Object} player - The room.
+   * @param {number} [minWait] - Karaoke's countdown, in seconds: the song never starts sooner.
    */
-  holdForReady(player) {
+  holdForReady(player, minWait = 0) {
     player.readyGate = null;
     // A track start, even of the same track again: the next tick takes a live one to its live
     // point (see tickAllInstances), and a seek made before it no longer counts.
     player.liveTrack = null;
     player.seekedTrack = null;
-    if (player.isKaraoke || player.paused) return;
+    if (player.paused || (player.isKaraoke && !(minWait > 0))) return;
     const track = player.playlist[player.currentTrack];
     if (!track || track.live) return;
-    const wait = player.readyDelay != null ? player.readyDelay : READY_DELAY_DEFAULT_S;
-    const screens = player.sockets.filter(s => s.type === 'player');
-    if (!(wait > 0) || !screens.length) return;
+    const delay = player.readyDelay != null ? player.readyDelay : READY_DELAY_DEFAULT_S;
+    const wait = Math.max(minWait, delay);
+    const viewers = new Set(player.sockets.filter(App.isScreenSocket).map(App.viewerKey));
+    if (!(wait > minWait) || !viewers.size) return;
     const now = new Date().getTime() / 1000;
     player.lastStartTime = now + wait;
     player.currentTime = -wait;
-    player.readyGate = { link: track.link, start: player.lastStartTime, since: now, waiting: new Set(screens) };
+    player.readyGate = { link: track.link, start: player.lastStartTime, since: now, waiting: viewers, lead: minWait };
+  }
+
+  /** A socket that is, or speaks for, a viewer's screen: their browser page, or their space page (the world's video player). */
+  static isScreenSocket(s) {
+    return (s.type === 'player' || s.type === 'space') && !!s.u && s.u.id != null && s.u.id !== '';
+  }
+
+  /** The viewer a screen socket belongs to (see holdForReady). */
+  static viewerKey(s) {
+    return String(s.u.id);
   }
 
   /**
@@ -928,8 +952,10 @@ class App {
   trackReady(ws, data) {
     const player = this.videoPlayers[ws.i];
     const gate = player && player.readyGate;
-    if (!gate || !data || data.link !== gate.link) return;
-    gate.waiting.delete(ws);
+    if (!gate || !data || data.link !== gate.link || !App.isScreenSocket(ws)) return;
+    // From a space page, only for the world's video player, which reports there.
+    if (ws.type === 'space' && data.native !== true) return;
+    gate.waiting.delete(App.viewerKey(ws));
     this.releaseIfReady(ws.i);
   }
 
@@ -950,7 +976,8 @@ class App {
     }
     if (gate.waiting.size) return;
     player.readyGate = null;
-    const start = now + READY_LEAD_S;
+    // Karaoke counts down in full from here (gate.lead), once everyone has the song.
+    const start = now + (gate.lead > 0 ? gate.lead : READY_LEAD_S);
     if (start >= player.lastStartTime) return;
     player.lastStartTime = start;
     player.currentTime = now - start;

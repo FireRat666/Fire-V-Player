@@ -2603,7 +2603,7 @@ var Core = class {
     this.setOrDefault("youtube-native", this.currentScript && this.currentScript.snippet ? 'true' : 'false');
     this.setOrDefault("one-for-each-instance", "false");
     // The longest a new playlist track waits for every screen to load it, in seconds (0: no wait).
-    this.setOrDefault("ready-delay", '5');
+    this.setOrDefault("ready-delay", '8');
     // The room. Pages the player opens get the finished room in their address (?instance=). Only
     // those pages (on the player's own server) take it from there: a space's own address can have
     // ?instance= too (a private copy of the space), and that's already part of the room.

@@ -11,11 +11,6 @@
  *   GET /yt-hls/audio.m3u8?m=…    the sound's
  *
  * The three are in one folder, as the master playlist points at the others by relative address.
- *
- * For debugging, two environment settings (both off unless set): FVP_HLS_DEBUG=1 logs each playlist
- * the video player asks for, and FVP_HLS_PROXY=1 also sends the stream itself through this server
- * (GET /yt-hls/proxy), logging each piece the player asks for and YouTube's answer. That only works
- * for a server on the same machine (the same address) as the client, as YouTube ties the stream to it.
  * @module server/youtube/hls
  */
 
@@ -116,9 +111,8 @@ function masterPlaylist(spec, m) {
  * One stream's playlist: its init section, then each fragment as a byte range of the same file.
  * @param {Object} t - The stream (spec.v or spec.a).
  */
-function mediaPlaylist(t, kind) {
-  // FVP_HLS_PROXY=1 (debugging): the stream goes through this server, so its requests show in the log.
-  const u = process.env.FVP_HLS_PROXY ? `proxy?k=${kind || 'x'}&u=${encodeURIComponent(t.u)}` : safeUri(t.u);
+function mediaPlaylist(t) {
+  const u = safeUri(t.u);
   const longest = t.refs.reduce((max, r) => Math.max(max, r[1]), 0);
   const lines = [
     '#EXTM3U',
@@ -143,42 +137,17 @@ function mediaPlaylist(t, kind) {
  * @param {import('express').Express} app
  */
 function setupRoutes(app) {
-  // FVP_HLS_PROXY=1 (debugging only, as every byte of the video then passes through this server):
-  // logs each request the video player makes for the stream, its byte range and YouTube's answer.
-  // Only for a server on the client's own machine: YouTube answers only the address that looked it up.
-  app.get('/yt-hls/proxy', async (req, res) => {
-    if (!process.env.FVP_HLS_PROXY) { res.status(404).end(); return; }
-    const u = String(req.query.u || '');
-    let host = '';
-    try { host = new URL(u).hostname; } catch (e) {}
-    if (!/(^|\.)googlevideo\.com$/.test(host)) { res.status(400).end(); return; }
-    const range = req.get('range');
-    const t0 = Date.now();
-    try {
-      const r = await fetch(u, { headers: range ? { range } : {} });
-      console.log(`[YT-HLS] ${req.query.k} ${range || 'no range'} -> ${r.status} ${r.headers.get('content-type')} ${r.headers.get('content-length')} bytes, ${Date.now() - t0} ms, ${req.get('user-agent')}`);
-      res.status(r.status);
-      for (const h of ['content-type', 'content-length', 'content-range', 'accept-ranges']) if (r.headers.get(h)) res.set(h, r.headers.get(h));
-      const buf = Buffer.from(await r.arrayBuffer());
-      res.end(buf);
-    } catch (e) {
-      console.log(`[YT-HLS] ${req.query.k} ${range} failed: ${e.message}`);
-      res.status(502).end();
-    }
-  });
   app.get('/yt-hls/:file', (req, res, next) => {
     const name = { 'master.m3u8': 'master', 'video.m3u8': 'video', 'audio.m3u8': 'audio' }[req.params.file];
     if (!name) { next(); return; }
     const m = typeof req.query.m === 'string' ? req.query.m : '';
     const spec = unpack(m);
-    // FVP_HLS_DEBUG=1: logs each playlist the video player asks for, with its user agent.
-    if (process.env.FVP_HLS_DEBUG) console.log(`[YT-HLS] ${req.params.file} (${spec ? 'ok' : 'bad'}) from ${req.ip}, ${req.get('user-agent') || 'no user-agent'}${req.get('range') ? `, range ${req.get('range')}` : ''}`);
     res.set('Cache-Control', 'no-store');
     if (!spec) {
       res.status(400).type('text/plain').send('Not a YouTube stream this server can describe.');
       return;
     }
-    const body = name === 'master' ? masterPlaylist(spec, m) : mediaPlaylist(name === 'video' ? spec.v : spec.a, name);
+    const body = name === 'master' ? masterPlaylist(spec, m) : mediaPlaylist(name === 'video' ? spec.v : spec.a);
     res.set('Content-Type', 'application/vnd.apple.mpegurl').send(body);
   });
 }

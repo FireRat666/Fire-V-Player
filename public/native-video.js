@@ -36,6 +36,12 @@ var FireNativeScreen = (() => {
   const STALL_MS = 2500, LONG_STALL_MS = 8000, STALLS = 3, STALL_WINDOW_MS = 60000;
   /** Not counted as stalls: the time just after it starts, a seek, or a play or pause. */
   const STALL_GRACE_MS = 6000;
+  /**
+   * How long a new track sits loaded at its first frame, paused, before this screen tells the room
+   * it's ready (TRACK_READY), so it has some of the video in hand when everyone starts together
+   * and doesn't stutter or skip in its first seconds. Longer on a standalone headset (a Quest).
+   */
+  const SETTLE_MS = 1500, SETTLE_STANDALONE_MS = 3000;
   /** Skip jump increment in seconds for standard and karaoke mode. */
   const SKIP_S = 5, SKIP_KARAOKE_S = 0.25;
   /**
@@ -235,6 +241,7 @@ var FireNativeScreen = (() => {
         this.core.syncSecondScreens(); // its picture is a texture they can show now (see textureId)
         this.reportDuration();
         this.requestSync(true); // start where everyone else is
+        this.reportReadySoon();
       }
       // Not loaded in time: the browser tries it instead (it plays more formats). WebM gets less
       // time, as Unity's player takes only VP8 WebM on PC, and most WebM now is VP9.
@@ -337,6 +344,23 @@ var FireNativeScreen = (() => {
     currentTrack() {
       const p = this.core.player;
       return p && Array.isArray(p.playlist) ? p.playlist[p.currentTrack] : null;
+    }
+
+    /**
+     * Tells the room this screen has the track loaded (see the server's holdForReady), once it
+     * has settled at its first frame for SETTLE_MS. Over the space page's socket, as the world's
+     * video player has no page of its own. A track that isn't waiting for anyone is ignored there.
+     */
+    reportReadySoon() {
+      if (this.isPreview()) return;
+      clearTimeout(this.readyTimer);
+      const standalone = typeof this.core.isStandaloneDevice === 'function' && this.core.isStandaloneDevice();
+      this.readyTimer = setTimeout(() => {
+        if (this.destroyed || !this.prepared || this.isPreview()) return;
+        const track = this.currentTrack();
+        if (!track || track.link !== this.link) return;
+        this.core.sendMessage({ path: Commands.TRACK_READY, data: { link: this.link, native: true } });
+      }, standalone ? SETTLE_STANDALONE_MS : SETTLE_MS);
     }
 
     /** True while a karaoke song is counting down to its start: the file waits, paused, at 0:00. */
@@ -450,6 +474,8 @@ var FireNativeScreen = (() => {
       this.hostSyncPending = true;
       this.holdFromCore();
       this.requestSync(true);
+      // The same file started again (a restart, a one-song playlist): the room waits for it again.
+      if (this.prepared && this.holding()) this.reportReadySoon();
     }
 
     /**
@@ -596,6 +622,7 @@ var FireNativeScreen = (() => {
       clearTimeout(this.resumeSyncTimer);
       clearTimeout(this.countdownTimer);
       clearTimeout(this.settleTimer);
+      clearTimeout(this.readyTimer);
       // Destroying the object destroys the video player with it.
       if (this.go) this.core.destroyObject(this.go);
       this.go = null;

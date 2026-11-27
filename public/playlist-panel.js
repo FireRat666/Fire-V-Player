@@ -212,6 +212,7 @@ var FirePlaylistPanel = class {
     this.searchId = 0; // the latest search's ID: only its reply is shown (see doSearch)
     this.openListId = null;
     this.searchResults = [];
+    this.searchHidden = 0; // results left out as titles for adults (see the note under the results)
     this.searchQuery = '';
     this.searchSource = 'youtube'; // a key of SEARCH_SOURCES
     // Recent searches, kept on this device (like the full playlist page did).
@@ -903,9 +904,9 @@ var FirePlaylistPanel = class {
     return hit;
   }
   // Keeps a successful search's results, the newest SEARCH_CACHE_SIZE searches only.
-  saveSearch(key, query, results) {
+  saveSearch(key, query, results, hidden) {
     const all = this.readSearchCache();
-    all[key] = { query, at: Date.now(), results };
+    all[key] = { query, at: Date.now(), results, hidden: Number(hidden) || 0 };
     const keys = Object.keys(all).sort((a, b) => (all[b].at || 0) - (all[a].at || 0));
     keys.slice(SEARCH_CACHE_SIZE).forEach(k => delete all[k]);
     try {
@@ -922,6 +923,7 @@ var FirePlaylistPanel = class {
     const hit = newest && this.cachedSearch(newest);
     if (!hit) return;
     this.searchResults = hit.results;
+    this.searchHidden = Number(hit.hidden) || 0;
     this.searchQuery = hit.query || '';
     const source = newest.split(':')[0];
     if (SEARCH_SOURCES[source] && this.searchSources().includes(source)) this.searchSource = source;
@@ -1455,6 +1457,8 @@ var FirePlaylistPanel = class {
     const made = await this.kitScrollColumn(this.mainView, { marginTop: '6px' });
     const list = this.listCol = made.col;
     this.scroller = made.scroller;
+    // Under the search results: how many were left out as titles for adults (see render).
+    this.hiddenNote = await this.label(this.mainView, '', { display: 'none', color: '#aaaaaa', fontSize: '18px', textAlign: 'center', whiteSpace: 'normal', flexShrink: 0, marginTop: '4px' });
     // First, so rows added later go after it (it only shows when there are no rows): the kit's
     // empty state, a quiet glyph and a line or two (its icon is set in render).
     this.emptyLabel = this.ui.CreateKitEmptyState(list);
@@ -2754,7 +2758,7 @@ var FirePlaylistPanel = class {
       try {
         const tubi = await this.core.tubiResolver();
         const found = tubi ? await tubi.stream(o.link) : null;
-        if (found && found.ok) what = { title: found.title || o.title, link: o.link, duration: found.duration, thumbnail: found.thumbnail };
+        if (found && found.ok) what = { title: found.title || o.title, link: o.link, duration: found.duration, thumbnail: found.thumbnail, mature: found.mature };
       } catch (e) {}
       if (this.destroyed) return;
     }
@@ -2823,6 +2827,7 @@ var FirePlaylistPanel = class {
       this.searchId++; // a search still waiting doesn't replace these when it's answered
       this.pendingSearchKey = null;
       this.searchResults = kept.results;
+      this.searchHidden = Number(kept.hidden) || 0;
       this.searchPage = 0;
       this.resetScroll();
       const n = kept.results.length;
@@ -2871,8 +2876,11 @@ var FirePlaylistPanel = class {
       console.warn('[PlaylistPanel] Tubi search on this device failed:', e);
     }
     if (this.destroyed || data.searchId !== this.searchId) return; // a newer search replaced it
+    // Titles for adults are left out where the world doesn't allow them (as the server does),
+    // and the note under the results says how many.
     if (results && results.length) {
-      this.onMessage({ path: Commands.SEARCH_RESULTS, data: results, searchId: data.searchId });
+      const allowed = this.withoutMature(results);
+      this.onMessage({ path: Commands.SEARCH_RESULTS, data: allowed, searchId: data.searchId, hidden: results.length - allowed.length });
       return;
     }
     console.log('[PlaylistPanel] No Tubi results from this device, so the server searches.');
@@ -3082,6 +3090,11 @@ var FirePlaylistPanel = class {
     this.renderSoon();
   }
 
+  // The items this world allows: those marked for adults are left out unless it allows them.
+  withoutMature(items) {
+    return this.core.allowMature === true ? items : items.filter(item => !(item && item.mature === true));
+  }
+
   isTubiSeries(link) {
     const m = window.MediaSources ? MediaSources.detect(String(link || '')) : null;
     return !!m && m.type === 'tubi' && m.kind === 'series';
@@ -3101,7 +3114,16 @@ var FirePlaylistPanel = class {
     this.deviceLists.delete(id);
     if (this.destroyed) return;
     if (list && list.items.length) {
-      this.listData.set(id, { state: 'ready', at: Date.now(), title: list.title, items: list.items, skipped: 0, truncated: false, device: true });
+      // Episodes for adults (or a whole series) are left out where the world doesn't allow them.
+      const items = this.withoutMature(list.items);
+      if (!items.length) {
+        const why = this.tr("This series is for adults, and this world doesn't allow them.");
+        this.listData.set(id, { state: 'error', error: why });
+        if (this.openListId === id) this.setStatus(why, 6000);
+        this.renderSoon();
+        return;
+      }
+      this.listData.set(id, { state: 'ready', at: Date.now(), title: list.title, items, skipped: list.items.length - items.length, truncated: false, device: true });
       this.renderSoon();
       return;
     }
@@ -3240,9 +3262,11 @@ var FirePlaylistPanel = class {
         clearInterval(this.searchTimer);
         this.searchTimer = null;
         this.searchResults = Array.isArray(json.data) ? json.data : [];
-        console.log(`[PlaylistPanel] Got ${this.searchResults.length} search results.`);
+        // How many were left out as titles for adults, where the world doesn't allow them.
+        this.searchHidden = Math.max(0, Math.floor(Number(json.hidden) || 0));
+        console.log(`[PlaylistPanel] Got ${this.searchResults.length} search results${this.searchHidden ? ` (${this.searchHidden} hidden as titles for adults)` : ''}.`);
         if (this.pendingSearchKey && this.searchResults.length) {
-          this.saveSearch(this.pendingSearchKey.key, this.pendingSearchKey.query, this.searchResults);
+          this.saveSearch(this.pendingSearchKey.key, this.pendingSearchKey.query, this.searchResults, this.searchHidden);
         }
         this.pendingSearchKey = null;
         this.view = 'main';
@@ -3658,6 +3682,9 @@ var FirePlaylistPanel = class {
       if (this._changed(this.emptyLabel, 'icon', icon)) this.emptyLabel.icon = icon;
     }
     this.display(this.madeWithRow, onSearch && !items.length);
+    const hidden = onSearch ? this.searchHidden || 0 : 0;
+    if (hidden) this.setText(this.hiddenNote, this.tr(hidden === 1 ? '{count} result hidden: it is for adults, and this world does not allow those.' : '{count} results hidden: they are for adults, and this world does not allow those.', { count: hidden }));
+    this.display(this.hiddenNote, hidden > 0);
   }
 
   // YouTube's search thumbnails (e.g. .../hq720.jpg?sqp=...&rs=...) are often WebP despite the

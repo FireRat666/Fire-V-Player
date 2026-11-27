@@ -101,6 +101,7 @@ In a Creator SDK world (`Assets/WebRoot/index.html`), add the player as a snippe
   mute="false"
   captions="true"
   untrusted-links="false"
+  mature-links="false"
   ready-delay="8"
   hand-controls="true"
   position="0 1.5 2"
@@ -298,6 +299,17 @@ These always work, as the sites moderate what's on them:
 | ESO or ESA/Hubble video | `https://www.eso.org/public/videos/eso-jcmw/`, `https://esahubble.org/videos/dome_iya2009/` | Astronomy videos and planetarium shows, played from the site's own MP4. Stays in sync like YouTube. See [ESO and ESA/Hubble videos](#eso-and-esahubble-videos). |
 | Library of Congress film | `https://www.loc.gov/item/mbrs01836081/` | Public-domain films, played from the Library's own video file. Stays in sync like YouTube. See [Library of Congress films](#library-of-congress-films). |
 
+#### Titles for adults
+
+Tubi and the Internet Archive have films for adults among the rest, and neither asks for a viewer's age. They only play where the snippet has `mature-links="true"`; by default they're left out of searches and lists (a note under the search results says how many were hidden), can't be added, and don't play.
+
+- **Tubi:** by the title's rating. G, PG, PG-13, TV-Y, TV-Y7, TV-G, TV-PG and TV-14 play anywhere; R, NC-17, TV-MA and titles that aren't rated need `mature-links`. A series rated TV-MA has all its episodes left out, whatever an episode's own rating.
+- **Internet Archive:** it has no ratings, so the server goes by what it knows of the item. An item needs `mature-links` when it isn't in one of the curated film and TV collections that **Archive Films** searches (anyone can upload anywhere else), when the Archive itself marks it as adult, or when its title, subjects or description use an adult film's words (stag film, nudity, striptease, sexploitation and the like). This catches nearly all of them, but not every one, and it leaves out a few classics too ("Lady of Burlesque").
+
+**Browse** opens Tubi's site whatever the setting, as only the viewer who opened it sees it, but a title for adults found there can't be added to the playlist without `mature-links`.
+
+Each viewer's own world must allow them for them to play on their screen, as with `untrusted-links`. The two are separate: `untrusted-links` doesn't allow titles for adults.
+
 #### Internet radio
 
 Radio stations play in the browser screen, as sound only (the screen stays dark), and are live: each plays until someone skips, with no pause or seek. A station keeps the link it was added by, and the server looks up its stream each time it plays, as stations move their streams now and then.
@@ -409,6 +421,7 @@ All parameters are optional unless marked as **(Required)**.
 | `volume` | The initial volume, from `0` to `100`. | `40` |
 | `mute` | Whether the player should start muted. | `false` |
 | `untrusted-links` | Whether links from any site (video files, `.m3u8` and `.mpd` streams, VRCDN, VDO.Ninja, screen.sdq.st screen shares, radio stations' playlists and streams) can be played, as well as YouTube, Twitch, Vimeo, Tubi, NASA+, the Internet Archive, the Library of Congress, ESO, Shoutcast's and Radio Browser's stations and SomaFM. Off by default, as those links aren't moderated. Each viewer's own world must allow them for them to play on their screen. See [Links from other sites](#links-from-other-sites). | `false` |
+| `mature-links` | Whether titles for adults from Tubi (rated R or TV-MA, or not rated) and the Internet Archive (its adult films) can be found, added and played. Off by default, as neither site asks for a viewer's age. Each viewer's own world must allow them for them to play on their screen. Separate from `untrusted-links`. See [Titles for adults](#titles-for-adults). | `false` |
 | `ready-delay` | The longest, in seconds, a new song waits for everyone's screen to load it before it starts. It starts as soon as every screen has loaded it, so a room of PCs hardly waits, and a slow screen (a Quest) no longer starts the song late and then jumps ahead to catch up. On the world's video player, a screen counts as loaded once it has held the song's first frame for a moment (longer on a Quest), so it starts smoothly. A screen that takes longer than this catches up as before. In karaoke the song says Get ready while it waits, then counts down 3, 2, 1 once everyone has it (or once the wait is over), so a karaoke song waits at most this plus 3 seconds. `0` starts playlist songs at once and gives karaoke its plain 3-second countdown. Up to `15`. Live videos start at their live point, so they don't wait. | `8` |
 | `captions` | Whether closed captions start on. Each viewer can turn them on or off in the panel's More view, and their choice is remembered on their device. | `true` |
 | `resolution` | The width in pixels of the screen's page, which is 16:9 (`1600` is 1600 x 900). Higher is sharper, and YouTube and Twitch lay out as for a bigger window, but each frame costs more to draw, especially on Quest. The screen stays the same size in the world whatever the resolution. Each viewer can pick another for their own screen in the panel's More view. From 640 to 3840. | `1600` |

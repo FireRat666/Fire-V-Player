@@ -228,6 +228,7 @@ FVP_STRINGS["ja"] = {
   "Theme": "テーマ",
   "These only work for space admins (the world owner and community moderators). The mode switches everyone in the space. Admin Take Over is under Who controls the player, beside the host.": "これらは、宇宙管理者(世界所有者とコミュニティモデレーター)のためにのみ機能します。 モードはスペースのみんなを切り替えます。 管理者テイクオーバーは、ホストの横にあるプレーヤーを制御する人の下にあります.",
   "This app can't open a browser window here.": "このアプリは、ブラウザウィンドウを開くことができません.",
+  "This series is for adults, and this world doesn't allow them.": "このシリーズは大人向けで、この世界は許しません.",
   "Tubi is open beside the panel. Open a movie or a series there to add it.": "Tubiはパネルの横に開きます。 そこに映画やシリーズを開き、追加します.",
   "Tubi series": "Tubiシリーズ",
   "Tubi video": "Tubi ビデオ",
@@ -281,8 +282,10 @@ FVP_STRINGS["ja"] = {
   "you": "あなた",
   "{count} result": "{count} 結果",
   "{count} result (from your recent searches)": "{count} 結果(最近の検索から)",
+  "{count} result hidden: it is for adults, and this world does not allow those.": "{count} 結果が隠されました: それは大人のためであり、この世界はそれらを許可しません.",
   "{count} results": "{count} 結果",
   "{count} results (from your recent searches)": "{count} 結果(最近の検索から)",
+  "{count} results hidden: they are for adults, and this world does not allow those.": "{count} 結果は隠されています: 彼らは大人のためであり、この世界はそれらを許可しません.",
   "{count} skipped": "{count} スキップ",
   "{count} video": "動画 {count} 本",
   "{count} videos": "動画 {count} 本"

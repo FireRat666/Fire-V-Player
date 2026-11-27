@@ -28,6 +28,18 @@ const MAX_WAITING = 30;
  * @throws {Error} If video resolution fails or link is untrusted/invalid.
  */
 async function resolveVideoData(app, ws, v) {
+  // What the device that looked a Tubi title up said of its rating counts only when the server
+  // can't look it up itself (see media.screenMature).
+  const said = v && typeof v === 'object' && typeof v.mature === 'boolean' ? v.mature : undefined;
+  if (v && typeof v === 'object') {
+    v = { ...v };
+    delete v.mature;
+  }
+  return media.screenMature(ws, await resolveVideoLink(app, ws, v), said);
+}
+
+/** resolveVideoData, before the item is checked against the world's mature-links setting. */
+async function resolveVideoLink(app, ws, v) {
   if (typeof v === 'string') {
     const videoId = app.getYoutubeId(v);
     if (!videoId) {
@@ -381,7 +393,9 @@ async function removePlaylistItem(app, ws, index) {
  */
 async function loadPlaylistSource(ws, id) {
   const list = await lists.loadAny(id, MAX_PLAYLIST_IMPORT);
-  const items = list.items.filter(item => !media.detect(item.link) || media.allowedFor(ws, item.link));
+  const allowed = list.items.filter(item => !media.detect(item.link) || media.allowedFor(ws, item.link));
+  // Titles for adults are left out where the world doesn't allow them (see media.filterMature).
+  const { items } = media.filterMature(ws, allowed);
   return { title: list.title, items, skipped: list.items.length - items.length + (list.dropped || 0), truncated: !!list.truncated };
 }
 

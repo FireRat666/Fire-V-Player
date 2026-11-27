@@ -168,7 +168,9 @@ function tubiItem(c, kind) {
     link: `https://tubitv.com/${path}/${c.id}`,
     channel: { name: year ? `Tubi, ${year}` : 'Tubi', link: '' },
     description: clean(c.description, 300),
-    source: 'tubi'
+    source: 'tubi',
+    // R, TV-MA, not rated (see MediaSources.tubiMature): only where the world allows them.
+    mature: MediaSources.tubiMature(c.ratings)
   };
 }
 
@@ -190,7 +192,7 @@ async function tubiStream(kind, id) {
     if (c.needs_login) throw new Error('Tubi only plays this one for signed-in viewers.');
     throw new Error("Tubi only offers this one with copy protection, which can't play here.");
   }
-  return { url: pick.manifest.url, live: false };
+  return { url: pick.manifest.url, live: false, mature: MediaSources.tubiMature(c.ratings) };
 }
 
 /**
@@ -226,6 +228,8 @@ async function readTubiSeries(id, season) {
   const byId = (data.video && data.video.byId) || {};
   const series = byId[`0${id}`] || byId[id];
   if (!series) throw new Error("That Tubi series isn't available.");
+  // A series for adults has every episode for adults, whatever an episode's own rating.
+  const seriesMature = MediaSources.tubiMature(series.ratings);
   const num = (v, fallback) => (Number.isFinite(Number(v)) && String(v).trim() !== '' ? Number(v) : fallback);
   // [{n, eps: [{id, num}]}]: the full list where the page has it, else the site data's.
   const listed = (data.fvpSeasons && data.fvpSeasons.length ? data.fvpSeasons : series.seasons || []).map((s, i) => ({
@@ -251,6 +255,8 @@ async function readTubiSeries(id, season) {
   const entry = (k, item) => {
     const { season: n, ep } = wanted[k];
     item = Object.assign({}, item || { title: '', thumbnail: '', duration: 0, link: `https://tubitv.com/tv-shows/${ep.id}` });
+    // One without its details goes by the series' rating.
+    item.mature = seriesMature || (typeof item.mature === 'boolean' ? item.mature : seriesMature);
     // Most titles already say "S01:E03 - ..."; one that doesn't gets it.
     if (!/^S\d+\s*:?\s*E\d+/i.test(item.title) && n < 1000 && ep.num < 1000) {
       item.title = clean(`S${String(n).padStart(2, '0')}:E${String(ep.num).padStart(2, '0')}${item.title ? ` - ${item.title}` : ''}`);
@@ -284,7 +290,7 @@ async function readTubiSeries(id, season) {
   }
   if (partial) console.warn(`[TUBI] series/${id}: some episodes are listed without their details.`);
   const title = clean(series.title, 120) || 'Tubi series';
-  return { title: season && season !== 'first' ? clean(`${title}, Season ${season}`, 120) : title, items, partial };
+  return { title: season && season !== 'first' ? clean(`${title}, Season ${season}`, 120) : title, items, partial, mature: seriesMature };
 }
 
 /** The titles in a Tubi category (up to 50, as its page shows). Only these are cached, not the page. */
@@ -475,9 +481,33 @@ async function resolveLinks(link) {
   return one ? [one] : [];
 }
 
-/** A playlist item has a title, picture, length and link (search results carry more). */
+/**
+ * A playlist item has a title, picture, length and link (search results carry more), and whether
+ * it's for adults, which is taken off before it goes in the playlist (see media.screenMature).
+ */
 function strip(item) {
-  return { title: item.title, thumbnail: item.thumbnail, duration: item.duration, link: item.link };
+  const kept = { title: item.title, thumbnail: item.thumbnail, duration: item.duration, link: item.link };
+  if (typeof item.mature === 'boolean') kept.mature = item.mature;
+  return kept;
+}
+
+/**
+ * Whether a Tubi link's title is for adults (see MediaSources.tubiMature): a movie or episode by
+ * its own rating, a series by its own.
+ * @param {string} link
+ * @returns {Promise<boolean>}
+ */
+async function isMature(link) {
+  const media = MediaSources.detect(link);
+  if (!media || media.type !== 'tubi') throw new Error("That isn't a Tubi link.");
+  if (media.kind === 'series') {
+    const data = await tubiPage(`series/${media.id}`);
+    const byId = (data.video && data.video.byId) || {};
+    const series = byId[`0${media.id}`] || byId[media.id];
+    if (!series) throw new Error("That Tubi series isn't available.");
+    return MediaSources.tubiMature(series.ratings);
+  }
+  return MediaSources.tubiMature((await tubiContent(media.kind, media.id)).ratings);
 }
 
 /**
@@ -522,6 +552,6 @@ async function loadList(source) {
 }
 
 module.exports = {
-  resolveLink, resolveLinks, streamFor, listSource, loadList,
+  resolveLink, resolveLinks, streamFor, listSource, loadList, isMature,
   searchTubi, searchNasa, tubiCategories, parseTubiData, tubiPictureFile
 };

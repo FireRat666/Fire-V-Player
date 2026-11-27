@@ -95,6 +95,8 @@
         var year = t.querySelector('.web-content-tile__year');
         var length = t.querySelector('.web-content-tile__duration');
         var tags = t.querySelector('.web-content-tile__tags');
+        // Its rating's badge ("TV-MA"), for leaving titles for adults out (see MediaSources.tubiMature).
+        var rating = t.querySelector('.web-content-tile__rating .web-rating') || t.querySelector('.web-rating');
         out.push({
           kind: m[1] === 'series' ? 'series' : m[1] === 'tv-shows' ? 'episode' : 'movie',
           id: m[2],
@@ -102,6 +104,7 @@
           year: clean(year && year.textContent, 4),
           duration: parseLength(length && length.textContent),
           tags: clean(tags && tags.textContent, 120),
+          rating: clean(rating && rating.textContent, 20),
           thumbnail: img ? String(img.currentSrc || img.src || '') : ''
         });
       }
@@ -176,6 +179,11 @@
     return null;
   }
 
+  // A title's ratings' values (["TV-MA"]), as its page data has them.
+  function ratings(c) {
+    return ((c && c.ratings) || []).map(function (r) { return clean(r && (r.value || r.code), 20); }).filter(Boolean);
+  }
+
   function picture(c) {
     var list = (c && (c.thumbnails || c.landscape_images || c.posterarts)) || [];
     return https(list[0] || '');
@@ -192,7 +200,7 @@
       var pick = plain.filter(function (r) { return /264|avc/i.test(r.codec || ''); })[0]
         || plain.filter(function (r) { return !/265|hevc/i.test(r.codec || ''); })[0] || plain[0];
       if (!pick) throw new Error(c.needs_login ? 'Tubi only plays this one for signed-in viewers.' : "Tubi only offers this one with copy protection, which can't play here.");
-      send({ type: 'result', n: n, ok: true, url: pick.manifest.url, title: clean(c.title, 200), duration: Math.round(Number(c.duration) || 0) * 1000, thumbnail: picture(c) });
+      send({ type: 'result', n: n, ok: true, url: pick.manifest.url, title: clean(c.title, 200), duration: Math.round(Number(c.duration) || 0) * 1000, thumbnail: picture(c), ratings: ratings(c) });
     }).catch(function (e) { send({ type: 'result', n: n, ok: false, reason: String(e && e.message || e) }); });
   }
 
@@ -250,7 +258,9 @@
           title: title || 'Tubi episode',
           thumbnail: c ? picture(c) : '',
           duration: c ? Math.max(0, Math.round(Number(c.duration) || 0)) * 1000 : 0,
-          link: 'https://tubitv.com/tv-shows/' + w.ep.id
+          link: 'https://tubitv.com/tv-shows/' + w.ep.id,
+          // Without its details, the series' own rating stands for it.
+          ratings: c ? ratings(c) : null
         };
       }
       function worker() {
@@ -270,7 +280,7 @@
         late = true;
         for (var k = 0; k < items.length; k++) if (!items[k]) { items[k] = entry(k, null); partial = true; }
         var name = clean(s.title, 120) || 'Tubi series';
-        send({ type: 'result', n: n, ok: true, title: season ? clean(name + ', Season ' + season, 120) : name, items: items, partial: partial });
+        send({ type: 'result', n: n, ok: true, title: season ? clean(name + ', Season ' + season, 120) : name, items: items, partial: partial, ratings: ratings(s) });
       });
     }).catch(function (e) { send({ type: 'result', n: n, ok: false, reason: String(e && e.message || e) }); });
   }

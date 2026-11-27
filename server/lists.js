@@ -19,6 +19,7 @@ const { Readable } = require('stream');
 const MediaSources = require('../public/media-sources.js');
 const media = require('./media.js');
 const streaming = require('./streaming.js');
+const archive = require('./archive.js');
 const radio = require('./radio.js');
 const loc = require('./loc.js');
 const eso = require('./eso.js');
@@ -515,12 +516,16 @@ function archiveItem(id, max) {
     const chosen = [...byVideo.values()].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
     if (!chosen.length) throw new ListError('That archive.org item has no video or audio files.');
     const itemTitle = clean((meta.metadata && [].concat(meta.metadata.title)[0]) || id);
+    // An item for adults (see archive.isMatureMeta) is left out where the world doesn't allow them.
+    const mature = archive.isMatureMeta(meta.metadata);
     const items = chosen.slice(0, max).map(f => ({
       title: clean(chosen.length === 1 ? itemTitle : (f.title || stripExtension(f.name.split('/').pop()))) || itemTitle,
       thumbnail: `https://archive.org/services/img/${encodeURIComponent(id)}`,
       // Seconds ("370.3"), or sometimes "m:ss" / "h:mm:ss".
       duration: Math.round(String(f.length || '').split(':').reduce((acc, n) => acc * 60 + Number(n), 0) * 1000) || 0,
       link: `https://archive.org/download/${encodeURIComponent(id)}/${f.name.split('/').map(encodeURIComponent).join('/')}`
+    ,
+      mature
     }));
     return { title: itemTitle, items, truncated: chosen.length > max };
   });
@@ -571,7 +576,8 @@ async function resolveEntry(entry, limit) {
   }
   if (!MediaSources.detect(input)) return []; // a list inside a list, a web page, or nonsense
   const item = await media.resolveMediaLink(input);
-  return item ? [titled({ title: clean(item.title), thumbnail: item.thumbnail || '', duration: Number(item.duration) || 0, link: item.link })] : [];
+  return item ? [titled({ title: clean(item.title), thumbnail: item.thumbnail || '', duration: Number(item.duration) || 0, link: item.link,
+    ...(typeof item.mature === 'boolean' ? { mature: item.mature } : {}) })] : [];
 }
 
 async function resolveEntries(entries, limit) {

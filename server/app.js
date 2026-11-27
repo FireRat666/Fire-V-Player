@@ -254,6 +254,16 @@ class App {
         res.status(422).json({ error: e.message || "Couldn't find that video's stream." });
       }
     });
+    // Whether a Tubi or Internet Archive link is for adults (see media.isMature), asked for by the
+    // player page before it plays an Archive file where the viewer's world doesn't allow them.
+    this.app.get('/api/rating', async (req, res) => {
+      const link = String(req.query.link || '').slice(0, 1000);
+      try {
+        res.set('Cache-Control', 'no-store').json({ mature: await media.isMature(link) });
+      } catch (e) {
+        res.status(422).json({ error: e.message || "Couldn't look that video's rating up." });
+      }
+    });
     // A Tubi picture as a JPEG, for the panel's thumbnails: Unity can't show the WebP that
     // Tubi's picture server sends it (see streaming.tubiPictureFile). Only Tubi's pictures.
     this.app.get('/api/tubi-picture', async (req, res) => {
@@ -471,6 +481,8 @@ class App {
           ws.i = msg.data;
           // The world's snippet may allow links from any site (untrusted-links="true").
           ws.allowUntrusted = msg.untrusted === true;
+          // And titles for adults from Tubi and the Internet Archive (mature-links="true").
+          ws.allowMature = msg.mature === true;
           // The space and player pages also name the room its code used before (core.js setRoom),
           // so the old room is copied whichever of them joins first.
           await this.createVideoPlayer(msg.data, msg.u, ws, typeof msg.legacy === 'string' ? msg.legacy : null);
@@ -1137,7 +1149,13 @@ class App {
     const rawId = isObject ? data.searchId : undefined;
     const tag = (typeof rawId === 'number' && Number.isFinite(rawId)) || (typeof rawId === 'string' && rawId.length <= 64)
       ? { searchId: rawId } : undefined;
-    const results = videos => this.send(ws, Commands.SEARCH_RESULTS, videos, tag);
+    // Titles for adults (Tubi's R and TV-MA, the Archive's adult films) are left out where the
+    // world doesn't allow them (see media.filterMature).
+    // `hidden` says how many were left out, for the panel's note under the results.
+    const results = videos => {
+      const { items, skipped } = media.filterMature(ws, videos);
+      this.send(ws, Commands.SEARCH_RESULTS, items, Object.assign({}, tag, skipped ? { hidden: skipped } : {}));
+    };
     const fail = message => {
       results([]);
       this.send(ws, Commands.ERROR, { message }, tag);
@@ -1155,7 +1173,10 @@ class App {
         return;
       }
       try {
-        results(await media.resolveMediaLinks(term));
+        const found = await media.resolveMediaLinks(term);
+        // A link to a title for adults says why it has no results.
+        if (found.length && !media.filterMature(ws, found).items.length) fail(media.MATURE_MESSAGE);
+        else results(found);
       } catch (error) {
         fail(error.message);
       }

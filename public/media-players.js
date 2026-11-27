@@ -270,7 +270,39 @@ class VideoElementSource extends BaseMediaSource {
       this.loadStream(opts, el);
       return;
     }
+    // An Internet Archive file is checked first where this viewer's world doesn't allow titles
+    // for adults (see MediaSources.needsRating): the server looks its item's rating up.
+    if (media.type === 'file' && media.archive && !(opts.allowMature && opts.allowMature())) {
+      this.checkRating(opts, () => this.load(opts, media, el, opts.link));
+      return;
+    }
     this.load(opts, media, el, opts.link);
+  }
+
+  /** Asks the server whether this link is for adults (/api/rating), and plays it (`then`) if not. */
+  checkRating(opts, then) {
+    fetch(`/api/rating?link=${encodeURIComponent(opts.link)}`)
+      .then(res => res.json().catch(() => ({})).then(body => {
+        if (!res.ok || typeof body.mature !== 'boolean') throw new Error(body.error || "Couldn't check this video's rating, so it doesn't play here.");
+        return body.mature;
+      }))
+      .then(mature => {
+        if (this.destroyed) return;
+        if (mature) this.refuseMature(opts);
+        else then();
+      })
+      .catch(err => { if (!this.destroyed) opts.onError(err.message); });
+  }
+
+  /** This title is for adults, and this viewer's world doesn't allow them: it says so instead. */
+  refuseMature(opts) {
+    if (this.notice) return;
+    const d = this.notice = document.createElement('div');
+    d.textContent = MediaSources.MATURE_MESSAGE;
+    Object.assign(d.style, { position: 'absolute', inset: '0', display: 'flex', alignItems: 'center', justifyContent: 'center',
+      textAlign: 'center', padding: '0 10%', boxSizing: 'border-box', color: '#ddd', background: '#000', font: '4vw sans-serif' });
+    opts.container.appendChild(d);
+    opts.onError(MediaSources.MATURE_MESSAGE);
   }
 
   /**
@@ -282,9 +314,10 @@ class VideoElementSource extends BaseMediaSource {
     // countries, and the server may be in another), then by the server.
     const media = MediaSources.detect(opts.link);
     if (media && media.type === 'tubi' && typeof opts.deviceStream === 'function') {
-      Promise.resolve(opts.deviceStream(opts.link)).catch(() => null).then(url => {
+      Promise.resolve(opts.deviceStream(opts.link)).catch(() => null).then(found => {
         if (this.destroyed) return;
-        if (url) this.load(opts, { type: 'hls' }, el, url);
+        if (found && found.url && found.mature && !this.matureAllowed(opts)) this.refuseMature(opts);
+        else if (found && found.url) this.load(opts, { type: 'hls' }, el, found.url);
         else this.loadServerStream(opts, el);
       });
       return;
@@ -292,8 +325,14 @@ class VideoElementSource extends BaseMediaSource {
     this.loadServerStream(opts, el);
   }
 
+  /** Whether this viewer's world allows titles for adults (the snippet's mature-links). */
+  matureAllowed(opts) {
+    return !!(opts.allowMature && opts.allowMature());
+  }
+
   /** The server's lookup of a stream (/api/stream). */
   loadServerStream(opts, el) {
+    const media = MediaSources.detect(opts.link);
     fetch(`/api/stream?link=${encodeURIComponent(opts.link)}`)
       .then(res => res.json().catch(() => ({})).then(body => {
         if (!res.ok || !body.url) throw new Error(body.error || "Couldn't find this video's stream.");
@@ -301,6 +340,11 @@ class VideoElementSource extends BaseMediaSource {
       }))
       .then(body => {
         if (this.destroyed) return;
+        // A Tubi title for adults, where this viewer's world doesn't allow them.
+        if (media && media.type === 'tubi' && body.mature !== false && !this.matureAllowed(opts)) {
+          this.refuseMature(opts);
+          return;
+        }
         if (body.live) this.live = true;
         // A radio station's MPEG-TS stream goes through mpegts.js; its other sound plays as a file.
         const type = body.type === 'mpegts' ? 'mpegts' : body.audio ? 'file' : 'hls';
@@ -463,6 +507,7 @@ class VideoElementSource extends BaseMediaSource {
   setMuted(m) { this.wantMuted = !!m; if (!this.autoMuted) this.el.muted = !!m; }
   destroy() {
     if (this.radioCard) { this.radioCard.destroy(); this.radioCard = null; }
+    if (this.notice) { this.notice.remove(); this.notice = null; }
     this.destroyed = true;
     if (this.unmuteOnClick) {
       document.removeEventListener('pointerdown', this.unmuteOnClick, true);
@@ -1337,9 +1382,10 @@ class MediaSwitch {
    * @param {function(string, number): void} opts.onDuration - Duration reporting callback.
    * @param {function(string): void} opts.onError - Error handling callback.
    * @param {function(): boolean} [opts.allowUntrusted] - Permission check for untrusted sources.
+   * @param {function(): boolean} [opts.allowMature] - Whether titles for adults (Tubi, the Internet Archive) may play.
+   * @param {function(string): Promise<{url: string, mature: boolean}|null>} [opts.deviceStream] - A Tubi stream looked up
+   *   from this viewer's own device, and whether its title is for adults, or null (the server's lookup is used then).
    * @param {function(): void} [opts.requestClick] - Requests synthetic gesture/click for sound.
-   * @param {function(string): Promise<string|null>} [opts.deviceStream] - A Tubi stream looked up
-   *   from this viewer's own device, or null (the server's lookup is used then).
    */
   constructor(yt, opts) {
     this.yt = yt;
@@ -1386,7 +1432,8 @@ class MediaSwitch {
       onDuration: seconds => this.opts.onDuration(link, seconds),
       onError: message => this.opts.onError(message),
       requestClick: () => { if (this.opts.requestClick) this.opts.requestClick(); },
-      deviceStream: this.opts.deviceStream
+      deviceStream: this.opts.deviceStream,
+      allowMature: this.opts.allowMature
     };
     if (media.type === 'twitch') this.source = new TwitchSource(opts, media);
     else if (media.type === 'twitchclip') this.source = new TwitchClipSource(opts, media);

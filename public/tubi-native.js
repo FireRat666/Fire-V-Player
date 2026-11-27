@@ -13,7 +13,7 @@ var FireTubiResolver = (() => {
   /** The page the hidden browser sits on: on Tubi's own site, and tiny. */
   const PAGE_URL = 'https://tubitv.com/robots.txt';
   /** Bump when tubi-resolve.js changes, so browsers don't keep an old copy. */
-  const SCRIPT_VERSION = 4;
+  const SCRIPT_VERSION = 5;
   const INJECT_EVERY_MS = 500;
   const READY_TIMEOUT_MS = 20000;
   /** The longest a search, and any other lookup, may take. */
@@ -168,14 +168,17 @@ var FireTubiResolver = (() => {
           link: `https://tubitv.com/${path}/${x.id}`,
           channel: { name: [year ? `Tubi, ${year}` : 'Tubi', String(x.tags || '').replace(/ /g, ' ')].filter(Boolean).join(': ').slice(0, 160), link: '' },
           description: '',
-          source: 'tubi'
+          source: 'tubi',
+          // R, TV-MA, not rated (see MediaSources.tubiMature): left out where the world doesn't allow them.
+          mature: MediaSources.tubiMature(x.rating)
         };
       });
     }
 
     /**
-     * A movie or episode's stream, and its title, length and picture, looked up from this device.
-     * @returns {Promise<{ok: true, url: string, title: string, duration: number, thumbnail: string}|{ok: false, reason: string}>}
+     * A movie or episode's stream, and its title, length, picture and whether it's for adults,
+     * looked up from this device.
+     * @returns {Promise<{ok: true, url: string, title: string, duration: number, thumbnail: string, mature: boolean}|{ok: false, reason: string}>}
      */
     async stream(link) {
       const media = window.MediaSources ? MediaSources.detect(link) : null;
@@ -190,15 +193,17 @@ var FireTubiResolver = (() => {
       }
       const answer = {
         ok: true, url: msg.url, title: String(msg.title || '').slice(0, 200), duration: Math.max(0, Number(msg.duration) || 0),
-        thumbnail: /^https:\/\//.test(String(msg.thumbnail || '')) ? msg.thumbnail : ''
+        thumbnail: /^https:\/\//.test(String(msg.thumbnail || '')) ? msg.thumbnail : '',
+        mature: MediaSources.tubiMature(msg.ratings)
       };
       this.cache.set(key, { at: Date.now(), answer });
       return answer;
     }
 
     /**
-     * A series' episodes, looked up from this device.
-     * @returns {Promise<{title: string, items: Object[]}|null>}
+     * A series' episodes, looked up from this device. Each is marked `mature` if it or the series
+     * is for adults (an episode without its details goes by the series).
+     * @returns {Promise<{title: string, items: Object[], mature: boolean}|null>}
      */
     async series(link) {
       const media = window.MediaSources ? MediaSources.detect(link) : null;
@@ -211,13 +216,16 @@ var FireTubiResolver = (() => {
         console.warn(`[TubiNative] Series ${link}: ${msg.reason || 'no answer'}`);
         return null;
       }
+      const seriesMature = MediaSources.tubiMature(msg.ratings);
       const answer = {
         title: String(msg.title || 'Tubi series').slice(0, 120),
+        mature: seriesMature,
         items: msg.items.filter(x => x && /^https:\/\/tubitv\.com\/tv-shows\/\d{1,12}$/.test(String(x.link))).map(x => ({
           title: String(x.title || 'Tubi video').slice(0, 200),
           thumbnail: /^https:\/\//.test(String(x.thumbnail || '')) ? x.thumbnail : '',
           duration: Math.max(0, Number(x.duration) || 0),
-          link: x.link
+          link: x.link,
+          mature: seriesMature || (Array.isArray(x.ratings) ? MediaSources.tubiMature(x.ratings) : false)
         }))
       };
       // Missing some episodes' details: not kept, so the next look reads them again.

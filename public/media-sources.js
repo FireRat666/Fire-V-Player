@@ -333,7 +333,41 @@ var MediaSources = (() => {
     return /^[A-Za-z0-9_-]{11}$/.test(id) ? id : false;
   }
 
-  return { detect, nameFromLink, parseUrl, isTrusted, youtubeId, UNTRUSTED_MESSAGE };
+  /**
+   * The US film and TV ratings that play without the mature-links setting: up to PG-13 and TV-14.
+   * Anything else (R, NC-17, TV-MA, NR, unrated) is for adults, and so is a title with no rating.
+   */
+  const SUITABLE_RATINGS = new Set(['G', 'PG', 'PG-13', 'TV-Y', 'TV-Y7', 'TV-Y7-FV', 'TV-G', 'TV-PG', 'TV-14']);
+
+  /**
+   * Whether a Tubi title is for adults, from its ratings (its page data's `ratings`, [{value}], or
+   * a rating's text such as "TV-MA", or a list of them). No rating counts as adult.
+   *
+   * @param {Array<{value?: string, code?: string}>|string|Array<string>|null} ratings
+   * @returns {boolean}
+   */
+  function tubiMature(ratings) {
+    const list = (Array.isArray(ratings) ? ratings : [ratings])
+      .map(r => String((r && typeof r === 'object' ? r.value || r.code : r) || '').trim().toUpperCase())
+      .filter(Boolean);
+    return !list.length || list.some(r => !SUITABLE_RATINGS.has(r));
+  }
+
+  /**
+   * Whether a detected link is from a site with adult titles among the rest (Tubi, the Internet
+   * Archive), whose rating is looked up before it's added or played.
+   *
+   * @param {DetectedMedia|null} media
+   * @returns {boolean}
+   */
+  function needsRating(media) {
+    return !!media && (media.type === 'tubi' || media.type === 'archive' || (media.type === 'file' && !!media.archive));
+  }
+
+  /** Shown when a title for adults is refused because the world doesn't allow them. */
+  const MATURE_MESSAGE = "This video is for adults, and this world doesn't allow those. Its owner can allow them with the mature-links snippet setting.";
+
+  return { detect, nameFromLink, parseUrl, isTrusted, youtubeId, tubiMature, needsRating, UNTRUSTED_MESSAGE, MATURE_MESSAGE };
 })();
 
 if ((typeof process !== 'undefined') && process.release && process.release.name.search(/node|io.js/) !== -1) {

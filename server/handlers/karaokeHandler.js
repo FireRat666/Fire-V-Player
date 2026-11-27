@@ -48,6 +48,12 @@ async function addToPlayers(app, ws, video) {
   const player = app.videoPlayers[ws.i];
   if (!player) return;
 
+  // What the device said of a Tubi song's rating counts only when the server can't look it up.
+  const said = video && typeof video.mature === 'boolean' ? video.mature : undefined;
+  if (video && typeof video === 'object') {
+    video = { ...video };
+    delete video.mature;
+  }
   // Songs from other sites follow the same rules as the playlist (see media.allowedFor).
   let link = video && video.link;
   if (!link || (!app.getYoutubeId(link) && (!media.detect(link) || !media.allowedFor(ws, link)))) {
@@ -63,6 +69,13 @@ async function addToPlayers(app, ws, video) {
       app.send(ws, Commands.ERROR, { message: err.message });
       return;
     }
+  }
+  // A song for adults (Tubi, the Internet Archive) only where the world allows them.
+  try {
+    video = await media.screenMature(ws, video, said);
+  } catch (err) {
+    app.send(ws, Commands.ERROR, { message: err.message });
+    return;
   }
   // A YouTube song without its title or length (a pasted link) gets them now, as the playlist's
   // videos do, so the server knows when it ends. If the lookup fails the song is queued as it is.

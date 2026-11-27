@@ -363,6 +363,9 @@ var Core = class {
     if (media && media.type === 'youtube') return this.wantsNativeYouTube(link);
     // Files come from anywhere, so only where the world's owner allows them (as in the browser).
     if (!media || media.type !== 'file' || this.allowUntrusted !== true) return false;
+    // An Archive file plays in the browser where the world doesn't allow titles for adults, as
+    // that's where its rating is checked (see VideoElementSource in media-players.js).
+    if (media.archive && this.allowMature !== true) return false;
     // Audio files play in the browser: Unity's player on Quest doesn't play audio without video,
     // and can't play Ogg or Opus anywhere.
     const u = MediaSources.parseUrl(media.url || link);
@@ -441,7 +444,7 @@ var Core = class {
       const tubi = await this.tubiResolver();
       if (tubi) {
         const found = await tubi.stream(link);
-        answer = found.ok ? { ok: true, url: found.url } : found;
+        answer = found.ok ? { ok: true, url: found.url, mature: found.mature !== false } : found;
       }
     } catch (e) {
       answer = { ok: false, reason: String(e && e.message || e) };
@@ -2679,6 +2682,7 @@ var Core = class {
     // Shows the screen page's size, zoom and pixel ratio on the screen, for checking its fit.
     this.setOrDefault("screen-debug", 'false');
     this.setOrDefault("untrusted-links", 'false');
+    this.setOrDefault("mature-links", 'false');
     this.setOrDefault("is3d", 'false');
     this.setOrDefault("announce", 'true');
     this.setOrDefault("announce-four-twenty", 'false');
@@ -2741,6 +2745,9 @@ var Core = class {
     // Links from any site (video files, streams) besides YouTube, Twitch and Vimeo. Off unless the
     // world's owner turns it on, as those links aren't moderated.
     this.allowUntrusted = String(this.params["untrusted-links"]).toLowerCase() === 'true';
+    // Titles for adults from Tubi (R, TV-MA, not rated) and the Internet Archive (its adult films).
+    // Off unless the world's owner turns it on, as neither site asks for a viewer's age.
+    this.allowMature = String(this.params["mature-links"]).toLowerCase() === 'true';
     if(this.params["one-for-each-instance"] === "true" && window.user && window.user.instance) {
         this.params.instance += window.user.instance;
         // The old room had the same ending (it was the code and this), so the server can match it.

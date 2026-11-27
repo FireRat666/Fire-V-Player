@@ -362,6 +362,9 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         },
         // Untrusted links only play if this viewer's own world allows them.
         allowUntrusted: () => this.core.allowUntrusted === true,
+        // Titles for adults (Tubi's R and TV-MA, the Archive's adult films) only play if this
+        // viewer's own world allows them.
+        allowMature: () => this.core.allowMature === true,
         // Asks this viewer's world to click the middle of their screen, for players (Twitch) that
         // won't start on their own until someone does.
         requestClick: () => this.clickMiddle(),
@@ -376,7 +379,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
      * as the server may be in a country Tubi doesn't serve. Null when there's no world to ask, or
      * it couldn't: the server's lookup is used then.
      * @param {string} link - A Tubi movie or episode link.
-     * @returns {Promise<string|null>}
+     * @returns {Promise<{url: string, mature: boolean}|null>} mature: the title is for adults.
      */
     askWorldForTubiStream(link) {
       const inWorld = !!(window.O && typeof window.O.sendMessage === 'function') || !!window.bantermessage || !!spaceFrame;
@@ -837,7 +840,11 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       case Commands.TUBI_STREAM_RESULT: {
         const d = json.data || {};
         const wait = this.tubiAsks && this.tubiAsks.get(d.n);
-        if (wait) { this.tubiAsks.delete(d.n); clearTimeout(wait.timer); wait.resolve(d.ok && /^https:\/\//.test(String(d.url || '')) ? d.url : null); }
+        if (wait) {
+          this.tubiAsks.delete(d.n);
+          clearTimeout(wait.timer);
+          wait.resolve(d.ok && /^https:\/\//.test(String(d.url || '')) ? { url: d.url, mature: d.mature !== false } : null);
+        }
         break;
       }
       case Commands.PREVIEW_VIDEO:

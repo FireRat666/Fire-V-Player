@@ -37,6 +37,8 @@ var Commands = {
   SAVE_LIST: 'save-list', // a UI -> server: { link } adds a list to the room's shared Lists (host, or anyone while unlocked)
   REMOVE_LIST: 'remove-list', // a UI -> server: { id } removes one of the room's shared Lists (same rule)
   LISTS_UPDATED: 'lists-updated', // server -> everyone in the room: { lists } after a save or remove
+  RADIO_CHECK: 'radio-check', // a UI -> server: { link } whether a radio station can play here (Browse's offer)
+  RADIO_CHECK_RESULT: 'radio-check-result', // server -> that UI: { link, ok } or { link, ok: false, error }
   CLEAR_PLAYLIST: 'clear-playlist',
   USER_VIDEO_PLAYER: 'user-video-player',
   ADD_TO_PLAYERS: 'add-to-players',

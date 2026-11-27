@@ -2,6 +2,7 @@
 // LibreTranslate (machine translation); corrections by hand are kept when it runs again.
 var FVP_STRINGS = typeof FVP_STRINGS === 'undefined' ? {} : FVP_STRINGS;
 FVP_STRINGS["fr"] = {
+  "\"{title}\" can't play here.": "\"{title}\" ne peut pas jouer ici.",
   "(toward the hand)": "(vers la main)",
   "A live video: everyone to where it is live now (host)": "Une vidéo en direct: tout le monde à l'endroit où il est en direct maintenant (hôte)",
   "Accent": "Couleur d'accent",
@@ -206,6 +207,7 @@ FVP_STRINGS["fr"] = {
   "Teal": "Sarcelle",
   "That is not a video link.": "Ce n'est pas un lien vidéo.",
   "That link isn't a playlist or video this player can use: {error}": "Ce lien n'est pas une playlist ou une vidéo que ce lecteur peut utiliser : {error}",
+  "That station can't play here.": "Cette station ne peut pas jouer ici.",
   "That's a playlist: {name}{size}. Replace the playlist, add it all to the end, or save it to Lists (for everyone here, or just for you)?": "C'est une playlist : {name}{size}. Remplacez la liste de lecture, ajoutez-la à la fin ou enregistrez-la dans Listes (pour tout le monde ici, ou juste pour vous)?",
   "The episodes are in Lists: add the ones you want, or + All.": "Les épisodes sont dans Listes : ajoutez ceux que vous voulez, ou + Tous.",
   "The host picks one of these in More (the gear at the top). The padlock at the top shows which is on.": "L'hôte en choisit une dans Plus (l'engrenage en haut). Le cadenas en haut indique laquelle est active.",
@@ -217,6 +219,7 @@ FVP_STRINGS["fr"] = {
   "The player is locked: you can save it for yourself.": "Le joueur est verrouillé : vous pouvez le sauver vous-même.",
   "The playlist is empty. Use Search to add videos.": "La playlist est vide. Utilisez Recherche pour ajouter des vidéos.",
   "The website can't play this station itself, but the Fire Player can: add it with the bar above.": "Le site Web ne peut pas jouer cette station elle-même, mais le lecteur de feu peut : l'ajouter avec la barre ci-dessus.",
+  "The website can't play this station itself. Checking whether the Fire Player can...": "Le site ne peut pas jouer cette station elle-même. Vérifier si le Fire Player peut...",
   "Theme": "Thème",
   "These only work for space admins (the world owner and community moderators). The mode switches everyone in the space. Admin Take Over is under Who controls the player, beside the host.": "Ceux-ci ne fonctionnent que pour les administrateurs d'espace (le propriétaire mondial et les modérateurs communautaires). Le mode change tout le monde dans l'espace. Admin Take Over est sous Qui contrôle le joueur, à côté de l'hôte.",
   "This app can't open a browser window here.": "Cette application ne peut pas ouvrir une fenêtre de navigateur ici.",

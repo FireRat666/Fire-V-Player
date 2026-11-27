@@ -2636,7 +2636,10 @@ var FirePlaylistPanel = class {
     if (msg.type === 'extra') { this.showEpisodes(this.browseOffer && this.browseOffer.link); return; }
     if (msg.type === 'station' && /^\d{1,12}$/.test(String(msg.id || ''))) {
       const name = String(msg.name || '').trim().slice(0, 120) || this.tr('Radio station');
-      this.setBrowseOffer({ link: `https://directory.shoutcast.com/sbin/tunein-station.m3u?id=${msg.id}`, title: name, kind: 'station' });
+      const link = `https://directory.shoutcast.com/sbin/tunein-station.m3u?id=${msg.id}`;
+      // The server says whether it can play here (an https stream, or the relay): RADIO_CHECK_RESULT.
+      this.setBrowseOffer({ link, title: name, kind: 'station', check: 'checking' });
+      this.send(Commands.RADIO_CHECK, { link });
       return;
     }
     if (msg.type !== 'page') return;
@@ -2659,12 +2662,19 @@ var FirePlaylistPanel = class {
   setBrowseOffer(offer) {
     this.browseOffer = offer;
     if (this.siteBrowser) {
+      // A station the server found can't play here (only over http, with the relay off) has no buttons.
+      const bad = !!offer && offer.check === 'bad';
+      const note = !offer || offer.kind !== 'station' ? ''
+        : bad ? (offer.error || this.tr("That station can't play here."))
+          : offer.check === 'ok' ? this.tr("The website can't play this station itself, but the Fire Player can: add it with the bar above.")
+            : this.tr("The website can't play this station itself. Checking whether the Fire Player can...");
       this.siteBrowser.offer(offer ? {
-        text: this.tr(offer.kind === 'series' ? 'Add episodes of "{title}" to the playlist?' : 'Add "{title}" to the playlist?', { title: offer.title }),
-        now: offer.kind !== 'series' && this.isHost() ? this.tr('Play Now') : '',
-        add: offer.kind === 'series' ? '' : this.tr('Add to Playlist'),
+        text: bad ? this.tr('"{title}" can\'t play here.', { title: offer.title })
+          : this.tr(offer.kind === 'series' ? 'Add episodes of "{title}" to the playlist?' : 'Add "{title}" to the playlist?', { title: offer.title }),
+        now: !bad && offer.kind !== 'series' && this.isHost() ? this.tr('Play Now') : '',
+        add: bad || offer.kind === 'series' ? '' : this.tr('Add to Playlist'),
         extra: offer.kind === 'series' ? this.tr('Pick Episodes') : '',
-        note: offer.kind === 'station' ? this.tr("The website can't play this station itself, but the Fire Player can: add it with the bar above.") : '',
+        note,
         what: offer.kind
       } : null);
     }
@@ -2678,6 +2688,7 @@ var FirePlaylistPanel = class {
     const o = this.browseOffer;
     if (!o) return;
     if (o.kind === 'series') { this.showEpisodes(o.link); return; }
+    if (o.check === 'bad') { this.setStatus(o.error || "That station can't play here."); return; }
     if (now && !this.isHost()) { this.setStatus('Only the host can play something now.'); return; }
     if (!now && !this.canAdd() && !this.addWaits()) { this.setStatus('The player is locked: only the host can add videos.'); return; }
     // Done with the site: it closes (Browse opens it again for more).
@@ -3213,6 +3224,17 @@ var FirePlaylistPanel = class {
       case Commands.LIST_PREVIEW_RESULT:
         this.onListPreview(json.data);
         break;
+      case Commands.RADIO_CHECK_RESULT: {
+        // Whether the station Browse offers can play here (see onBrowseMessage).
+        const o = this.browseOffer;
+        const d = json.data || {};
+        if (o && o.kind === 'station' && d.link === o.link) {
+          o.check = d.ok ? 'ok' : 'bad';
+          o.error = d.ok ? '' : String(d.error || '').slice(0, 200);
+          this.setBrowseOffer(o);
+        }
+        break;
+      }
       case Commands.LISTS_UPDATED:
         this.loadSavedLists(); // names and sizes of any new ones
         break;
@@ -3464,9 +3486,11 @@ var FirePlaylistPanel = class {
     const bo = this.browseOffer;
     this.display(this.browseOfferRow, !!bo);
     if (bo) {
-      this.setText(this.browseOfferLabel, this.tr(bo.kind === 'series' ? 'In the browser: "{title}" (series)' : 'In the browser: "{title}"', { title: bo.title }));
-      this.display(this.browseNowBtn, bo.kind !== 'series' && host);
-      this.display(this.browseAddBtn, bo.kind !== 'series' && (this.canAdd() || this.addWaits()));
+      const bad = bo.check === 'bad';
+      this.setText(this.browseOfferLabel, bad ? this.tr('"{title}" can\'t play here.', { title: bo.title })
+        : this.tr(bo.kind === 'series' ? 'In the browser: "{title}" (series)' : 'In the browser: "{title}"', { title: bo.title }));
+      this.display(this.browseNowBtn, !bad && bo.kind !== 'series' && host);
+      this.display(this.browseAddBtn, !bad && bo.kind !== 'series' && (this.canAdd() || this.addWaits()));
       this.display(this.browseEpisodesBtn, bo.kind === 'series');
     }
     if (this.browseBtn) {

@@ -532,6 +532,16 @@ class App {
       case Commands.SEARCH:
         this.search(msg.data, ws);
         break;
+      case Commands.RADIO_CHECK: {
+        // Whether a station Browse found can play here: what /api/stream would give (kept a while).
+        const link = String(msg.data && msg.data.link || '').slice(0, 1000);
+        const kind = MediaSources.detect(link);
+        if (!kind || kind.type !== 'radio') break;
+        radio.streamFor(link).then(
+          () => this.send(ws, Commands.RADIO_CHECK_RESULT, { link, ok: true }),
+          e => this.send(ws, Commands.RADIO_CHECK_RESULT, { link, ok: false, error: String(e && e.message || "Couldn't reach that radio station.") }));
+        break;
+      }
       case Commands.PASTE_CODE_REQUEST:
         this.pasteCodes.issue(ws);
         break;

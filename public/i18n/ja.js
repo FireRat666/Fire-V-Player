@@ -2,6 +2,7 @@
 // LibreTranslate (machine translation); corrections by hand are kept when it runs again.
 var FVP_STRINGS = typeof FVP_STRINGS === 'undefined' ? {} : FVP_STRINGS;
 FVP_STRINGS["ja"] = {
+  "\"{title}\" can't play here.": "「{title}」は再生できません.",
   "(toward the hand)": "(手前)",
   "A live video: everyone to where it is live now (host)": "ライブビデオ:今住んでいるみんな(ホスト)",
   "Accent": "アクセント",
@@ -206,6 +207,7 @@ FVP_STRINGS["ja"] = {
   "Teal": "ティール",
   "That is not a video link.": "ビデオリンクではありません.",
   "That link isn't a playlist or video this player can use: {error}": "このプレーヤーが使用できるプレイリストやビデオではないリンク: {error}",
+  "That station can't play here.": "ここまでは遊べません.",
   "That's a playlist: {name}{size}. Replace the playlist, add it all to the end, or save it to Lists (for everyone here, or just for you)?": "プレイリスト: {name}{size} プレイリストを置換し、最後にすべて追加するか、リストに保存するか(ここに全員、またはあなただけのために)?",
   "The episodes are in Lists: add the ones you want, or + All.": "エピソードはリストにあります: 必要なものを追加したり、+ すべて.",
   "The host picks one of these in More (the gear at the top). The padlock at the top shows which is on.": "ホストは「その他」(上の歯車)でこの中から1つを選びます。上の南京錠が、どれがオンかを示します。",
@@ -217,6 +219,7 @@ FVP_STRINGS["ja"] = {
   "The player is locked: you can save it for yourself.": "プレイヤーはロックされています:あなたは自分で保存することができます.",
   "The playlist is empty. Use Search to add videos.": "プレイリストは空です。 検索を使用してビデオを追加します.",
   "The website can't play this station itself, but the Fire Player can: add it with the bar above.": "このウェブサイトは、このステーション自体を再生することはできませんが、Fire Playerは、上記のバーにそれを追加することができます.",
+  "The website can't play this station itself. Checking whether the Fire Player can...": "本サイト自体は再生できません。 ファイアープレーヤーができることをチェックする...",
   "Theme": "テーマ",
   "These only work for space admins (the world owner and community moderators). The mode switches everyone in the space. Admin Take Over is under Who controls the player, beside the host.": "これらは、宇宙管理者(世界所有者とコミュニティモデレーター)のためにのみ機能します。 モードはスペースのみんなを切り替えます。 管理者テイクオーバーは、ホストの横にあるプレーヤーを制御する人の下にあります.",
   "This app can't open a browser window here.": "このアプリは、ブラウザウィンドウを開くことができません.",

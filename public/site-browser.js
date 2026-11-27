@@ -57,7 +57,7 @@ var FireSiteBrowser = (() => {
   // On Shoutcast its alert is its own player failing: the page can't play a station that streams
   // over http (the browser blocks it on an https page), though the Fire Player can play it, so the
   // note says that instead (the panel sends its words, translated, with the offer).
-  var siteNote = 'The website can\\'t play this station itself, but the Fire Player can: add it with the bar above.';
+  var siteNote = 'The website can\\'t play this station itself.';
   var note = null, noteTimer = 0;
   function showNote(text) {
     text = String(text == null ? '' : text).replace(/\\s+/g, ' ').trim().slice(0, 300);
@@ -178,7 +178,11 @@ var FireSiteBrowser = (() => {
     if (msg && typeof msg === 'object' && 'message' in msg) msg = msg.message;
     if (typeof msg === 'string') { try { msg = JSON.parse(msg); } catch (err) { return; } }
     if (msg && msg.type === 'offer') {
-      if (msg.note) siteNote = String(msg.note);
+      // The note changes once the panel knows whether the Fire Player can play it.
+      if (msg.note) {
+        siteNote = String(msg.note);
+        if (note && note.style.display !== 'none') note.textContent = siteNote;
+      }
       offer(msg);
     }
   });

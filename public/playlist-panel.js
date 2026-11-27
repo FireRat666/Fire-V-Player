@@ -3078,7 +3078,8 @@ var FirePlaylistPanel = class {
     this.checkListRequests();
     if (this.listsOut.has(id) || this.listQueue.includes(id) || (this.deviceLists && this.deviceLists.has(id))) return;
     const had = this.listData.get(id);
-    if (had && had.state === 'ready' && !force && Date.now() - had.at < LIST_FRESH_MS) return;
+    // A list missing some episodes' details (a Tubi series read on this device) is read again.
+    if (had && had.state === 'ready' && !had.partial && !force && Date.now() - had.at < LIST_FRESH_MS) return;
     if (!(had && had.state === 'ready')) this.listData.set(id, { state: 'loading', at: Date.now() });
     // A Tubi series is read from this device first (see loadSeriesHere).
     if (this.isTubiSeries(id) && window.isBanter && typeof this.core.tubiResolver === 'function') {
@@ -3123,7 +3124,7 @@ var FirePlaylistPanel = class {
         this.renderSoon();
         return;
       }
-      this.listData.set(id, { state: 'ready', at: Date.now(), title: list.title, items, skipped: list.items.length - items.length, truncated: false, device: true });
+      this.listData.set(id, { state: 'ready', at: Date.now(), title: list.title, items, skipped: list.items.length - items.length, truncated: false, device: true, partial: !!list.partial });
       this.renderSoon();
       return;
     }

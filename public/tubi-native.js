@@ -13,7 +13,7 @@ var FireTubiResolver = (() => {
   /** The page the hidden browser sits on: on Tubi's own site, and tiny. */
   const PAGE_URL = 'https://tubitv.com/robots.txt';
   /** Bump when tubi-resolve.js changes, so browsers don't keep an old copy. */
-  const SCRIPT_VERSION = 5;
+  const SCRIPT_VERSION = 6;
   const INJECT_EVERY_MS = 500;
   const READY_TIMEOUT_MS = 20000;
   /** The longest a search, and any other lookup, may take. */
@@ -220,6 +220,8 @@ var FireTubiResolver = (() => {
       const answer = {
         title: String(msg.title || 'Tubi series').slice(0, 120),
         mature: seriesMature,
+        // Some episodes listed without their details: the panel reads it again next time.
+        partial: !!msg.partial,
         items: msg.items.filter(x => x && /^https:\/\/tubitv\.com\/tv-shows\/\d{1,12}$/.test(String(x.link))).map(x => ({
           title: String(x.title || 'Tubi video').slice(0, 200),
           thumbnail: /^https:\/\//.test(String(x.thumbnail || '')) ? x.thumbnail : '',

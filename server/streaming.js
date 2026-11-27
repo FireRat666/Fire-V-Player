@@ -286,7 +286,11 @@ async function readTubiSeries(id, season) {
   clearTimeout(timer);
   late = true;
   for (let k = 0; k < items.length; k++) {
-    if (!items[k]) { items[k] = entry(k, null); partial = true; }
+    if (items[k]) continue;
+    // Not reached in time: the series page's own details of it, where it has them.
+    const known = byId[wanted[k].ep.id];
+    items[k] = entry(k, known ? tubiItem(known, 'episode') : null);
+    if (!known) partial = true;
   }
   if (partial) console.warn(`[TUBI] series/${id}: some episodes are listed without their details.`);
   const title = clean(series.title, 120) || 'Tubi series';

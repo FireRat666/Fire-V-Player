@@ -29,6 +29,11 @@
   // The longest those pages are read for: tubi-native.js waits 90 s for a series. Episodes not read
   // by then are listed by link, with their season and number for a title (partial: true).
   var SERIES_DEADLINE_MS = 60000;
+  // The whole of a series' answer, its own page included, so the reply is sent before
+  // tubi-native.js stops waiting (90 s); a few seconds are kept for sending it.
+  var SERIES_BUDGET_MS = 85000;
+  // The longest one page may take, its headers and its body.
+  var PAGE_TIMEOUT_MS = 15000;
   var SEARCH_TIMEOUT_MS = 20000;
 
   function log(msg) { try { console.log('[tubi-resolve] ' + msg); } catch (e) {} }
@@ -142,8 +147,17 @@
 
   // ---------------------------------------------------------------- pages
 
-  function pageData(path) {
-    return fetch('/' + path, { credentials: 'omit' }).then(function (res) {
+  // A page's site data. The read is given up (and aborted) after timeoutMs, headers and body both.
+  function pageData(path, timeoutMs) {
+    var ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+    var timer = 0;
+    var expired = new Promise(function (resolve, reject) {
+      timer = setTimeout(function () {
+        try { if (ctrl) ctrl.abort(); } catch (e) {}
+        reject(new Error("Tubi didn't answer in time."));
+      }, Math.max(1, timeoutMs || PAGE_TIMEOUT_MS));
+    });
+    var read = fetch('/' + path, { credentials: 'omit', signal: ctrl ? ctrl.signal : undefined }).then(function (res) {
       if (res.status === 404) throw new Error("That Tubi page doesn't exist (or isn't available here).");
       if (!res.ok) throw new Error('Tubi answered ' + res.status + '.');
       return res.text();
@@ -156,6 +170,8 @@
       if (/^series\//.test(path)) data.fvpSeasons = seasonsOf(html);
       return data;
     });
+    return Promise.race([read, expired]).then(function (data) { clearTimeout(timer); return data; },
+      function (e) { clearTimeout(timer); throw e; });
   }
 
   // Every season of a series page, from its query state (as server/streaming.js reads it):
@@ -222,7 +238,9 @@
   // The series page has the details of its first season's episodes only (at most 20); every
   // season's are listed by id, and the rest are read from their own pages, a few at a time.
   function series(n, id, season) {
-    pageData('series/' + id).then(function (data) {
+    var started = Date.now();
+    function left() { return started + SERIES_BUDGET_MS - Date.now(); }
+    pageData('series/' + id, Math.min(PAGE_TIMEOUT_MS, left())).then(function (data) {
       var byId = (data.video && data.video.byId) || {};
       var s = byId['0' + id] || byId[id];
       if (!s) throw new Error("That Tubi series isn't available here.");
@@ -275,10 +293,16 @@
       var workers = [];
       for (var i = 0; i < EPISODES_AT_ONCE; i++) workers.push(worker());
       var timer;
-      return Promise.race([Promise.all(workers), new Promise(function (resolve) { timer = setTimeout(resolve, SERIES_DEADLINE_MS); })]).then(function () {
+      return Promise.race([Promise.all(workers), new Promise(function (resolve) { timer = setTimeout(resolve, Math.max(0, Math.min(SERIES_DEADLINE_MS, left()))); })]).then(function () {
         clearTimeout(timer);
         late = true;
-        for (var k = 0; k < items.length; k++) if (!items[k]) { items[k] = entry(k, null); partial = true; }
+        // A slot not reached in time still gets the series page's details where it has them.
+        for (var k = 0; k < items.length; k++) {
+          if (items[k]) continue;
+          var known = byId[wanted[k].ep.id];
+          items[k] = entry(k, known || null);
+          if (!known) partial = true;
+        }
         var name = clean(s.title, 120) || 'Tubi series';
         send({ type: 'result', n: n, ok: true, title: season ? clean(name + ', Season ' + season, 120) : name, items: items, partial: partial, ratings: ratings(s) });
       });

@@ -78,12 +78,18 @@ var FireSiteBrowser = (() => {
   // each audio or video element's own volume is scaled by it, whatever the site sets.
   var level = 1;
   var desc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'volume');
-  function apply(el) { try { desc.set.call(el, Math.max(0, Math.min(1, (el.__fvpWant == null ? 1 : el.__fvpWant) * level))); } catch (e) {} }
+  // The volume the site wants: what it set through the hook, or (set before the hook was in) the
+  // element's own, kept before it is first scaled.
+  function want(el) {
+    if (el.__fvpWant == null) { var v = 1; try { v = Number(desc.get.call(el)); } catch (e) {} el.__fvpWant = isFinite(v) ? v : 1; }
+    return el.__fvpWant;
+  }
+  function apply(el) { try { desc.set.call(el, Math.max(0, Math.min(1, want(el) * level))); } catch (e) {} }
   var made = [];
   if (desc && desc.set) {
     Object.defineProperty(HTMLMediaElement.prototype, 'volume', {
       configurable: true, enumerable: desc.enumerable,
-      get: function () { return this.__fvpWant == null ? 1 : this.__fvpWant; },
+      get: function () { return want(this); },
       set: function (v) { this.__fvpWant = Number(v); apply(this); }
     });
     var play = HTMLMediaElement.prototype.play;

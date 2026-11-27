@@ -302,7 +302,9 @@ class VideoElementSource extends BaseMediaSource {
       .then(body => {
         if (this.destroyed) return;
         if (body.live) this.live = true;
-        this.load(opts, { type: body.audio ? 'file' : 'hls', noReferrer: !!body.noReferrer }, el, body.url);
+        // A radio station's MPEG-TS stream goes through mpegts.js; its other sound plays as a file.
+        const type = body.type === 'mpegts' ? 'mpegts' : body.audio ? 'file' : 'hls';
+        this.load(opts, { type, live: !!body.live, noReferrer: !!body.noReferrer }, el, body.url);
       })
       .catch(err => { if (!this.destroyed) opts.onError(err.message); });
   }

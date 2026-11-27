@@ -9,7 +9,8 @@
  * there. One that doesn't can't play, unless the server's host turns on the relay through this
  * server (/api/radio) with RADIO_RELAY=on: it's off unless that is set, as it uses the server's
  * data transfer. Only the server's own settings can turn it on; nothing in a world or panel can.
- * It only ever sends sound (it refuses any other type).
+ * It only passes on audio types, and the MPEG-TS and generic binary types some stations send
+ * sound as (which could hold a picture too: what's in them isn't checked).
  *
  * Only addresses on the public internet are read or relayed (see lists.fetchPublic).
  * @module server/radio
@@ -234,42 +235,60 @@ async function sniff(link) {
   }
 }
 
-/** Whether a stream answers at `url` with sound, to a browser. */
+/**
+ * The type a stream answers at `url` with, to a browser, when it's sound ('' when it answers with
+ * something else). It throws when the station can't be reached at all, which isn't kept.
+ */
 async function answersWithSound(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5000);
     const res = await lists().fetchPublic(url, { signal: controller.signal, headers: { 'User-Agent': UA, 'Accept': '*/*', 'Accept-Encoding': 'identity' } });
-    clearTimeout(timer);
-    const ok = res.ok && AUDIO_TYPE.test(res.headers.get('content-type') || '');
+    const type = String(res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
     controller.abort();
     try { await res.body?.cancel(); } catch (e) {}
-    return ok;
-  } catch (e) {
-    return false;
+    return res.ok && AUDIO_TYPE.test(type) && !PLAYLIST_TYPE.test(type) ? type : '';
+  } finally {
+    clearTimeout(timer);
   }
 }
 
 /**
- * The https address a browser can play a stream at, if the station answers over https, or ''. A
- * Shoutcast server's root address gives a browser its status page, but "/;" gives the stream.
+ * The https address a browser can play a stream at, and the type it's sent as, if the station
+ * answers over https, or null. A Shoutcast server's root address gives a browser its status page,
+ * but "/;" gives the stream. Only an answer is kept for HTTPS_TTL_MS: when the station couldn't be
+ * reached over https at all, it's asked again next time.
  */
-function httpsVersion(url) {
-  return cache.remember(`https:${url}`, HTTPS_TTL_MS, async () => {
-    const u = new URL(url);
-    u.protocol = 'https:';
-    if (u.port === '80') u.port = '';
-    const tries = [u.href];
-    if (u.pathname === '/' && !u.search) tries.push(`${u.origin}/;`);
-    for (const t of tries) if (await answersWithSound(t)) return t;
-    return '';
-  });
+async function httpsVersion(url) {
+  try {
+    return await cache.remember(`https:${url}`, HTTPS_TTL_MS, async () => {
+      const u = new URL(url);
+      u.protocol = 'https:';
+      if (u.port === '80') u.port = '';
+      const tries = [u.href];
+      if (u.pathname === '/' && !u.search) tries.push(`${u.origin}/;`);
+      let unreachable = null;
+      for (const t of tries) {
+        try {
+          const type = await answersWithSound(t);
+          if (type) return { url: t, type };
+        } catch (e) {
+          unreachable = e;
+        }
+      }
+      if (unreachable) throw unreachable; // not kept (see TtlCache.remember)
+      return null;
+    });
+  } catch (e) {
+    return null;
+  }
 }
 
 /**
  * The stream to play for a radio link: the station's own https address, or the relay's.
  * @param {string} link
- * @returns {Promise<{url: string, live: true, audio: true}>}
+ * @returns {Promise<{url: string, live: true, audio?: true, type?: 'mpegts'}>} An MPEG-TS stream
+ *   (video/mp2t) is played by mpegts.js (type 'mpegts'); sound by the browser itself (audio).
  */
 async function streamFor(link) {
   const s = await station(link);
@@ -280,7 +299,7 @@ async function streamFor(link) {
       continue;
     }
     const https = await httpsVersion(url);
-    if (https) return { url: https, live: true, audio: true };
+    if (https) return /^video\/mp2t$/i.test(https.type) ? { url: https.url, live: true, type: 'mpegts' } : { url: https.url, live: true, audio: true };
   }
   if (!relayOn()) throw new Error("This station only streams over http, which can't play here (only https streams can). Try another station.");
   return { url: `/api/radio?link=${encodeURIComponent(link)}`, live: true, audio: true };

@@ -2584,11 +2584,12 @@ var FirePlaylistPanel = class {
     if (!this.canBrowse()) { this.setStatus("This app can't open a browser window here."); return; }
     if (typeof FireSiteBrowser === 'undefined') {
       this.setStatus('Opening the browser...', 0);
-      this.browseOpening = true;
+      // This opening's own token: a Close (or a newer opening) meanwhile takes it away.
+      const token = this.browseOpening = {};
       await this.core.setupScript(null, 'site-browser');
-      const cancelled = !this.browseOpening;
+      if (this.browseOpening !== token) return;
       this.browseOpening = false;
-      if (this.destroyed || cancelled) return;
+      if (this.destroyed) return;
       if (typeof FireSiteBrowser === 'undefined') { this.setStatus("Couldn't open the browser."); return; }
     }
     // Beside the panel on its right, level with its middle, in the panel's mover so it moves with it.

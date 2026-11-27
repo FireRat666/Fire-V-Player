@@ -242,9 +242,9 @@ var MediaSources = (() => {
     if (host === 'somafm.com' && parts.length === 1 && /^[a-z0-9]{2,40}$/.test(parts[0]) && !SOMAFM_PAGES.has(parts[0])) {
       return { type: 'radio', site: 'somafm', id: parts[0], stream: true };
     }
-    if (host === 'api.somafm.com' && parts.length === 1 && /^[a-z]{2,40}\d*\.pls$/i.test(parts[0])) {
-      return { type: 'radio', site: 'somafm', id: parts[0].replace(/\d*\.pls$/i, '').toLowerCase(), stream: true };
-    }
+    // Its .pls names may end in a quality (groovesalad130.pls); a channel's own digits (7soul, sf1033) stay.
+    const pls = host === 'api.somafm.com' && parts.length === 1 ? /^([a-z0-9]{2,40}?)(?:32|64|128|130|256|320)?\.pls$/i.exec(parts[0]) : null;
+    if (pls) return { type: 'radio', site: 'somafm', id: pls[1].toLowerCase(), stream: true };
     if (u.hash === '#radio' || /\.(pls|xspf)$/i.test(u.pathname)) return { type: 'radio', stream: true };
 
     if (/\.m3u8$/i.test(u.pathname)) return { type: 'hls' };

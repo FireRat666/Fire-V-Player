@@ -124,6 +124,21 @@ var FireNativeScreen = (() => {
     async create() {
       const core = this.core;
       if (!core.inWorld() || !(BS.VideoPlayer || BS.BanterVideoPlayer)) throw new Error('No BS SDK scene or video player.');
+      // In the browser screen's place, under the world's video home if it has one (see HOME_NAME).
+      // Made first, so its words ("Loading...") show while a YouTube video is looked up.
+      const t = core.screenTransform();
+      const home = this.findHome();
+      const go = this.go = await core.makeObject('FireVPlayer_VideoScreen', { parent: home || undefined, position: t.position, rotation: t.rotation, scale: t.scale });
+      if (this.destroyed) { core.destroyObject(go); return; }
+      this.overlayTimer = setInterval(() => this.updateOverlay(), OVERLAY_TICK_MS);
+      this.updateOverlay();
+      // The lookup failed: the browser plays it, and these words go.
+      const toBrowser = (why) => {
+        this.overlayDone = true;
+        clearInterval(this.overlayTimer);
+        this.showOverlay(false);
+        core.playFileInBrowser(this.link, why);
+      };
       // YouTube: this viewer's own streams first. Each viewer looks a video up for themselves, as
       // YouTube ties the addresses to whoever asked; the room shares only the link and the time.
       let url = this.link;
@@ -142,22 +157,17 @@ var FireNativeScreen = (() => {
         if (!found) {
           this.warned = true;
           console.warn(`[NativeScreen] ${this.link} wasn't looked up after ${YOUTUBE_PREPARE_TIMEOUT_MS / 1000}s.`);
-          core.playFileInBrowser(this.link, 'not loaded in time');
+          toBrowser('not loaded in time');
           return;
         }
         if (!found.ok) {
           // Live streams, Shorts, and anything else it can't play go to YouTube's own player.
-          core.playFileInBrowser(this.link, found.live ? 'live' : found.shorts ? 'shorts' : found.reason);
+          toBrowser(found.live ? 'live' : found.shorts ? 'shorts' : found.reason);
           return;
         }
         this.height = found.height;
         url = found.url;
       }
-      // In the browser screen's place, under the world's video home if it has one (see HOME_NAME).
-      const t = core.screenTransform();
-      const home = this.findHome();
-      const go = this.go = await core.makeObject('FireVPlayer_VideoScreen', { parent: home || undefined, position: t.position, rotation: t.rotation, scale: t.scale });
-      if (this.destroyed) { core.destroyObject(go); return; }
       const [w, h] = this.size();
       // The plane's renderer has to exist before the video player, which draws onto its material.
       await core.addComponent(go, core.bsComponent('Plane', { width: w, height: h }, 'BanterPlane', [w, h]));
@@ -178,8 +188,6 @@ var FireNativeScreen = (() => {
       if (!this.youtubeId) this.startedAt = performance.now();
       this.pollTimer = setInterval(() => this.poll(), POLL_MS);
       this.syncTimer = setInterval(() => { if (this.autoSync && !this.wantPaused) this.requestSync(false); }, SYNC_EVERY_MS);
-      this.overlayTimer = setInterval(() => this.updateOverlay(), OVERLAY_TICK_MS);
-      this.updateOverlay();
       console.log(`[NativeScreen] Playing ${this.link}${this.youtubeId ? ` (${this.height}p)` : ''} on the world's video player.`);
     }
 
@@ -428,7 +436,7 @@ var FireNativeScreen = (() => {
 
     /** Puts up, changes or takes down the words over the screen (see overlayState). */
     updateOverlay() {
-      if (this.destroyed || !this.go) return;
+      if (this.destroyed || !this.go || this.overlayDone) return;
       const want = this.overlayState();
       const key = want ? want.key : '';
       if (key === this.overlayKey) return;
@@ -439,6 +447,7 @@ var FireNativeScreen = (() => {
       this.overlayBuilding = true;
       this.buildOverlay().then(o => {
         if (!o || this.destroyed) return;
+        if (this.overlayDone) { this.showOverlay(false); return; } // gone to the browser meanwhile
         // What's wanted may have changed while the panel was being made: put up only what's
         // still wanted, and let the next tick show whatever is now.
         const now = this.overlayState();

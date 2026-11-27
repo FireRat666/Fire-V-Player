@@ -79,6 +79,8 @@ var SEARCH_SOURCES = {
 // The server works on 3 list previews at a time per connection and refuses more, so the rest wait.
 /** Where Browse's window can go round the panel, in the order Move Browser takes them. */
 var BROWSE_PLACES = ['right', 'left', 'front'];
+// How long Browse waits for the server to say whether a station can play before asking again.
+var RADIO_CHECK_RETRY_MS = 15000;
 var LIST_PREVIEWS_AT_ONCE = 3;
 // A list preview older than this is loaded again when it's next shown (the server re-reads lists
 // after 5 minutes too), and a request with no reply after LIST_REPLY_MS is given up on.
@@ -1937,8 +1939,8 @@ var FirePlaylistPanel = class {
     this.built = false;
     this.visible = false;
     if (this.core && this.core.previewVideo && typeof this.core.stopPreview === 'function') this.core.stopPreview();
-    [this.tickTimer, this.renderTimer, this.statusTimer, this.searchTimer, this.scrollTimer, this.listExpiryTimer].forEach(t => { clearTimeout(t); clearInterval(t); });
-    this.tickTimer = this.renderTimer = this.statusTimer = this.searchTimer = this.scrollTimer = this.listExpiryTimer = null;
+    [this.tickTimer, this.renderTimer, this.statusTimer, this.searchTimer, this.scrollTimer, this.listExpiryTimer, this.radioCheckTimer].forEach(t => { clearTimeout(t); clearInterval(t); });
+    this.tickTimer = this.renderTimer = this.statusTimer = this.searchTimer = this.scrollTimer = this.listExpiryTimer = this.radioCheckTimer = null;
     (this.thumbTimers || []).forEach(clearTimeout);
     this.thumbTimers = [];
     if (typeof this.core.removeMessageListener === 'function') this.core.removeMessageListener(this.onMessageFn);
@@ -2669,7 +2671,7 @@ var FirePlaylistPanel = class {
       const link = `https://directory.shoutcast.com/sbin/tunein-station.m3u?id=${msg.id}`;
       // The server says whether it can play here (an https stream, or the relay): RADIO_CHECK_RESULT.
       this.setBrowseOffer({ link, title: name, kind: 'station', check: 'checking' });
-      this.send(Commands.RADIO_CHECK, { link });
+      this.askRadioCheck(link);
       return;
     }
     if (msg.type !== 'page') return;
@@ -2686,6 +2688,19 @@ var FirePlaylistPanel = class {
       || this.tr(media.kind === 'series' ? 'Tubi series' : 'Tubi video');
     const path = media.kind === 'series' ? 'series' : media.kind === 'episode' ? 'tv-shows' : 'movies';
     this.setBrowseOffer({ link: `https://tubitv.com/${path}/${media.id}`, title, kind: media.kind === 'series' ? 'series' : 'video' });
+  }
+
+  // Asks the server whether a station can play here, and again every RADIO_CHECK_RETRY_MS while
+  // its offer still waits: a reply lost with the connection would leave it checking for good.
+  // The server keeps its answer a while, so asking again costs it little.
+  askRadioCheck(link) {
+    clearTimeout(this.radioCheckTimer);
+    this.send(Commands.RADIO_CHECK, { link });
+    this.radioCheckTimer = setTimeout(() => {
+      const o = this.browseOffer;
+      if (this.destroyed || !o || o.link !== link || o.check !== 'checking') return;
+      this.askRadioCheck(link);
+    }, RADIO_CHECK_RETRY_MS);
   }
 
   // Shows what Browse found, in the panel and as a bar on the page, or hides it (null).

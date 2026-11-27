@@ -139,8 +139,9 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         const start = this.core.params.start || 0;
         this.setupYoutubeScript(start);
         // The room's old code as well: this page can join before the space page does.
+        // Whether the world allows titles for adults (mature-links, from the space page's URL).
         this.core.sendMessage({path: "instance", data: this.core.params.instance, u: window.user,
-          legacy: this.core.params['legacy-instance'] || undefined});
+          mature: this.core.allowMature === true, legacy: this.core.params['legacy-instance'] || undefined});
         this.core.sendMessage({path: "user-video-player", data: window.user});
       }, ()=>{
           this.core.showToast("Reconnecting...");

@@ -128,8 +128,20 @@ function isMatureMeta(meta) {
   if (subjects.some(s => ADULT_SUBJECTS.test(s))) return true;
   const named = list(meta.title).concat(subjects).join(' ');
   if (ADULT_TITLE_WORDS.test(named)) return true;
-  const all = `${named} ${list(meta.description).join(' ').replace(/<[^>]*>/g, ' ').slice(0, 5000)}`;
+  // Its HTML's entities decoded (&nbsp; between "stag" and "film" included), so its words match.
+  const description = decodeEntities(list(meta.description).join(' ').replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ');
+  const all = `${named} ${description.slice(0, 5000)}`;
   return ADULT_WORDS.test(all);
+}
+
+/** HTML entities as text: named ones (spaces, quotes, ...) and numeric ones. */
+const NAMED_ENTITIES = { nbsp: ' ', ensp: ' ', emsp: ' ', thinsp: ' ', amp: '&', quot: '"', apos: "'", lt: '<', gt: '>', ndash: '-', mdash: '-' };
+function decodeEntities(s) {
+  const code = n => (n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : ' ');
+  return String(s || '')
+    .replace(/&#(\d{1,7});/g, (m, n) => code(Number(n)))
+    .replace(/&#x([0-9a-f]{1,6});/gi, (m, n) => code(parseInt(n, 16)))
+    .replace(/&([a-z]+);/gi, (m, n) => (Object.prototype.hasOwnProperty.call(NAMED_ENTITIES, n.toLowerCase()) ? NAMED_ENTITIES[n.toLowerCase()] : m));
 }
 
 function thumbnailFor(id) {

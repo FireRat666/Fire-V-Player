@@ -64,8 +64,9 @@ var Playlist = class {
     await this.core.setupWebsocket("playlist", d => this.parseMessage(d), () => {
       // The in-world player sets the room's mode (it can change in world), so this page doesn't.
       // The room's old code as well, as the player page sends: this page can join first.
+      // Whether the world allows titles for adults (mature-links, from this page's URL).
       this.core.sendMessage({path: "instance", data: this.core.params.instance, u: window.user,
-        legacy: this.core.params['legacy-instance'] || undefined});
+        mature: this.core.allowMature === true, legacy: this.core.params['legacy-instance'] || undefined});
     }, ()=>{
         this.core.showToast("Reconnecting...");
     });

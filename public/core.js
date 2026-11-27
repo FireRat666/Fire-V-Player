@@ -181,7 +181,7 @@ var Core = class {
       document.body.appendChild(iframe);
 
       const proto = this.getProtocol();
-      const playlistUrl = `${proto}://${this.hostUrl}/playlist/?instance=${encodeURIComponent(this.params.instance)}&legacy-instance=${encodeURIComponent(this.params['legacy-instance'] || '')}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}`;
+      const playlistUrl = `${proto}://${this.hostUrl}/playlist/?instance=${encodeURIComponent(this.params.instance)}&legacy-instance=${encodeURIComponent(this.params['legacy-instance'] || '')}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}&mature-links=${this.allowMature === true}`;
       this.showToast(`Player is in 2D mode. See console for playlist URL.`, 5000);
       console.log(`Player is in 2D mode. Open the playlist controls here: ${playlistUrl}`);
       return;
@@ -1535,7 +1535,7 @@ var Core = class {
     const proto = this.getProtocol();
     // The room's old code too, so the old room is copied even when this page joins first.
     const legacy = this.params['legacy-instance'] ? `&legacy-instance=${encodeURIComponent(this.params['legacy-instance'])}` : '';
-    return `${proto}://${this.hostUrl}/${mode}/?instance=${encodeURIComponent(this.params.instance)}${legacy}${playlistParam}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}&mode=${mode}`;
+    return `${proto}://${this.hostUrl}/${mode}/?instance=${encodeURIComponent(this.params.instance)}${legacy}${playlistParam}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}&mode=${mode}&mature-links=${this.allowMature === true}`;
   }
 
   // Opens the 2D playlist page in the client's menu browser.
@@ -2746,8 +2746,9 @@ var Core = class {
     // world's owner turns it on, as those links aren't moderated.
     this.allowUntrusted = String(this.params["untrusted-links"]).toLowerCase() === 'true';
     // Titles for adults from Tubi (R, TV-MA, not rated) and the Internet Archive (its adult films).
-    // Off unless the world's owner turns it on, as neither site asks for a viewer's age.
-    this.allowMature = String(this.params["mature-links"]).toLowerCase() === 'true';
+    // Off unless the world's owner turns it on, as neither site asks for a viewer's age. Links from
+    // any site turn it on too: a file from anywhere has no rating to check, so they'd get round it.
+    this.allowMature = String(this.params["mature-links"]).toLowerCase() === 'true' || this.allowUntrusted === true;
     if(this.params["one-for-each-instance"] === "true" && window.user && window.user.instance) {
         this.params.instance += window.user.instance;
         // The old room had the same ending (it was the code and this), so the server can match it.

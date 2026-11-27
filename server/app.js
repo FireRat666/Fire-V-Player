@@ -481,8 +481,9 @@ class App {
           ws.i = msg.data;
           // The world's snippet may allow links from any site (untrusted-links="true").
           ws.allowUntrusted = msg.untrusted === true;
-          // And titles for adults from Tubi and the Internet Archive (mature-links="true").
-          ws.allowMature = msg.mature === true;
+          // And titles for adults from Tubi and the Internet Archive (mature-links="true"), which
+          // untrusted-links allows too: a file from any site has no rating to check.
+          ws.allowMature = msg.mature === true || ws.allowUntrusted;
           // The space and player pages also name the room its code used before (core.js setRoom),
           // so the old room is copied whichever of them joins first.
           await this.createVideoPlayer(msg.data, msg.u, ws, typeof msg.legacy === 'string' ? msg.legacy : null);
@@ -1173,7 +1174,10 @@ class App {
         return;
       }
       try {
-        const found = await media.resolveMediaLinks(term);
+        // One that needs a rating and came without one (an Archive file whose item couldn't be
+        // read) counts as for adults here; whether it plays is checked on its own (media.js).
+        const found = (await media.resolveMediaLinks(term)).map(v => (v && typeof v.mature !== 'boolean'
+          && MediaSources.needsRating(media.detect(v.link || '')) ? { ...v, mature: true } : v));
         // A link to a title for adults says why it has no results.
         if (found.length && !media.filterMature(ws, found).items.length) fail(media.MATURE_MESSAGE);
         else results(found);

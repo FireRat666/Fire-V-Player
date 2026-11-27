@@ -61,7 +61,8 @@ var Karaoke = class {
     this.setupSearchOverlay();
     await this.core.init();
     await this.core.setupWebsocket("playlist", d => this.parseMessage(d), () => {
-      this.core.sendMessage({path: "instance", data: this.core.params.instance, u: window.user});
+      // Whether the world allows titles for adults (mature-links, from this page's URL).
+      this.core.sendMessage({path: "instance", data: this.core.params.instance, u: window.user, mature: this.core.allowMature === true});
     }, () => {
         this.core.showToast("Reconnecting...");
     });

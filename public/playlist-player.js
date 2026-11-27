@@ -145,8 +145,14 @@
         // Files play on the world's own video player instead of the browser (native-video.js).
         await core.setupScript(null, "media-sources");
         await core.setupScript(null, "native-video");
-        // And YouTube, looked up by each viewer's own device (youtube-native.js).
-        await core.setupScript(null, "youtube-native");
+        // And YouTube, looked up by each viewer's own device (youtube-native.js), where the
+        // youtube-native setting is on. It's optional, so a stalled load doesn't hold the screen up
+        // past 20 s (as for tubi-native.js); arriving later, it's used from then on.
+        if (String(core.params['youtube-native']).toLowerCase() === 'true') {
+          let timer;
+          await Promise.race([core.setupScript(null, "youtube-native"), new Promise(resolve => { timer = setTimeout(resolve, 20000); })]);
+          clearTimeout(timer);
+        }
         await this.core.setupBrowserElement(url);
         if (karaoke) {
           try { await this.core.setupJoinLeaveButton(); }

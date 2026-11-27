@@ -20,6 +20,8 @@ const { Readable } = require('stream');
 const httpsLib = require('https');
 const { TtlCache } = require('./cache.js');
 const MediaSources = require('../public/media-sources.js');
+/** Sound files, which a station's list may give as its stream. */
+const AUDIO_FILE = /\.(mp3|m4a|aac|wav|flac|opus|ogg|oga)$/i;
 
 const SHOUTCAST = 'https://directory.shoutcast.com';
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
@@ -221,14 +223,24 @@ async function resolveLink(link) {
  * knows it from then on.
  * @returns {Promise<Object|null>} A playlist item, or null.
  */
+function isStationStream(url) {
+  const m = MediaSources.detect(url);
+  if (!m || m.type === 'radio') return true;
+  const p = MediaSources.parseUrl(m.url || url);
+  return m.type === 'file' && !!p && AUDIO_FILE.test(p.pathname);
+}
+
 async function sniff(link) {
   const u = MediaSources.parseUrl(link);
   if (!u || MediaSources.detect(link)) return null;
   u.hash = 'radio';
   try {
-    // A list of videos (an .m3u of video links) isn't a station.
+    // A list of videos (an .m3u of video links) isn't a station. Its streams may be the station's
+    // own addresses (unknown links), radio links, or sound files (a live .mp3 stream). HLS (.m3u8)
+    // and MPEG-TS (.ts) streams can carry video, and play as those links themselves, so a list of
+    // them isn't one either.
     const s = await station(u.href);
-    if (s.streams.some(url => MediaSources.detect(url) && MediaSources.detect(url).type !== 'radio')) return null;
+    if (!s.streams.every(isStationStream)) return null;
     return await resolveLink(u.href);
   } catch (e) {
     return null;

@@ -220,7 +220,9 @@ var FirePlaylistPanel = class {
     this.recentSearches = this.loadRecent();
     // Results of recent successful searches, kept on this device so going back to one shows it
     // straight away instead of searching again.
-    this.searchCacheKey = `fvpSearchCache${this.karaoke ? 'Karaoke' : ''}`;
+    // (Version 2: kept per mature-links setting. Older results weren't, so they're dropped.)
+    try { localStorage.removeItem(`fvpSearchCache${this.karaoke ? 'Karaoke' : ''}`); } catch (e) {}
+    this.searchCacheKey = `fvpSearchCache2${this.karaoke ? 'Karaoke' : ''}`;
     this.pendingSearchKey = null;
     this.restoreLastSearch();
     // Lists this viewer saved from a link, kept on this device for this world.
@@ -885,8 +887,19 @@ var FirePlaylistPanel = class {
 
   // ---- search results kept on this device
 
+  // Kept apart by whether the world allows titles for adults: the server's results have lost
+  // their marks, so results kept where they were allowed can't be filtered afterwards.
   searchKey(query, source) {
-    return `${source || 'youtube'}:${String(query || '').trim().toLowerCase()}`;
+    return `${source || 'youtube'}:${this.matureTag()}:${String(query || '').trim().toLowerCase()}`;
+  }
+  matureTag() {
+    return this.core.allowMature === true ? 'all' : 'safe';
+  }
+  // Kept results as this world allows them (device results still have their marks), with the
+  // ones left out added to the hidden count.
+  keptResults(hit) {
+    const results = this.withoutMature(hit.results);
+    return { results, hidden: (Number(hit.hidden) || 0) + hit.results.length - results.length };
   }
   readSearchCache() {
     try {
@@ -919,11 +932,13 @@ var FirePlaylistPanel = class {
   // Opening the panel again shows the last search's results, if they were kept.
   restoreLastSearch() {
     const all = this.readSearchCache();
-    const newest = Object.keys(all).sort((a, b) => (all[b].at || 0) - (all[a].at || 0))[0];
+    const tag = this.matureTag();
+    const newest = Object.keys(all).filter(k => k.split(':')[1] === tag).sort((a, b) => (all[b].at || 0) - (all[a].at || 0))[0];
     const hit = newest && this.cachedSearch(newest);
     if (!hit) return;
-    this.searchResults = hit.results;
-    this.searchHidden = Number(hit.hidden) || 0;
+    const kept = this.keptResults(hit);
+    this.searchResults = kept.results;
+    this.searchHidden = kept.hidden;
     this.searchQuery = hit.query || '';
     const source = newest.split(':')[0];
     if (SEARCH_SOURCES[source] && this.searchSources().includes(source)) this.searchSource = source;
@@ -2820,7 +2835,8 @@ var FirePlaylistPanel = class {
     // A screen share room is looked up each time too, as it's a link made from the code.
     const isLink = /^(https?|rtspt?):\/\//i.test(q) || !!this.core.getId(q) || this.searchSource === 'screen';
     const key = this.searchKey(q, this.searchSource);
-    const kept = !isLink && this.cachedSearch(key);
+    const hit = !isLink && this.cachedSearch(key);
+    const kept = hit && this.keptResults(hit);
     if (kept) {
       clearInterval(this.searchTimer);
       this.searchTimer = null;

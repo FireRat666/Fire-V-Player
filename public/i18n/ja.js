@@ -182,6 +182,7 @@ FVP_STRINGS["ja"] = {
   "Searching YouTube.": "YouTube検索.",
   "Searching screen.sdq.st: type a room code, or paste its link.": "Screen.sdq.stを検索:部屋のコードを入力するか、リンクを貼り付けます.",
   "Searching...": "お問い合わせ.",
+  "Season {n}": "シーズン {n}",
   "Share": "シェア",
   "Shoutcast is open beside the panel. Press Play on a station there to add it.": "パネルの横にShoutcastが開きます。 そこでステーションでプレイを押すと、追加します.",
   "Shows a code. Send a link from your phone into your search, no typing in VR.": "コードを表示します。 お使いの携帯電話から検索にリンクを送信してください.",

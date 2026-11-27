@@ -1274,6 +1274,7 @@ var Core = class {
       this.params.volume = 0;
     }
     this.sendVolume();
+    if (this.playlistPanel) this.playlistPanel.renderSoon();
   }
   setVolumeIncrement(amount) {
     if (this.blocked) return;
@@ -1284,6 +1285,7 @@ var Core = class {
       this.params.volume = 0;
     }
     this.sendVolume();
+    if (this.playlistPanel) this.playlistPanel.renderSoon();
   }
   /**
    * Sets up karaoke's 3D in-world Singers button and optional trigger volume box.
@@ -1916,6 +1918,8 @@ var Core = class {
       this.updateScreenButtons();
     }
     this.sendVolume();
+    // The panel shows the volume, and the buttons under the screen change it too.
+    if (this.playlistPanel) this.playlistPanel.renderSoon();
   }
   
   mute() {
@@ -1923,6 +1927,7 @@ var Core = class {
     this.params.mute = this.params.mute == 'true' ? 'false' : 'true';
     this.sendBrowserMessage({path: Commands.MUTE, data: this.params.mute});
     this.updateScreenButtons();
+    if (this.playlistPanel) this.playlistPanel.renderSoon();
   }
   async setupMuteButton(playlistContainer) {
     this.muteButton = await this.setupSwapButton(playlistContainer, 'ButtonMute', new BS.Vector3(this.screenButtonLayout().Mute, 0, 0),

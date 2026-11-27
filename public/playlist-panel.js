@@ -2687,7 +2687,13 @@ var FirePlaylistPanel = class {
       .replace(/\s+[-–]\s+Stream(ing)? Free.*$/i, '').replace(/\s+Streaming Online$/i, '').replace(/\s*\(\d{4}\)\s*$/, '').trim().slice(0, 120)
       || this.tr(media.kind === 'series' ? 'Tubi series' : 'Tubi video');
     const path = media.kind === 'series' ? 'series' : media.kind === 'episode' ? 'tv-shows' : 'movies';
-    this.setBrowseOffer({ link: `https://tubitv.com/${path}/${media.id}`, title, kind: media.kind === 'series' ? 'series' : 'video' });
+    // A season picked on a series' page (its address ends in /season-2) offers that season alone.
+    const season = media.kind === 'series' && media.season ? media.season : 0;
+    this.setBrowseOffer({
+      link: `https://tubitv.com/${path}/${media.id}${season ? `/season-${season}` : ''}`,
+      title: season && !/season\s*\d/i.test(title) ? `${title}, ${this.tr('Season {n}', { n: season })}` : title,
+      kind: media.kind === 'series' ? 'series' : 'video'
+    });
   }
 
   // Asks the server whether a station can play here, and again every RADIO_CHECK_RETRY_MS while
@@ -3657,10 +3663,15 @@ var FirePlaylistPanel = class {
   // YouTube's search thumbnails (e.g. .../hq720.jpg?sqp=...&rs=...) are often WebP despite the
   // .jpg name, and Unity can't decode WebP, so they fail to load. /vi/<id>/mqdefault.jpg is
   // always a JPEG (320x180, the same shape as the thumbnail box).
+  // Tubi's pictures are often WebP too (its picture server sends WebP unless asked for a JPEG,
+  // and Unity can't ask), so they come through the server, which asks (/api/tubi-picture).
   thumbUrl(url, link) {
     const fromThumb = /^https?:\/\/i\d*\.ytimg\.com\/vi(?:_webp)?\/([a-zA-Z0-9_-]{11})\//.exec(String(url || ''));
     const id = (fromThumb && fromThumb[1]) || (link && this.core.getId ? this.core.getId(link) : null);
-    const out = id ? `https://i.ytimg.com/vi/${id}/mqdefault.jpg` : String(url || '');
+    let out = id ? `https://i.ytimg.com/vi/${id}/mqdefault.jpg` : String(url || '');
+    if (!id && /^https:\/\/canvas-lb\.tubitv\.com\//.test(out) && this.core.hostUrl) {
+      out = `${this.core.getProtocol()}://${this.core.hostUrl}/api/tubi-picture?u=${encodeURIComponent(out)}`;
+    }
     if (!/^https?:\/\//.test(out)) return out;
     return `${out}${out.includes('?') ? '&' : '?'}fvp=${THUMB_VISIT}`;
   }

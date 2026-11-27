@@ -12,7 +12,7 @@
  * Messages in (BS Browser "postmessage" actions, as bsmessage events):
  *   { type: 'search', n, term }
  *   { type: 'stream', n, kind, id }      kind 'movie' or 'episode'
- *   { type: 'series', n, id }
+ *   { type: 'series', n, id, season }  season: one season's number, or 0 for them all
  * Messages out (window.O.sendMessage), all with from: 'tubi-resolve':
  *   { type: 'ready' }
  *   { type: 'result', n, ok: true, ... } or { type: 'result', n, ok: false, reason }
@@ -23,6 +23,8 @@
 
   var MAX_RESULTS = 40;
   var MAX_EPISODES = 300;
+  // Episode pages read at a time, for a series' seasons after the first.
+  var EPISODES_AT_ONCE = 4;
   var SEARCH_TIMEOUT_MS = 20000;
 
   function log(msg) { try { console.log('[tubi-resolve] ' + msg); } catch (e) {} }
@@ -143,8 +145,31 @@
       if (start < 0) throw new Error("Couldn't read that Tubi page here.");
       var end = html.indexOf('</script>', start);
       var body = html.slice(start + 'window.__data='.length, end).trim().replace(/;\s*$/, '').replace(/:undefined(?=[,}\]])/g, ':null');
-      return JSON.parse(body);
+      var data = JSON.parse(body);
+      if (/^series\//.test(path)) data.fvpSeasons = seasonsOf(html);
+      return data;
     });
+  }
+
+  // Every season of a series page, from its query state (as server/streaming.js reads it):
+  // [{number, episodes: [{id, num}]}], or null. The site data has the first season's episodes only.
+  function seasonsOf(html) {
+    var start = html.indexOf('window.__REACT_QUERY_STATE__=');
+    if (start < 0) return null;
+    var end = html.indexOf('</script>', start);
+    try {
+      var body = html.slice(start + 'window.__REACT_QUERY_STATE__='.length, end).trim().replace(/;\s*$/, '')
+        .replace(/([:[,])undefined(?=[,}\]])/g, '$1null');
+      var queries = JSON.parse(body).queries || [];
+      for (var i = 0; i < queries.length; i++) {
+        var q = queries[i];
+        if (q && q.queryKey && q.queryKey[0] === 'seriesPaginationInfo') {
+          var seasons = q.state && q.state.data && q.state.data.seasons;
+          return Array.isArray(seasons) ? seasons : null;
+        }
+      }
+    } catch (e) {}
+    return null;
   }
 
   function picture(c) {
@@ -167,32 +192,73 @@
     }).catch(function (e) { send({ type: 'result', n: n, ok: false, reason: String(e && e.message || e) }); });
   }
 
-  // A series' episodes, season 1 first and each in order (Tubi lists the newest season first, and
-  // at most 20 episodes of each).
-  function series(n, id) {
+  // An episode the series page has no details of (a season after the first), from its own page.
+  var episodes = {};
+  function episode(id) {
+    if (!episodes[id]) {
+      episodes[id] = pageData('tv-shows/' + id).then(function (data) {
+        var c = data.video && data.video.byId && data.video.byId[id];
+        if (!c) throw new Error("That Tubi episode isn't available here.");
+        return c;
+      });
+      episodes[id].catch(function () { delete episodes[id]; });
+    }
+    return episodes[id];
+  }
+
+  // A series' episodes, season 1 first and each in order, or one season's (`season`: its number).
+  // The series page has the details of its first season's episodes only (at most 20); every
+  // season's are listed by id, and the rest are read from their own pages, a few at a time.
+  function series(n, id, season) {
     pageData('series/' + id).then(function (data) {
       var byId = (data.video && data.video.byId) || {};
       var s = byId['0' + id] || byId[id];
       if (!s) throw new Error("That Tubi series isn't available here.");
-      function num(v, fallback) { return isFinite(Number(v)) && String(v).trim() !== '' ? Number(v) : fallback; }
-      var seasons = (s.seasons || []).map(function (season, i) { return { season: season, n: num(season.number, 1000 + i) }; })
-        .sort(function (a, b) { return a.n - b.n; });
-      var items = [];
+      function num(v, fallback) { return v != null && isFinite(Number(v)) && String(v).trim() !== '' ? Number(v) : fallback; }
+      var listed = (data.fvpSeasons && data.fvpSeasons.length ? data.fvpSeasons : s.seasons || []).map(function (x, i) {
+        return {
+          n: num(x.number, 1000 + i),
+          eps: (x.episodes || []).map(function (ep, k) {
+            var known = byId[ep.id] || {};
+            return { id: String(ep.id || ''), num: num(ep.num != null ? ep.num : ep.episode_number != null ? ep.episode_number : known.episode_number, 1000 + k) };
+          }).filter(function (ep) { return /^\d{1,12}$/.test(ep.id); })
+        };
+      }).sort(function (a, b) { return a.n - b.n; });
+      var seasons = season ? listed.filter(function (x) { return x.n === season; }) : listed;
+      if (season && !seasons.length) throw new Error('That Tubi series has no season ' + season + ' here.');
+      var wanted = [];
       seasons.forEach(function (x) {
-        var eps = (x.season.episodes || []).map(function (ep, i) { return { c: byId[ep.id] || ep, i: i }; })
-          .filter(function (e) { return e.c && e.c.id; })
-          .sort(function (a, b) { return num(a.c.episode_number, 1000 + a.i) - num(b.c.episode_number, 1000 + b.i); });
-        eps.forEach(function (e) {
-          if (items.length >= MAX_EPISODES) return;
-          var c = e.c;
-          var title = clean(c.title, 150) || 'Tubi video';
-          if (!/^S\d+\s*:?\s*E\d+/i.test(title) && x.n < 1000 && Number(c.episode_number) > 0) {
-            title = 'S' + String(x.n).padStart(2, '0') + ':E' + String(c.episode_number).padStart(2, '0') + ' - ' + title;
-          }
-          items.push({ title: title, thumbnail: picture(c), duration: Math.max(0, Math.round(Number(c.duration) || 0)) * 1000, link: 'https://tubitv.com/tv-shows/' + c.id });
+        x.eps.slice().sort(function (a, b) { return a.num - b.num; }).forEach(function (ep) {
+          if (wanted.length < MAX_EPISODES) wanted.push({ season: x.n, ep: ep });
         });
       });
-      send({ type: 'result', n: n, ok: true, title: clean(s.title, 120) || 'Tubi series', items: items });
+      var items = new Array(wanted.length);
+      var next = 0;
+      function worker() {
+        if (next >= wanted.length) return Promise.resolve();
+        var k = next++;
+        var w = wanted[k];
+        var known = byId[w.ep.id];
+        return (known ? Promise.resolve(known) : episode(w.ep.id)).then(function (c) { return c; }, function () { return null; }).then(function (c) {
+          var title = c ? clean(c.title, 150) : '';
+          if (!/^S\d+\s*:?\s*E\d+/i.test(title) && w.season < 1000 && w.ep.num < 1000) {
+            title = 'S' + String(w.season).padStart(2, '0') + ':E' + String(w.ep.num).padStart(2, '0') + (title ? ' - ' + title : '');
+          }
+          items[k] = {
+            title: title || 'Tubi episode',
+            thumbnail: c ? picture(c) : '',
+            duration: c ? Math.max(0, Math.round(Number(c.duration) || 0)) * 1000 : 0,
+            link: 'https://tubitv.com/tv-shows/' + w.ep.id
+          };
+          return worker();
+        });
+      }
+      var workers = [];
+      for (var i = 0; i < EPISODES_AT_ONCE; i++) workers.push(worker());
+      return Promise.all(workers).then(function () {
+        var name = clean(s.title, 120) || 'Tubi series';
+        send({ type: 'result', n: n, ok: true, title: season ? clean(name + ', Season ' + season, 120) : name, items: items });
+      });
     }).catch(function (e) { send({ type: 'result', n: n, ok: false, reason: String(e && e.message || e) }); });
   }
 
@@ -204,7 +270,7 @@
     if (!msg || typeof msg !== 'object' || typeof msg.n !== 'number') return;
     if (msg.type === 'search' && typeof msg.term === 'string') search(msg.n, clean(msg.term, 100));
     else if (msg.type === 'stream' && /^\d{1,12}$/.test(String(msg.id))) stream(msg.n, msg.kind === 'episode' ? 'episode' : 'movie', String(msg.id));
-    else if (msg.type === 'series' && /^\d{1,12}$/.test(String(msg.id))) series(msg.n, String(msg.id));
+    else if (msg.type === 'series' && /^\d{1,12}$/.test(String(msg.id))) series(msg.n, String(msg.id), /^\d{1,3}$/.test(String(msg.season || '')) ? Number(msg.season) : 0);
   });
 
   send({ type: 'ready' });

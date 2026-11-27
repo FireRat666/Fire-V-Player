@@ -254,6 +254,16 @@ class App {
         res.status(422).json({ error: e.message || "Couldn't find that video's stream." });
       }
     });
+    // A Tubi picture as a JPEG, for the panel's thumbnails: Unity can't show the WebP that
+    // Tubi's picture server sends it (see streaming.tubiPictureFile). Only Tubi's pictures.
+    this.app.get('/api/tubi-picture', async (req, res) => {
+      try {
+        const { type, body } = await streaming.tubiPictureFile(String(req.query.u || '').slice(0, 600));
+        res.set({ 'Content-Type': type, 'Cache-Control': 'public, max-age=604800' }).send(body);
+      } catch (e) {
+        res.status(404).set('Cache-Control', 'no-store').json({ error: e.message || "Couldn't get that picture." });
+      }
+    });
     // A radio station that only streams over http, sent on to the player page (see radio.relay).
     // Only stations in a room's playlist are relayed, so it can't be used to relay any station.
     const queued = link => Object.values(this.videoPlayers).some(p => p && Array.isArray(p.playlist) && p.playlist.some(t => t && t.link === link));

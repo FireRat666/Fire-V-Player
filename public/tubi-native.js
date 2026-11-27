@@ -13,12 +13,14 @@ var FireTubiResolver = (() => {
   /** The page the hidden browser sits on: on Tubi's own site, and tiny. */
   const PAGE_URL = 'https://tubitv.com/robots.txt';
   /** Bump when tubi-resolve.js changes, so browsers don't keep an old copy. */
-  const SCRIPT_VERSION = 2;
+  const SCRIPT_VERSION = 3;
   const INJECT_EVERY_MS = 500;
   const READY_TIMEOUT_MS = 20000;
   /** The longest a search, and any other lookup, may take. */
   const SEARCH_TIMEOUT_MS = 25000;
   const REQUEST_TIMEOUT_MS = 15000;
+  /** A series reads a page for each episode after its first season, a few at a time. */
+  const SERIES_TIMEOUT_MS = 90000;
   /** How long a stream is kept (Tubi's stream links last about a week), and a series' episodes. */
   const STREAM_CACHE_MS = 60 * 60 * 1000;
   const SERIES_CACHE_MS = 30 * 60 * 1000;
@@ -201,10 +203,10 @@ var FireTubiResolver = (() => {
     async series(link) {
       const media = window.MediaSources ? MediaSources.detect(link) : null;
       if (!media || media.type !== 'tubi' || media.kind !== 'series') return null;
-      const key = `series:${media.id}`;
+      const key = `series:${media.id}:${media.season || 'all'}`;
       const hit = this.cached(key, SERIES_CACHE_MS);
       if (hit) return hit;
-      const msg = await this.ask({ type: 'series', id: media.id }, REQUEST_TIMEOUT_MS);
+      const msg = await this.ask({ type: 'series', id: media.id, season: media.season || 0 }, SERIES_TIMEOUT_MS);
       if (!msg.ok || !Array.isArray(msg.items)) {
         console.warn(`[TubiNative] Series ${link}: ${msg.reason || 'no answer'}`);
         return null;

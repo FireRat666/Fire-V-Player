@@ -27,11 +27,15 @@ const CATALOG_RETRY_MS = 5 * 60 * 1000;
 const NASA_TTL_MS = 60 * 60 * 1000;
 /** Most episodes a Tubi series gives, and results a search gives. */
 const MAX_EPISODES = 300;
+/** Episode pages read at a time, for a series' seasons after the first. */
+const EPISODES_AT_ONCE = 4;
 const MAX_RESULTS = 40;
 /** Categories that depend on who's watching, or repeat others, aren't searched. */
 const SKIP_CATEGORIES = new Set(['recommended_for_you', 'continue_watching', 'queue', 'weekly_watchlist']);
 
 const cache = new TtlCache({ maxEntries: 400 });
+/** Episodes read from their own pages (a long series has hundreds), kept apart from the pages. */
+const episodeCache = new TtlCache({ maxEntries: 3000 });
 
 const clean = (s, max = 200) => String(s || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
 const decodeEntities = s => String(s || '')
@@ -59,6 +63,27 @@ function parseTubiData(html) {
   return JSON.parse(body);
 }
 
+/**
+ * Every season of a Tubi series page, from the page's query state (window.__REACT_QUERY_STATE__):
+ * [{number, episodes: [{id, num}]}], or null. The site data has the details of the first season's
+ * episodes only (and at most 20 of them); this lists every season's episodes, by id.
+ */
+function parseTubiSeasons(html) {
+  const start = html.indexOf('window.__REACT_QUERY_STATE__=');
+  if (start < 0) return null;
+  const end = html.indexOf('</script>', start);
+  try {
+    // Its `undefined`s are in lists too ("[undefined]"), not only after a name.
+    const body = html.slice(start + 'window.__REACT_QUERY_STATE__='.length, end).trim().replace(/;\s*$/, '')
+      .replace(/([:[,])undefined(?=[,}\]])/g, '$1null');
+    const query = (JSON.parse(body).queries || []).find(q => q && Array.isArray(q.queryKey) && q.queryKey[0] === 'seriesPaginationInfo');
+    const seasons = query && query.state && query.state.data && query.state.data.seasons;
+    return Array.isArray(seasons) ? seasons : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 /** A Tubi page's data (path like "movies/123" or "category/westerns"), not cached. */
 async function fetchTubiPage(path) {
   let html;
@@ -80,7 +105,9 @@ async function fetchTubiPage(path) {
     }
     throw new Error("Tubi sent this server a different page than usual, so its titles can't be read. It may not serve this server.");
   }
-  return parseTubiData(html);
+  const data = parseTubiData(html);
+  if (/^series\//.test(path)) data.fvpSeasons = parseTubiSeasons(html);
+  return data;
 }
 
 /**
@@ -94,6 +121,31 @@ function tubiPage(path) {
 function tubiPicture(c) {
   const list = (c && (c.thumbnails || c.landscape_images || c.posterarts)) || [];
   return https(list[0] || '');
+}
+
+/** Tubi's picture server, and the biggest picture sent on from it. */
+const TUBI_PICTURES = /^https:\/\/canvas-lb\.tubitv\.com\/[A-Za-z0-9_=\/.-]{1,400}$/;
+const MAX_PICTURE_BYTES = 3 * 1024 * 1024;
+const pictureCache = new TtlCache({ maxEntries: 400 });
+
+/**
+ * A Tubi picture as a JPEG (or PNG), for the world's panel (/api/tubi-picture). Tubi's picture
+ * server sends WebP to anything that doesn't ask for something else, and Unity can't show WebP,
+ * so the panel's thumbnails come through here, asking for a JPEG.
+ * @returns {Promise<{type: string, body: Buffer}>}
+ */
+function tubiPictureFile(url) {
+  url = String(url || '');
+  if (!TUBI_PICTURES.test(url)) return Promise.reject(new Error("That isn't a Tubi picture."));
+  return pictureCache.remember(url, PAGE_TTL_MS, async () => {
+    const res = await fetch(url, { headers: { 'user-agent': UA, accept: 'image/jpeg,image/png;q=0.9' }, signal: AbortSignal.timeout(TIMEOUT_MS) });
+    const type = String(res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    if (!res.ok) throw new Error(`Tubi answered ${res.status}.`);
+    if (type !== 'image/jpeg' && type !== 'image/png') throw new Error(`Tubi sent ${type || 'something else'}.`);
+    const body = Buffer.from(await res.arrayBuffer());
+    if (body.length > MAX_PICTURE_BYTES) throw new Error('That picture is too big.');
+    return { type, body };
+  });
 }
 
 /** A Tubi movie or episode (content type 'v') or series ('s') as a playlist item or search result. */
@@ -135,33 +187,77 @@ async function tubiStream(kind, id) {
 }
 
 /**
- * A Tubi series' episodes, season 1 first and each season in order. Tubi's page lists the newest
- * season first, and only the first 20 episodes of each season (the rest need a signed-in app's
- * token). An episode's title says its season and number ("S01:E03 - Name").
+ * An episode's playlist item from its own page, for the ones a series page has no details of
+ * (every season after the first). Only the item is kept, not the page.
  */
-async function tubiSeries(id) {
-  const data = await tubiPage(`series/${id}`);
-  const byId = (data.video && data.video.byId) || {};
-  const series = byId[`0${id}`] || byId[id];
-  if (!series) throw new Error("That Tubi series isn't available.");
-  const num = (v, fallback) => (Number.isFinite(Number(v)) && String(v).trim() !== '' ? Number(v) : fallback);
-  const seasons = (series.seasons || []).map((season, i) => ({ season, n: num(season.number, 1000 + i) })).sort((a, b) => a.n - b.n);
-  const items = [];
-  for (const { season, n } of seasons) {
-    const episodes = (season.episodes || []).map((ep, i) => ({ c: byId[ep.id] || ep, i }))
-      .filter(e => e.c && e.c.id)
-      .sort((a, b) => num(a.c.episode_number, 1000 + a.i) - num(b.c.episode_number, 1000 + b.i));
-    for (const { c } of episodes) {
-      if (items.length >= MAX_EPISODES) break;
-      const item = tubiItem(c, 'episode');
-      // Most titles already say "S01:E03 - ..."; one that doesn't gets it.
-      if (!/^S\d+\s*:?\s*E\d+/i.test(item.title) && n < 1000 && Number(c.episode_number) > 0) {
-        item.title = clean(`S${String(n).padStart(2, '0')}:E${String(c.episode_number).padStart(2, '0')} - ${item.title}`);
+function tubiEpisode(id) {
+  return episodeCache.remember(`tubi:episode:${id}`, PAGE_TTL_MS, async () => {
+    const data = await fetchTubiPage(`tv-shows/${id}`);
+    const c = data.video && data.video.byId && data.video.byId[id];
+    if (!c) throw new Error("That Tubi episode isn't available.");
+    return tubiItem(c, 'episode');
+  });
+}
+
+/**
+ * A Tubi series' episodes, season 1 first and each season in order, or one season's
+ * (`season`: its number, or 'first' for the lowest). Tubi's series page has the details of the
+ * first season's episodes only; every season's episodes are listed by id (see parseTubiSeasons),
+ * and the rest are read from their own pages, a few at a time. An episode's title says its season
+ * and number ("S01:E03 - Name").
+ */
+function tubiSeries(id, season) {
+  return cache.remember(`tubi:series:${id}:${season || 'all'}`, PAGE_TTL_MS, async () => {
+    const data = await tubiPage(`series/${id}`);
+    const byId = (data.video && data.video.byId) || {};
+    const series = byId[`0${id}`] || byId[id];
+    if (!series) throw new Error("That Tubi series isn't available.");
+    const num = (v, fallback) => (Number.isFinite(Number(v)) && String(v).trim() !== '' ? Number(v) : fallback);
+    // [{n, eps: [{id, num}]}]: the full list where the page has it, else the site data's.
+    const listed = (data.fvpSeasons && data.fvpSeasons.length ? data.fvpSeasons : series.seasons || []).map((s, i) => ({
+      n: num(s.number, 1000 + i),
+      eps: (s.episodes || []).map((ep, k) => ({ id: String(ep.id || ''), num: num(ep.num != null ? ep.num : ep.episode_number != null ? ep.episode_number : (byId[ep.id] || {}).episode_number, 1000 + k) }))
+        .filter(ep => /^\d{1,12}$/.test(ep.id))
+    })).sort((a, b) => a.n - b.n);
+    let seasons = listed;
+    if (season === 'first') seasons = listed.slice(0, 1);
+    else if (season) seasons = listed.filter(s => s.n === Number(season));
+    if (season && !seasons.length) throw new Error(`That Tubi series has no season ${season} here.`);
+    const wanted = [];
+    for (const s of seasons) {
+      for (const ep of s.eps.slice().sort((a, b) => a.num - b.num)) {
+        if (wanted.length < MAX_EPISODES) wanted.push({ season: s.n, ep });
       }
-      items.push(item);
     }
-  }
-  return { title: clean(series.title, 120) || 'Tubi series', items };
+    const items = new Array(wanted.length);
+    let next = 0;
+    const worker = async () => {
+      while (next < wanted.length) {
+        const k = next++;
+        const { season: n, ep } = wanted[k];
+        let item;
+        if (byId[ep.id]) item = tubiItem(byId[ep.id], 'episode');
+        else {
+          try {
+            item = await tubiEpisode(ep.id);
+          } catch (e) {
+            // Still listed, so it can be played: its title and picture come when it's looked up.
+            item = { title: '', thumbnail: '', duration: 0, link: `https://tubitv.com/tv-shows/${ep.id}` };
+          }
+        }
+        item = Object.assign({}, item);
+        // Most titles already say "S01:E03 - ..."; one that doesn't gets it.
+        if (!/^S\d+\s*:?\s*E\d+/i.test(item.title) && n < 1000 && ep.num < 1000) {
+          item.title = clean(`S${String(n).padStart(2, '0')}:E${String(ep.num).padStart(2, '0')}${item.title ? ` - ${item.title}` : ''}`);
+        }
+        if (!item.title) item.title = 'Tubi episode';
+        items[k] = item;
+      }
+    };
+    await Promise.all(Array.from({ length: EPISODES_AT_ONCE }, worker));
+    const title = clean(series.title, 120) || 'Tubi series';
+    return { title: season && season !== 'first' ? clean(`${title}, Season ${season}`, 120) : title, items };
+  });
 }
 
 /** The titles in a Tubi category (up to 50, as its page shows). Only these are cached, not the page. */
@@ -334,7 +430,7 @@ async function resolveLink(link) {
   if (!media) return null;
   if (media.type === 'tubi') {
     if (media.kind === 'series') {
-      const { items } = await tubiSeries(media.id);
+      const { items } = await tubiSeries(media.id, media.season || 'first');
       if (!items.length) throw new Error('That Tubi series has no episodes here.');
       return strip(items[0]);
     }
@@ -347,7 +443,7 @@ async function resolveLink(link) {
 /** Like resolveLink, but a Tubi series gives every episode. */
 async function resolveLinks(link) {
   const media = MediaSources.detect(link);
-  if (media && media.type === 'tubi' && media.kind === 'series') return (await tubiSeries(media.id)).items.map(strip);
+  if (media && media.type === 'tubi' && media.kind === 'series') return (await tubiSeries(media.id, media.season)).items.map(strip);
   const one = await resolveLink(link);
   return one ? [one] : [];
 }
@@ -378,7 +474,11 @@ function listSource(u) {
   const host = u.hostname.toLowerCase().replace(/^www\./, '');
   const parts = u.pathname.split('/').filter(Boolean);
   if (host === 'tubitv.com' && parts[0] === 'category' && /^[a-z0-9_-]{1,80}$/.test(parts[1] || '')) return { kind: 'streaming', site: 'tubi-category', id: parts[1], name: 'Tubi category' };
-  if (host === 'tubitv.com' && parts[0] === 'series' && /^\d{1,12}$/.test(parts[1] || '')) return { kind: 'streaming', site: 'tubi-series', id: parts[1], name: 'Tubi series' };
+  if (host === 'tubitv.com' && parts[0] === 'series' && /^\d{1,12}$/.test(parts[1] || '')) {
+    // A season's page (series/<id>/<name>/season-2) is that season alone.
+    const season = MediaSources.detect(u.href);
+    return { kind: 'streaming', site: 'tubi-series', id: parts[1], season: season && season.season, name: 'Tubi series' };
+  }
   if (host === 'plus.nasa.gov' && parts[0] === 'video_series' && /^[a-z0-9-]{1,200}$/.test(parts[1] || '')) return { kind: 'streaming', site: 'nasa-series', id: parts[1], name: 'NASA+ series' };
   return null;
 }
@@ -386,7 +486,7 @@ function listSource(u) {
 /** Loads a list from listSource: {title, items}. */
 async function loadList(source) {
   const list = source.site === 'tubi-category' ? await tubiCategory(source.id)
-    : source.site === 'tubi-series' ? await tubiSeries(source.id)
+    : source.site === 'tubi-series' ? await tubiSeries(source.id, source.season)
       : await nasaSeries(source.id);
   // A list's videos go into the playlist as they are, and a series isn't one video (its link in a
   // search result is looked up when added, which picks its first episode).
@@ -396,5 +496,5 @@ async function loadList(source) {
 
 module.exports = {
   resolveLink, resolveLinks, streamFor, listSource, loadList,
-  searchTubi, searchNasa, tubiCategories, parseTubiData
+  searchTubi, searchNasa, tubiCategories, parseTubiData, tubiPictureFile
 };

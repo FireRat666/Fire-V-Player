@@ -38,6 +38,7 @@
  * @property {string} [file] - For an Internet Archive link to one of an item's video files: its name.
  * @property {string} [page] - For a publicdomainmovie.net page: the page to read the item from.
  * @property {'movie'|'episode'|'series'} [kind] - For Tubi: what the page is. A series is a list of episodes.
+ * @property {number} [season] - For a Tubi series: the one season its link is for (a season's page).
  * @property {string} [slug] - For NASA+: the video's name in its address.
  * @property {boolean} [stream] - True when the player gets the stream from the server (/api/stream).
  * @property {'shoutcast'|'radiobrowser'|'somafm'} [site] - For 'radio': a station in Shoutcast's or
@@ -182,13 +183,17 @@ var MediaSources = (() => {
       if (m) return { type: 'loc', collection: m[1], number: m[2] };
     }
     if (host === 'tile.loc.gov' && FILE_EXT.test(u.pathname)) return { type: 'file', loc: true };
-    // Tubi: tubitv.com/movies/<id>, /tv-shows/<id> (an episode) and /series/<id> (a list of episodes).
+    // Tubi: tubitv.com/movies/<id>, /tv-shows/<id> (an episode) and /series/<id> (a list of
+    // episodes). A season's page, /series/<id>/<name>/season-<n> (or /series/<id>/season-<n>), is
+    // that season's episodes.
     if (host === 'tubitv.com') {
       const kinds = { movies: 'movie', 'tv-shows': 'episode', series: 'series' };
       const kind = kinds[parts[0]];
       const id = parts[1] || '';
       if (!kind || !/^\d{1,12}$/.test(id)) return null;
-      return kind === 'series' ? { type: 'tubi', kind, id } : { type: 'tubi', kind, id, stream: true };
+      if (kind !== 'series') return { type: 'tubi', kind, id, stream: true };
+      const season = /^season-(\d{1,3})$/.exec(parts[3] || parts[2] || '');
+      return season ? { type: 'tubi', kind, id, season: Number(season[1]) } : { type: 'tubi', kind, id };
     }
     // ESO and ESA/Hubble videos: www.eso.org/public/videos/<id>/ (or /public/<country>/videos/<id>/)
     // and esahubble.org/videos/<id>/. Their archive pages (a category, a search) are lists.

@@ -563,8 +563,10 @@ var FireNativeScreen = (() => {
      */
     watchStart(since, kicks) {
       clearTimeout(this.startTimer);
-      // Where it's measured from: where it was let go, or where a jump meanwhile landed (see seek).
+      // Where it's measured from: where it was let go, or where a jump meanwhile landed (seek
+      // starts the wait again from there, with the nudges already used).
       this.startFrom = Number(this.vp && this.vp.time) || 0;
+      this.startKicks = kicks;
       this.startTimer = setTimeout(() => {
         this.startTimer = null;
         if (this.destroyed || this.wantPaused || this.held() || this.isPreview() || this.endedAt != null) return;
@@ -637,8 +639,9 @@ var FireNativeScreen = (() => {
         this.seenPlaying = false; // still stopped until it's started again
       }
       this.vp.time = t;
-      // A jump while the start is being checked (a sync's): only playing from where it landed counts.
-      if (this.startTimer) this.startFrom = t;
+      // A jump while the start is being checked (a sync's, a host seek): only playing from where it
+      // landed counts, and it gets the whole wait to do that in.
+      if (this.startTimer) this.watchStart(performance.now(), this.startKicks || 0);
       this.lastSeekAt = performance.now();
       this.lastRaw = this.vp.time; // the setter keeps the new value until Unity sends its own
       this.baseTime = t;
@@ -747,6 +750,7 @@ var FireNativeScreen = (() => {
           // A viewer's own skip: stop pulling them back into step until the next track or host seek.
           clearTimeout(this.settleTimer); // a check still to come would undo the skip
           clearTimeout(this.startTimer);  // so would the check that it started after its countdown (watchStart)
+          this.startTimer = null;         // which the skip's own seek would otherwise start again
           // and the answer to a forced sync that check already asked for, unless a host seek or
           // track change is waiting for its sync, which still moves everyone.
           if (!this.hostSyncPending) this.pendingSync = null;

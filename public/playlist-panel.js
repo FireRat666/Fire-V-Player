@@ -2631,6 +2631,7 @@ var FirePlaylistPanel = class {
   // A message from the browser window's page: the page it moved to, or a station played there.
   onBrowseMessage(msg) {
     if (msg.type === 'add') { this.addBrowseOffer(false); return; }
+    if (msg.type === 'now') { this.addBrowseOffer(true); return; }
     if (msg.type === 'extra') { this.showEpisodes(this.browseOffer && this.browseOffer.link); return; }
     if (msg.type === 'station' && /^\d{1,12}$/.test(String(msg.id || ''))) {
       const name = String(msg.name || '').trim().slice(0, 120) || this.tr('Radio station');
@@ -2659,6 +2660,7 @@ var FirePlaylistPanel = class {
     if (this.siteBrowser) {
       this.siteBrowser.offer(offer ? {
         text: this.tr(offer.kind === 'series' ? 'Add episodes of "{title}" to the playlist?' : 'Add "{title}" to the playlist?', { title: offer.title }),
+        now: offer.kind !== 'series' && this.isHost() ? this.tr('Play Now') : '',
         add: offer.kind === 'series' ? '' : this.tr('Add to Playlist'),
         extra: offer.kind === 'series' ? this.tr('Pick Episodes') : '',
         what: offer.kind

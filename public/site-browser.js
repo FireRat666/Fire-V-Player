@@ -12,8 +12,10 @@
  *   { type: 'page', url, title }                 each time the page's address changes
  *   { type: 'station', id, name, genre }         a Shoutcast station was played
  *   { type: 'add', what }                        the page's Add button ('page' or 'station')
+ *   { type: 'now', what }                        the page's Play Now button (the host)
+ *   { type: 'alert', text }                      the site's alert(), shown on the page as a note
  * Messages in (BS Browser "postmessage" actions, as bsmessage events):
- *   { type: 'offer', text, add, extra }          shows the bar (add, extra: button labels; no text hides it)
+ *   { type: 'offer', text, now, add, extra }     shows the bar (now, add, extra: button labels; no text hides it)
  * @module public/site-browser
  */
 
@@ -48,6 +50,30 @@ var FireSiteBrowser = (() => {
   }
   // The panel stops sending this whole script once the page says it has it.
   send({ type: 'hello' });
+  // A site's alert(), confirm() or prompt() would wait for a dialog a headset never shows (Quest:
+  // an Android dialog outside the world), and every page in the world waits with it (they share
+  // one thread): Shoutcast alerts each time a station can't play here. It shows as a note instead.
+  var note = null, noteTimer = 0;
+  function showNote(text) {
+    text = String(text == null ? '' : text).replace(/\\s+/g, ' ').trim().slice(0, 300);
+    if (!text) return;
+    send({ type: 'alert', text: text });
+    if (!note) {
+      note = document.createElement('div');
+      note.style.cssText = 'position:fixed;left:18px;right:18px;bottom:18px;z-index:2147483647;padding:14px 18px;border-radius:12px;background:rgba(183,28,28,0.95);color:#fff;font:20px sans-serif;box-shadow:0 2px 12px rgba(0,0,0,0.5)';
+      note.addEventListener('click', function () { if (note) note.style.display = 'none'; });
+    }
+    note.textContent = text;
+    note.style.display = 'block';
+    if (!note.parentNode) (document.body || document.documentElement).appendChild(note);
+    clearTimeout(noteTimer);
+    noteTimer = setTimeout(function () { if (note) note.style.display = 'none'; }, 10000);
+  }
+  try {
+    window.alert = function (m) { showNote(m); };
+    window.confirm = function (m) { showNote(m); return false; };
+    window.prompt = function (m) { showNote(m); return null; };
+  } catch (e) {}
   // The page's sound plays at the Fire Player's volume (window.__fvpSetVolume, from the panel):
   // each audio or video element's own volume is scaled by it, whatever the site sets.
   var level = 1;
@@ -128,7 +154,8 @@ var FireSiteBrowser = (() => {
     label.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
     label.textContent = o.text;
     bar.appendChild(label);
-    if (o.add) bar.appendChild(button(o.add, '#2e7d32', function () { send({ type: 'add', what: o.what || 'page' }); }));
+    if (o.now) bar.appendChild(button(o.now, '#2e7d32', function () { send({ type: 'now', what: o.what || 'page' }); }));
+    if (o.add) bar.appendChild(button(o.add, o.now ? '#1565c0' : '#2e7d32', function () { send({ type: 'add', what: o.what || 'page' }); }));
     if (o.extra) bar.appendChild(button(o.extra, '#6a1b9a', function () { send({ type: 'extra', what: o.what || 'page' }); }));
     bar.appendChild(button('\\u2715', '#455a64', function () { offer(null); }));
     (document.body || document.documentElement).appendChild(bar);
@@ -222,7 +249,7 @@ var FireSiteBrowser = (() => {
         try { msg = JSON.parse(msg); } catch (err) { return; }
       }
       if (!msg || typeof msg !== 'object' || msg.from !== 'fvp-browse') return;
-      if (msg.type !== 'hello' && msg.type !== 'gone') console.log(`[SiteBrowser] From the page: ${msg.type}${msg.url ? ` ${String(msg.url).slice(0, 120)}` : ''}${msg.id ? ` ${msg.id}` : ''}`);
+      if (msg.type !== 'hello' && msg.type !== 'gone') console.log(`[SiteBrowser] From the page: ${msg.type}${msg.url ? ` ${String(msg.url).slice(0, 120)}` : ''}${msg.id ? ` ${msg.id}` : ''}${msg.text ? ` ${String(msg.text).slice(0, 200)}` : ''}`);
       if (msg.type === 'gone') { this.scriptIn = false; return; }
       if (msg.type === 'hello') { this.scriptIn = true; return; }
       try { this.opts.onMessage(msg); } catch (err) { console.warn('[SiteBrowser] Message failed:', err); }

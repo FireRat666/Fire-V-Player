@@ -539,16 +539,19 @@ var FireNativeScreen = (() => {
      */
     setHold(seconds) {
       this.holdUntil = performance.now() + seconds * 1000;
+      this.startSyncDue = false;
       clearTimeout(this.countdownTimer);
       this.countdownTimer = setTimeout(() => {
         this.clearHold();
         this.lastToggleAt = -Infinity;
-        // Taken to where it's held (its start) as it plays: on Quest a video held paused at its
-        // first frame can otherwise play on with that frame stuck, as a pause and play (which
-        // seeks) frees it.
-        if (this.prepared && this.endedAt == null) this.seek(this.localTime());
         this.applyPaused();
         console.log(`[NativeScreen] Countdown over, playing (Unity says ${this.state && this.state.isPlaying ? 'playing' : 'not playing'}, at ${this.localTime().toFixed(2)}s).`);
+        // On Quest a video let go from a pause at its first frame can play its sound while its
+        // picture races ahead (every frame dropped as late) until the picture runs out and stays
+        // stuck to the end. A seek as it starts doesn't stop that, nor a seek a second in. Paused
+        // and played again at once, it stalls a moment instead, and watchStart's check then
+        // takes it to where the world is, which brings the picture back with the sound.
+        if (this.playing() && !this.isPreview()) this.pausePlay();
         this.watchStart(performance.now(), 0);
         // Once it has had a moment to start. Not a forced jump, which would be heard on every
         // screen as the song starts.
@@ -574,13 +577,32 @@ var FireNativeScreen = (() => {
         // Two new times, as the first may be the seek's own.
         const moved = (this.timeReports || 0) - reports >= 2;
         console.log(`[NativeScreen] ${START_CHECK_MS / 1000}s after the countdown: time ${moved ? 'moving' : 'not moving'} (Unity: time ${Number(this.vp && this.vp.time).toFixed(2)}, ${this.state && this.state.isPlaying ? 'playing' : 'not playing'}).`);
-        if (moved || kicks >= START_KICKS) return;
-        console.warn('[NativeScreen] It hasn\'t started, so it goes to where the world is and plays.');
+        // After pausePlay, the first check takes it to where the world is even if its time moves.
+        const must = this.startSyncDue; this.startSyncDue = false;
+        if ((moved && !must) || kicks >= START_KICKS) return;
+        console.warn(moved ? '[NativeScreen] After its pause and play, it goes to where the world is.' : '[NativeScreen] It hasn\'t started, so it goes to where the world is and plays.');
         this.lastToggleAt = -Infinity;
         this.requestSync(true);
         this.applyPaused();
         this.watchStart(performance.now(), kicks + 1);
       }, START_CHECK_MS);
+    }
+
+    /** Pauses and plays again 0.1 s apart, right as it starts (see setHold). */
+    pausePlay() {
+      const vp = this.vp;
+      this.lastToggleAt = performance.now() + 1000; // applyPaused keeps off meanwhile
+      this.startSyncDue = true;
+      setTimeout(() => {
+        if (this.destroyed || this.vp !== vp || this.wantPaused) return;
+        vp.PlayToggle();
+        setTimeout(() => {
+          if (this.destroyed || this.vp !== vp) return;
+          if (this.wantPaused) { this.state.isPlaying = false; return; } // paused meanwhile: it stays so
+          vp.PlayToggle();
+          console.log(`[NativeScreen] Paused and played at the start (Unity time ${Number(vp.time).toFixed(2)}).`);
+        }, 100);
+      }, 100);
     }
 
     /** Ends a hold, so the next applyPaused may play. @returns {boolean} whether there was one. */

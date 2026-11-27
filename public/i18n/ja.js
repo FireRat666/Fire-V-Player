@@ -216,6 +216,7 @@ FVP_STRINGS["ja"] = {
   "The player is locked: only the host can save lists for everyone. Use Save for Me.": "プレイヤーはロックされます。ホストのみがリストを保存できます。 Save for Me を使う.",
   "The player is locked: you can save it for yourself.": "プレイヤーはロックされています:あなたは自分で保存することができます.",
   "The playlist is empty. Use Search to add videos.": "プレイリストは空です。 検索を使用してビデオを追加します.",
+  "The website can't play this station itself, but the Fire Player can: add it with the bar above.": "このウェブサイトは、このステーション自体を再生することはできませんが、Fire Playerは、上記のバーにそれを追加することができます.",
   "Theme": "テーマ",
   "These only work for space admins (the world owner and community moderators). The mode switches everyone in the space. Admin Take Over is under Who controls the player, beside the host.": "これらは、宇宙管理者(世界所有者とコミュニティモデレーター)のためにのみ機能します。 モードはスペースのみんなを切り替えます。 管理者テイクオーバーは、ホストの横にあるプレーヤーを制御する人の下にあります.",
   "This app can't open a browser window here.": "このアプリは、ブラウザウィンドウを開くことができません.",

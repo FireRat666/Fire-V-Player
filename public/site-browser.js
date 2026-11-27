@@ -15,7 +15,8 @@
  *   { type: 'now', what }                        the page's Play Now button (the host)
  *   { type: 'alert', text }                      the site's alert(), shown on the page as a note
  * Messages in (BS Browser "postmessage" actions, as bsmessage events):
- *   { type: 'offer', text, now, add, extra }     shows the bar (now, add, extra: button labels; no text hides it)
+ *   { type: 'offer', text, now, add, extra, note }  shows the bar (now, add, extra: button labels; no text
+ *                                                hides it); note: what Shoutcast's failing player says
  * @module public/site-browser
  */
 
@@ -53,11 +54,16 @@ var FireSiteBrowser = (() => {
   // A site's alert(), confirm() or prompt() would wait for a dialog a headset never shows (Quest:
   // an Android dialog outside the world), and every page in the world waits with it (they share
   // one thread): Shoutcast alerts each time a station can't play here. It shows as a note instead.
+  // On Shoutcast its alert is its own player failing: the page can't play a station that streams
+  // over http (the browser blocks it on an https page), though the Fire Player can play it, so the
+  // note says that instead (the panel sends its words, translated, with the offer).
+  var siteNote = 'The website can\\'t play this station itself, but the Fire Player can: add it with the bar above.';
   var note = null, noteTimer = 0;
   function showNote(text) {
     text = String(text == null ? '' : text).replace(/\\s+/g, ' ').trim().slice(0, 300);
     if (!text) return;
     send({ type: 'alert', text: text });
+    if (/shoutcast\\.com$/.test(location.hostname)) text = siteNote;
     if (!note) {
       note = document.createElement('div');
       note.style.cssText = 'position:fixed;left:18px;right:18px;bottom:18px;z-index:2147483647;padding:14px 18px;border-radius:12px;background:rgba(183,28,28,0.95);color:#fff;font:20px sans-serif;box-shadow:0 2px 12px rgba(0,0,0,0.5)';
@@ -171,7 +177,10 @@ var FireSiteBrowser = (() => {
     var msg = e && e.detail;
     if (msg && typeof msg === 'object' && 'message' in msg) msg = msg.message;
     if (typeof msg === 'string') { try { msg = JSON.parse(msg); } catch (err) { return; } }
-    if (msg && msg.type === 'offer') offer(msg);
+    if (msg && msg.type === 'offer') {
+      if (msg.note) siteNote = String(msg.note);
+      offer(msg);
+    }
   });
 })();`;
 

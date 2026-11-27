@@ -216,6 +216,7 @@ FVP_STRINGS["fr"] = {
   "The player is locked: only the host can save lists for everyone. Use Save for Me.": "Le lecteur est verrouillé : seul l'hôte peut enregistrer des listes pour tout le monde. Utilisez Enregistrer pour moi.",
   "The player is locked: you can save it for yourself.": "Le joueur est verrouillé : vous pouvez le sauver vous-même.",
   "The playlist is empty. Use Search to add videos.": "La playlist est vide. Utilisez Recherche pour ajouter des vidéos.",
+  "The website can't play this station itself, but the Fire Player can: add it with the bar above.": "Le site Web ne peut pas jouer cette station elle-même, mais le lecteur de feu peut : l'ajouter avec la barre ci-dessus.",
   "Theme": "Thème",
   "These only work for space admins (the world owner and community moderators). The mode switches everyone in the space. Admin Take Over is under Who controls the player, beside the host.": "Ceux-ci ne fonctionnent que pour les administrateurs d'espace (le propriétaire mondial et les modérateurs communautaires). Le mode change tout le monde dans l'espace. Admin Take Over est sous Qui contrôle le joueur, à côté de l'hôte.",
   "This app can't open a browser window here.": "Cette application ne peut pas ouvrir une fenêtre de navigateur ici.",

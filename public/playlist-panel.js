@@ -2664,6 +2664,7 @@ var FirePlaylistPanel = class {
         now: offer.kind !== 'series' && this.isHost() ? this.tr('Play Now') : '',
         add: offer.kind === 'series' ? '' : this.tr('Add to Playlist'),
         extra: offer.kind === 'series' ? this.tr('Pick Episodes') : '',
+        note: offer.kind === 'station' ? this.tr("The website can't play this station itself, but the Fire Player can: add it with the bar above.") : '',
         what: offer.kind
       } : null);
     }

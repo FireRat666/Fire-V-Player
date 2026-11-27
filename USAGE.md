@@ -106,7 +106,7 @@ In a Creator SDK world (`Assets/WebRoot/index.html`), add the player as a snippe
   position="0 1.5 2"
   rotation="0 0 0"
   scale="2"
-  resolution="1600"
+  resolution="1280"
   space-screen="auto"
   spatial="true"
   spatial-min-distance="5"

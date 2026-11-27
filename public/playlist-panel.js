@@ -2605,6 +2605,8 @@ var FirePlaylistPanel = class {
       await browser.open(site);
     } catch (e) {
       if (this.siteBrowser === browser) this.siteBrowser = null;
+      // The failed attempt's window goes too.
+      try { browser.destroy(); } catch (err) {}
       this.setStatus("Couldn't open the browser.");
       this.render();
       return;

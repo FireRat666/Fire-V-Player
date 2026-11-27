@@ -2694,6 +2694,8 @@ var FirePlaylistPanel = class {
     if (this.siteBrowser) {
       // A station the server found can't play here (only over http, with the relay off) has no buttons.
       const bad = !!offer && offer.check === 'bad';
+      // A station still being checked shows no buttons yet either.
+      const ready = !!offer && !bad && offer.check !== 'checking';
       const note = !offer || offer.kind !== 'station' ? ''
         : bad ? (offer.error || this.tr("That station can't play here."))
           : offer.check === 'ok' ? this.tr("The website can't play this station itself, but the Fire Player can: add it with the bar above.")
@@ -2701,8 +2703,8 @@ var FirePlaylistPanel = class {
       this.siteBrowser.offer(offer ? {
         text: bad ? this.tr('"{title}" can\'t play here.', { title: offer.title })
           : this.tr(offer.kind === 'series' ? 'Add episodes of "{title}" to the playlist?' : 'Add "{title}" to the playlist?', { title: offer.title }),
-        now: !bad && offer.kind !== 'series' && this.isHost() ? this.tr('Play Now') : '',
-        add: bad || offer.kind === 'series' ? '' : this.tr('Add to Playlist'),
+        now: ready && offer.kind !== 'series' && this.isHost() ? this.tr('Play Now') : '',
+        add: !ready || offer.kind === 'series' ? '' : this.tr('Add to Playlist'),
         extra: offer.kind === 'series' ? this.tr('Pick Episodes') : '',
         note,
         what: offer.kind
@@ -2719,6 +2721,7 @@ var FirePlaylistPanel = class {
     if (!o) return;
     if (o.kind === 'series') { this.showEpisodes(o.link); return; }
     if (o.check === 'bad') { this.setStatus(o.error || "That station can't play here."); return; }
+    if (o.check === 'checking') { this.setStatus("The website can't play this station itself. Checking whether the Fire Player can..."); return; }
     if (now && !this.isHost()) { this.setStatus('Only the host can play something now.'); return; }
     if (!now && !this.canAdd() && !this.addWaits()) { this.setStatus('The player is locked: only the host can add videos.'); return; }
     // Done with the site: it closes (Browse opens it again for more).
@@ -3519,8 +3522,9 @@ var FirePlaylistPanel = class {
       const bad = bo.check === 'bad';
       this.setText(this.browseOfferLabel, bad ? this.tr('"{title}" can\'t play here.', { title: bo.title })
         : this.tr(bo.kind === 'series' ? 'In the browser: "{title}" (series)' : 'In the browser: "{title}"', { title: bo.title }));
-      this.display(this.browseNowBtn, !bad && bo.kind !== 'series' && host);
-      this.display(this.browseAddBtn, !bad && bo.kind !== 'series' && (this.canAdd() || this.addWaits()));
+      const ready = !bad && bo.check !== 'checking';
+      this.display(this.browseNowBtn, ready && bo.kind !== 'series' && host);
+      this.display(this.browseAddBtn, ready && bo.kind !== 'series' && (this.canAdd() || this.addWaits()));
       this.display(this.browseEpisodesBtn, bo.kind === 'series');
     }
     if (this.browseBtn) {

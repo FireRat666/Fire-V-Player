@@ -16,6 +16,7 @@
  * Messages out (window.O.sendMessage), all with from: 'tubi-resolve':
  *   { type: 'ready' }
  *   { type: 'result', n, ok: true, ... } or { type: 'result', n, ok: false, reason }
+ *   (a series' result has partial: true when some episodes are listed without their details)
  */
 (function () {
   if (window.__fvpTubiResolve) return;
@@ -25,6 +26,9 @@
   var MAX_EPISODES = 300;
   // Episode pages read at a time, for a series' seasons after the first.
   var EPISODES_AT_ONCE = 4;
+  // The longest those pages are read for: tubi-native.js waits 90 s for a series. Episodes not read
+  // by then are listed by link, with their season and number for a title (partial: true).
+  var SERIES_DEADLINE_MS = 60000;
   var SEARCH_TIMEOUT_MS = 20000;
 
   function log(msg) { try { console.log('[tubi-resolve] ' + msg); } catch (e) {} }
@@ -233,31 +237,40 @@
         });
       });
       var items = new Array(wanted.length);
-      var next = 0;
-      function worker() {
-        if (next >= wanted.length) return Promise.resolve();
-        var k = next++;
+      var partial = false, late = false, next = 0;
+      // An episode with its season and number in its title; c is null without its details (not
+      // read in time, or its page wouldn't load), and it's still listed, so it can be played.
+      function entry(k, c) {
         var w = wanted[k];
-        var known = byId[w.ep.id];
-        return (known ? Promise.resolve(known) : episode(w.ep.id)).then(function (c) { return c; }, function () { return null; }).then(function (c) {
-          var title = c ? clean(c.title, 150) : '';
-          if (!/^S\d+\s*:?\s*E\d+/i.test(title) && w.season < 1000 && w.ep.num < 1000) {
-            title = 'S' + String(w.season).padStart(2, '0') + ':E' + String(w.ep.num).padStart(2, '0') + (title ? ' - ' + title : '');
-          }
-          items[k] = {
-            title: title || 'Tubi episode',
-            thumbnail: c ? picture(c) : '',
-            duration: c ? Math.max(0, Math.round(Number(c.duration) || 0)) * 1000 : 0,
-            link: 'https://tubitv.com/tv-shows/' + w.ep.id
-          };
+        var title = c ? clean(c.title, 150) : '';
+        if (!/^S\d+\s*:?\s*E\d+/i.test(title) && w.season < 1000 && w.ep.num < 1000) {
+          title = 'S' + String(w.season).padStart(2, '0') + ':E' + String(w.ep.num).padStart(2, '0') + (title ? ' - ' + title : '');
+        }
+        return {
+          title: title || 'Tubi episode',
+          thumbnail: c ? picture(c) : '',
+          duration: c ? Math.max(0, Math.round(Number(c.duration) || 0)) * 1000 : 0,
+          link: 'https://tubitv.com/tv-shows/' + w.ep.id
+        };
+      }
+      function worker() {
+        if (late || next >= wanted.length) return Promise.resolve();
+        var k = next++;
+        var known = byId[wanted[k].ep.id];
+        return (known ? Promise.resolve(known) : episode(wanted[k].ep.id)).then(function (c) { return c; }, function () { partial = true; return null; }).then(function (c) {
+          if (!late) items[k] = entry(k, c);
           return worker();
         });
       }
       var workers = [];
       for (var i = 0; i < EPISODES_AT_ONCE; i++) workers.push(worker());
-      return Promise.all(workers).then(function () {
+      var timer;
+      return Promise.race([Promise.all(workers), new Promise(function (resolve) { timer = setTimeout(resolve, SERIES_DEADLINE_MS); })]).then(function () {
+        clearTimeout(timer);
+        late = true;
+        for (var k = 0; k < items.length; k++) if (!items[k]) { items[k] = entry(k, null); partial = true; }
         var name = clean(s.title, 120) || 'Tubi series';
-        send({ type: 'result', n: n, ok: true, title: season ? clean(name + ', Season ' + season, 120) : name, items: items });
+        send({ type: 'result', n: n, ok: true, title: season ? clean(name + ', Season ' + season, 120) : name, items: items, partial: partial });
       });
     }).catch(function (e) { send({ type: 'result', n: n, ok: false, reason: String(e && e.message || e) }); });
   }

@@ -13,7 +13,7 @@ var FireTubiResolver = (() => {
   /** The page the hidden browser sits on: on Tubi's own site, and tiny. */
   const PAGE_URL = 'https://tubitv.com/robots.txt';
   /** Bump when tubi-resolve.js changes, so browsers don't keep an old copy. */
-  const SCRIPT_VERSION = 3;
+  const SCRIPT_VERSION = 4;
   const INJECT_EVERY_MS = 500;
   const READY_TIMEOUT_MS = 20000;
   /** The longest a search, and any other lookup, may take. */
@@ -220,7 +220,8 @@ var FireTubiResolver = (() => {
           link: x.link
         }))
       };
-      this.cache.set(key, { at: Date.now(), answer });
+      // Missing some episodes' details: not kept, so the next look reads them again.
+      if (!msg.partial) this.cache.set(key, { at: Date.now(), answer });
       return answer;
     }
 

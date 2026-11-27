@@ -29,6 +29,13 @@ const NASA_TTL_MS = 60 * 60 * 1000;
 const MAX_EPISODES = 300;
 /** Episode pages read at a time, for a series' seasons after the first. */
 const EPISODES_AT_ONCE = 4;
+/**
+ * The longest a series' episode pages are read for (the panel waits LIST_REPLY_MS, 120 s, for the
+ * list): episodes not read by then are listed by link, with their season and number for a title.
+ * A list like that, or with an episode that wouldn't load, is kept only PARTIAL_TTL_MS.
+ */
+const SERIES_DEADLINE_MS = 60000;
+const PARTIAL_TTL_MS = 60 * 1000;
 const MAX_RESULTS = 40;
 /** Categories that depend on who's watching, or repeat others, aren't searched. */
 const SKIP_CATEGORIES = new Set(['recommended_for_you', 'continue_watching', 'queue', 'weekly_watchlist']);
@@ -206,58 +213,78 @@ function tubiEpisode(id) {
  * and the rest are read from their own pages, a few at a time. An episode's title says its season
  * and number ("S01:E03 - Name").
  */
-function tubiSeries(id, season) {
-  return cache.remember(`tubi:series:${id}:${season || 'all'}`, PAGE_TTL_MS, async () => {
-    const data = await tubiPage(`series/${id}`);
-    const byId = (data.video && data.video.byId) || {};
-    const series = byId[`0${id}`] || byId[id];
-    if (!series) throw new Error("That Tubi series isn't available.");
-    const num = (v, fallback) => (Number.isFinite(Number(v)) && String(v).trim() !== '' ? Number(v) : fallback);
-    // [{n, eps: [{id, num}]}]: the full list where the page has it, else the site data's.
-    const listed = (data.fvpSeasons && data.fvpSeasons.length ? data.fvpSeasons : series.seasons || []).map((s, i) => ({
-      n: num(s.number, 1000 + i),
-      eps: (s.episodes || []).map((ep, k) => ({ id: String(ep.id || ''), num: num(ep.num != null ? ep.num : ep.episode_number != null ? ep.episode_number : (byId[ep.id] || {}).episode_number, 1000 + k) }))
-        .filter(ep => /^\d{1,12}$/.test(ep.id))
-    })).sort((a, b) => a.n - b.n);
-    let seasons = listed;
-    if (season === 'first') seasons = listed.slice(0, 1);
-    else if (season) seasons = listed.filter(s => s.n === Number(season));
-    if (season && !seasons.length) throw new Error(`That Tubi series has no season ${season} here.`);
-    const wanted = [];
-    for (const s of seasons) {
-      for (const ep of s.eps.slice().sort((a, b) => a.num - b.num)) {
-        if (wanted.length < MAX_EPISODES) wanted.push({ season: s.n, ep });
-      }
+async function tubiSeries(id, season) {
+  const key = `tubi:series:${id}:${season || 'all'}`;
+  const list = await cache.remember(key, PAGE_TTL_MS, () => readTubiSeries(id, season));
+  // Missing some episodes' details: asked for again soon (the ones read are kept on their own).
+  if (list.partial && !list.shortened) { list.shortened = true; cache.set(key, list, PARTIAL_TTL_MS); }
+  return list;
+}
+
+async function readTubiSeries(id, season) {
+  const data = await tubiPage(`series/${id}`);
+  const byId = (data.video && data.video.byId) || {};
+  const series = byId[`0${id}`] || byId[id];
+  if (!series) throw new Error("That Tubi series isn't available.");
+  const num = (v, fallback) => (Number.isFinite(Number(v)) && String(v).trim() !== '' ? Number(v) : fallback);
+  // [{n, eps: [{id, num}]}]: the full list where the page has it, else the site data's.
+  const listed = (data.fvpSeasons && data.fvpSeasons.length ? data.fvpSeasons : series.seasons || []).map((s, i) => ({
+    n: num(s.number, 1000 + i),
+    eps: (s.episodes || []).map((ep, k) => ({ id: String(ep.id || ''), num: num(ep.num != null ? ep.num : ep.episode_number != null ? ep.episode_number : (byId[ep.id] || {}).episode_number, 1000 + k) }))
+      .filter(ep => /^\d{1,12}$/.test(ep.id))
+  })).sort((a, b) => a.n - b.n);
+  let seasons = listed;
+  if (season === 'first') seasons = listed.slice(0, 1);
+  else if (season) seasons = listed.filter(s => s.n === Number(season));
+  if (season && !seasons.length) throw new Error(`That Tubi series has no season ${season} here.`);
+  const wanted = [];
+  for (const s of seasons) {
+    for (const ep of s.eps.slice().sort((a, b) => a.num - b.num)) {
+      if (wanted.length < MAX_EPISODES) wanted.push({ season: s.n, ep });
     }
-    const items = new Array(wanted.length);
-    let next = 0;
-    const worker = async () => {
-      while (next < wanted.length) {
-        const k = next++;
-        const { season: n, ep } = wanted[k];
-        let item;
-        if (byId[ep.id]) item = tubiItem(byId[ep.id], 'episode');
-        else {
-          try {
-            item = await tubiEpisode(ep.id);
-          } catch (e) {
-            // Still listed, so it can be played: its title and picture come when it's looked up.
-            item = { title: '', thumbnail: '', duration: 0, link: `https://tubitv.com/tv-shows/${ep.id}` };
-          }
-        }
-        item = Object.assign({}, item);
-        // Most titles already say "S01:E03 - ..."; one that doesn't gets it.
-        if (!/^S\d+\s*:?\s*E\d+/i.test(item.title) && n < 1000 && ep.num < 1000) {
-          item.title = clean(`S${String(n).padStart(2, '0')}:E${String(ep.num).padStart(2, '0')}${item.title ? ` - ${item.title}` : ''}`);
-        }
-        if (!item.title) item.title = 'Tubi episode';
-        items[k] = item;
+  }
+  const items = new Array(wanted.length);
+  let partial = false;
+  // An episode with its season and number in its title. Without details (not read in time, or
+  // its page wouldn't load) it's still listed, so it can be played: its title and picture come
+  // when it's looked up.
+  const entry = (k, item) => {
+    const { season: n, ep } = wanted[k];
+    item = Object.assign({}, item || { title: '', thumbnail: '', duration: 0, link: `https://tubitv.com/tv-shows/${ep.id}` });
+    // Most titles already say "S01:E03 - ..."; one that doesn't gets it.
+    if (!/^S\d+\s*:?\s*E\d+/i.test(item.title) && n < 1000 && ep.num < 1000) {
+      item.title = clean(`S${String(n).padStart(2, '0')}:E${String(ep.num).padStart(2, '0')}${item.title ? ` - ${item.title}` : ''}`);
+    }
+    if (!item.title) item.title = 'Tubi episode';
+    return item;
+  };
+  let next = 0;
+  let late = false;
+  const worker = async () => {
+    while (next < wanted.length && !late) {
+      const k = next++;
+      const { ep } = wanted[k];
+      let item = null;
+      if (byId[ep.id]) item = tubiItem(byId[ep.id], 'episode');
+      else {
+        try { item = await tubiEpisode(ep.id); } catch (e) { partial = true; }
       }
-    };
-    await Promise.all(Array.from({ length: EPISODES_AT_ONCE }, worker));
-    const title = clean(series.title, 120) || 'Tubi series';
-    return { title: season && season !== 'first' ? clean(`${title}, Season ${season}`, 120) : title, items };
-  });
+      if (!late) items[k] = entry(k, item);
+    }
+  };
+  let timer;
+  await Promise.race([
+    Promise.all(Array.from({ length: EPISODES_AT_ONCE }, worker)),
+    new Promise(resolve => { timer = setTimeout(resolve, SERIES_DEADLINE_MS); })
+  ]);
+  clearTimeout(timer);
+  late = true;
+  for (let k = 0; k < items.length; k++) {
+    if (!items[k]) { items[k] = entry(k, null); partial = true; }
+  }
+  if (partial) console.warn(`[TUBI] series/${id}: some episodes are listed without their details.`);
+  const title = clean(series.title, 120) || 'Tubi series';
+  return { title: season && season !== 'first' ? clean(`${title}, Season ${season}`, 120) : title, items, partial };
 }
 
 /** The titles in a Tubi category (up to 50, as its page shows). Only these are cached, not the page. */

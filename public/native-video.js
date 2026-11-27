@@ -563,12 +563,14 @@ var FireNativeScreen = (() => {
      */
     watchStart(since, kicks) {
       clearTimeout(this.startTimer);
-      const from = Number(this.vp && this.vp.time) || 0;
+      // Where it's measured from: where it was let go, or where a jump meanwhile landed (see seek).
+      this.startFrom = Number(this.vp && this.vp.time) || 0;
       this.startTimer = setTimeout(() => {
+        this.startTimer = null;
         if (this.destroyed || this.wantPaused || this.held() || this.isPreview() || this.endedAt != null) return;
         // Unity's own time, which it sends in whole seconds: counting its reports instead took a
         // start that was playing (at 3 s) for a stuck one, and the jump was heard as a stutter.
-        const moved = (Number(this.vp && this.vp.time) || 0) - from >= 1;
+        const moved = (Number(this.vp && this.vp.time) || 0) - this.startFrom >= 1;
         console.log(`[NativeScreen] ${START_CHECK_MS / 1000}s after the countdown: time ${moved ? 'moving' : 'not moving'} (Unity: time ${Number(this.vp && this.vp.time).toFixed(2)}, ${this.state && this.state.isPlaying ? 'playing' : 'not playing'}).`);
         if (moved || kicks >= START_KICKS) return;
         console.warn('[NativeScreen] It hasn\'t started, so it goes to where the world is and plays.');
@@ -635,6 +637,8 @@ var FireNativeScreen = (() => {
         this.seenPlaying = false; // still stopped until it's started again
       }
       this.vp.time = t;
+      // A jump while the start is being checked (a sync's): only playing from where it landed counts.
+      if (this.startTimer) this.startFrom = t;
       this.lastSeekAt = performance.now();
       this.lastRaw = this.vp.time; // the setter keeps the new value until Unity sends its own
       this.baseTime = t;

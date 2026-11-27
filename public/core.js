@@ -71,6 +71,8 @@ var SECOND_SCREEN_TEXTURE = 'fire-v-player';
 // The player's pictures (button icons, labels, the loading picture) come from the static host,
 // not the player's server, to save its bandwidth. public/assets keeps copies for older links.
 var ASSETS_URL = 'https://firer.at/files/fvp';
+// The longest tubi-native.js may take to load (it's small) before Tubi lookups go to the server.
+var TUBI_SCRIPT_MS = 20000;
 
 var Core = class {
     constructor() {
@@ -413,7 +415,11 @@ var Core = class {
     if (this.destroyed || !window.isBanter) return null;
     if (typeof FireTubiResolver === 'undefined') {
       if (!this.tubiScript) this.tubiScript = this.setupScript(null, 'tubi-native');
-      await this.tubiScript;
+      // A script that neither loads nor fails (a stalled connection) would leave every Tubi lookup
+      // waiting for good, and the server never asked: past TUBI_SCRIPT_MS this gives up.
+      let timer;
+      await Promise.race([this.tubiScript, new Promise(resolve => { timer = setTimeout(resolve, TUBI_SCRIPT_MS); })]);
+      clearTimeout(timer);
       if (this.destroyed || typeof FireTubiResolver === 'undefined' || !FireTubiResolver.possible()) return null;
     }
     if (!FireTubiResolver.possible()) return null;
@@ -426,8 +432,10 @@ var Core = class {
   async answerTubiStream(data) {
     const n = data && data.n;
     const link = String((data && data.link) || '').slice(0, 300);
-    // The page that asked: a page made since (another track, a rejoin) didn't ask, so isn't told.
+    // The page that asked: a page made since (another track, a rejoin) didn't ask, so isn't told,
+    // whether in a new browser or loaded in the same one.
     const asker = this.browser;
+    const navigation = asker && asker.navigation;
     let answer = { ok: false, reason: 'No Tubi lookup on this device.' };
     try {
       const tubi = await this.tubiResolver();
@@ -438,7 +446,7 @@ var Core = class {
     } catch (e) {
       answer = { ok: false, reason: String(e && e.message || e) };
     }
-    if (this.destroyed || !asker || asker !== this.browser || asker.removed) return;
+    if (this.destroyed || !asker || asker !== this.browser || asker.removed || asker.navigation !== navigation) return;
     Promise.resolve(this.sendBrowserMessage({ path: Commands.TUBI_STREAM_RESULT, data: Object.assign({ n }, answer) })).catch(() => {});
   }
   // The sharpest YouTube quality for this viewer, from the screen's resolution (the snippet's, or
@@ -687,6 +695,8 @@ var Core = class {
   setBrowserUrl(url) {
     const browser = this.browser;
     if (!browser) return;
+    // A new page in the same browser: answers meant for the page before don't go to it (see answerTubiStream).
+    browser.navigation = (browser.navigation || 0) + 1;
     browser.url = url;
     if (browser.iframe) {
       browser.loaded = false;

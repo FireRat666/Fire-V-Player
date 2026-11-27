@@ -209,6 +209,23 @@ var FireSiteBrowser = (() => {
     }
 
     static sites() { return SITES; }
+    /** The window's size in the world, in metres. */
+    static width() { return WIDTH_M; }
+    static height() { return WIDTH_M * PAGE_H / PAGE_W; }
+
+    /** Moves the window to `position` in its parent (BS.Vector3, its middle), now or once it's made. */
+    async moveTo(position) {
+      this.opts.position = position;
+      try { await this.ready; } catch (e) { return; }
+      const go = this.go;
+      if (!go || this.destroyed) return;
+      try {
+        if (typeof go.SetLocalPosition === 'function') await go.SetLocalPosition(position);
+        else if (go.transform) go.transform.localPosition = position;
+      } catch (e) {
+        console.warn('[SiteBrowser] Could not move the window:', e);
+      }
+    }
 
     async create() {
       const core = this.core;

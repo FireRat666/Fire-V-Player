@@ -77,6 +77,8 @@ var SEARCH_SOURCES = {
   screen: { label: 'Screen Share', status: 'Searching screen.sdq.st: type a room code, or paste its link.' }
 };
 // The server works on 3 list previews at a time per connection and refuses more, so the rest wait.
+/** Where Browse's window can go round the panel, in the order Move Browser takes them. */
+var BROWSE_PLACES = ['right', 'left', 'front'];
 var LIST_PREVIEWS_AT_ONCE = 3;
 // A list preview older than this is loaded again when it's next shown (the server re-reads lists
 // after 5 minutes too), and a request with no reply after LIST_REPLY_MS is given up on.
@@ -1384,7 +1386,12 @@ var FirePlaylistPanel = class {
     this.searchSpinner.size = 'lg';
     this.searchSpinner.tone = 'accent';
     this.searchSpinner.SetStyles({ display: 'none', flexShrink: 0, marginLeft: '4px', marginRight: '10px' });
-    await this.button(this.searchRow, '@search Search', () => this.doSearch(), { backgroundColor: '#1565c0' });
+    this.searchGoBtn = await this.button(this.searchRow, '@search Search', () => this.doSearch(), { backgroundColor: '#1565c0' });
+    // While Browse's window is open it takes Search's place: it moves the window round the panel.
+    if (!this.karaoke) {
+      this.moveBrowseBtn = await this.button(this.searchRow, '⇄ Move Browser', () => this.moveBrowse(), { backgroundColor: '#00838f' });
+      this.display(this.moveBrowseBtn, false);
+    }
     // Typing a link on a headset is hard: get a code, and send the link from a phone instead.
     await this.button(this.searchRow, '☎ Phone', () => this.askPasteCode(), { backgroundColor: '#6a1b9a' });
     // Speak (speech to text, toggleSpeech) stays hidden until Altspace answers StartTTS/StopTTS:
@@ -2592,11 +2599,10 @@ var FirePlaylistPanel = class {
       if (this.destroyed) return;
       if (typeof FireSiteBrowser === 'undefined') { this.setStatus("Couldn't open the browser."); return; }
     }
-    // Beside the panel on its right, level with its middle, in the panel's mover so it moves with it.
-    const x = this.panelWidthM / 2 + 0.06 + 0.8;
+    // Beside the panel (or in front of it: see moveBrowse), in the panel's mover so it moves with it.
     const browser = this.siteBrowser = new FireSiteBrowser(this.core, {
       parent: this.mover,
-      position: new BS.Vector3(x, this.handleDrop, 0),
+      position: this.browsePosition(this.browsePlace()),
       onMessage: msg => this.onBrowseMessage(msg),
       // The site's own sound plays at the volume this viewer hears the Fire Player at.
       getVolume: () => (typeof this.core.heardVolume === 'function' ? this.core.heardVolume() : 100)
@@ -2615,6 +2621,28 @@ var FirePlaylistPanel = class {
       ? 'Tubi is open beside the panel. Open a movie or a series there to add it.'
       : 'Shoutcast is open beside the panel. Press Play on a station there to add it.', 8000);
     this.render();
+  }
+
+  // Where Browse's window goes, kept on this device for this world (its page's own storage): 'right'
+  // of the panel, 'left' of it (when the panel sits left of the screen, the right is behind the
+  // screen), or 'front', nearer the viewer and low enough that the panel's top (Close Browser,
+  // Move Browser) shows above it.
+  browsePlace() {
+    return this.loadSetting('fvpBrowsePlace', BROWSE_PLACES, 'right');
+  }
+  browsePosition(place) {
+    const beside = this.panelWidthM / 2 + 0.06 + FireSiteBrowser.width() / 2;
+    if (place === 'left') return new BS.Vector3(-beside, this.handleDrop, 0);
+    if (place === 'front') return new BS.Vector3(0, this.handleDrop - FireSiteBrowser.height() / 2 - 0.1, -0.45);
+    return new BS.Vector3(beside, this.handleDrop, 0);
+  }
+  moveBrowse() {
+    const browser = this.siteBrowser;
+    if (!browser) return;
+    const place = BROWSE_PLACES[(BROWSE_PLACES.indexOf(this.browsePlace()) + 1) % BROWSE_PLACES.length];
+    this.saveSetting('fvpBrowsePlace', place);
+    browser.moveTo(this.browsePosition(place));
+    this.setStatus({ right: 'The browser is on the right of the panel.', left: 'The browser is on the left of the panel.', front: 'The browser is in front of the panel.' }[place], 4000);
   }
 
   // Closes the browser window. The panel forgets it first, so Close works even if removing the
@@ -3498,6 +3526,10 @@ var FirePlaylistPanel = class {
     if (this.browseBtn) {
       this.display(this.browseBtn, onSearch && this.canBrowse() && (BROWSE_SITES.includes(this.searchSource) || !!this.siteBrowser));
       this.setText(this.browseBtn, this.siteBrowser ? '✕ Close Browser' : '@fvp:web Browse');
+    }
+    if (this.moveBrowseBtn) {
+      this.display(this.searchGoBtn, !this.siteBrowser);
+      this.display(this.moveBrowseBtn, !!this.siteBrowser);
     }
 
     // A pasted playlist's question.

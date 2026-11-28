@@ -993,7 +993,10 @@ class App {
     player.seekedTrack = null;
     if (player.paused || (player.isKaraoke && !(minWait > 0))) return;
     const track = player.playlist[player.currentTrack];
+    // A live video starts at its live point, and a radio station is live too: neither waits.
     if (!track || track.live) return;
+    const kind = MediaSources.detect(track.link || '');
+    if (kind && kind.type === 'radio') return;
     const delay = player.readyDelay != null ? player.readyDelay : READY_DELAY_DEFAULT_S;
     const wait = Math.max(minWait, delay);
     const viewers = new Set(player.sockets.filter(App.isScreenSocket).map(App.viewerKey));
@@ -1194,9 +1197,9 @@ class App {
         // read) counts as for adults here; whether it plays is checked on its own (media.js).
         const found = (await media.resolveMediaLinks(term)).map(v => (v && typeof v.mature !== 'boolean'
           && MediaSources.needsRating(media.detect(v.link || '')) ? { ...v, mature: true } : v));
-        // A link to a title for adults says why it has no results.
-        if (found.length && !media.filterMature(ws, found).items.length) fail(media.matureMessage(term));
-        else results(found);
+        // A link to a title for adults says why it has no results (the reply still counts what was hidden).
+        results(found);
+        if (found.length && !media.filterMature(ws, found).items.length) this.send(ws, Commands.ERROR, { message: media.matureMessage(term) }, tag);
       } catch (error) {
         fail(error.message);
       }

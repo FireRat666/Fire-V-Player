@@ -16,7 +16,7 @@ var FireYouTubeResolver = (() => {
   /** The page the hidden browser sits on: on YouTube's own site, and tiny. */
   const PAGE_URL = 'https://www.youtube.com/robots.txt';
   /** Bump when yt-resolve.js changes, so browsers don't keep an old copy. */
-  const SCRIPT_VERSION = 3;
+  const SCRIPT_VERSION = 4;
   /** How often the loader is put on the page until it says it's ready, and for how long. */
   const INJECT_EVERY_MS = 500;
   const READY_TIMEOUT_MS = 20000;

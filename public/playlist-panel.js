@@ -2644,6 +2644,7 @@ var FirePlaylistPanel = class {
       this.setStatus('Opening the browser...', 0);
       // This opening's own token: a Close (or a newer opening) meanwhile takes it away.
       const token = this.browseOpening = {};
+      this.render();
       try {
         await this.withTimeout(this.core.setupScript(null, 'site-browser'), 20000, 'Loading the browser');
       } catch (e) {
@@ -2652,6 +2653,7 @@ var FirePlaylistPanel = class {
       if (this.browseOpening !== token) return;
       this.browseOpening = false;
       if (this.destroyed) return;
+      this.render();
       if (typeof FireSiteBrowser === 'undefined') { this.setStatus("Couldn't open the browser."); return; }
     }
     // Beside the panel (or in front of it: see moveBrowse), in the panel's mover so it moves with it.
@@ -2776,10 +2778,11 @@ var FirePlaylistPanel = class {
       || this.tr(media.kind === 'series' ? 'Tubi series' : 'Tubi video');
     const path = media.kind === 'series' ? 'series' : media.kind === 'episode' ? 'tv-shows' : 'movies';
     // A season picked on a series' page (its address ends in /season-2) offers that season alone.
-    const season = media.kind === 'series' && media.season ? media.season : 0;
+    // Season 0 (specials) is a season too; a series with none named has no season part.
+    const season = media.kind === 'series' && Number.isInteger(media.season) ? media.season : null;
     this.setBrowseOffer({
-      link: `https://tubitv.com/${path}/${media.id}${season ? `/season-${season}` : ''}`,
-      title: season && !/season\s*\d/i.test(title) ? `${title}, ${this.tr('Season {n}', { n: season })}` : title,
+      link: `https://tubitv.com/${path}/${media.id}${season != null ? `/season-${season}` : ''}`,
+      title: season != null && !/season\s*\d/i.test(title) ? `${title}, ${this.tr('Season {n}', { n: season })}` : title,
       kind: media.kind === 'series' ? 'series' : 'video'
     });
   }
@@ -2841,7 +2844,9 @@ var FirePlaylistPanel = class {
     let what = o.link;
     // The window this offer came from: a lookup below may outlast it (closed, or Browse opened again).
     const browser = this.siteBrowser;
-    const ours = () => !!browser && this.siteBrowser === browser && (!this.browseOffer || this.browseOffer === o);
+    // Only the latest Add or Now may close the window or put its offer back.
+    const n = this.browseActionN = (this.browseActionN || 0) + 1;
+    const ours = () => n === this.browseActionN && !!browser && this.siteBrowser === browser && (!this.browseOffer || this.browseOffer === o);
     if (o.kind === 'video' && window.isBanter && typeof this.core.tubiResolver === 'function') {
       this.setBrowseOffer(null);
       this.setStatus(this.tr('Looking up "{title}"...', { title: o.title }), 0);
@@ -2869,8 +2874,8 @@ var FirePlaylistPanel = class {
   showEpisodes(link) {
     if (!link) return;
     // Browse's series: its episodes are picked in the panel, so the site closes (Browse opens it again).
+    // A series opened from Search leaves Browse's offer (another title, or a station) as it is.
     if (this.browseOffer && this.browseOffer.link === link) this.closeBrowse();
-    else this.setBrowseOffer(null);
     this.browseList(link);
     this.setStatus('The episodes are in Lists: add the ones you want, or + All.', 6000);
   }
@@ -3320,7 +3325,7 @@ var FirePlaylistPanel = class {
       // Only what was sent is counted; the list stays here, so + All can be pressed again.
       const sent = items.filter(v => this.send(Commands.ADD_TO_PLAYLIST, v)).length;
       if (sent < items.length) { this.setStatus('Not connected to the server. Reconnecting...', 4000); return; }
-      this.setStatus(this.tr(sent === 1 ? 'Adding {count} video...' : 'Adding {count} videos...', { count: sent }), 0);
+      this.setStatus(this.tr(sent === 1 ? 'Adding {count} video...' : 'Adding {count} videos...', { count: sent }), 6000);
       return;
     }
     this.send(Commands.FROM_PLAYLIST, { id, append: true, fromPlaylist: true });
@@ -3674,8 +3679,10 @@ var FirePlaylistPanel = class {
       this.display(this.browseEpisodesBtn, bo.kind === 'series');
     }
     if (this.browseBtn) {
-      this.display(this.browseBtn, onSearch && this.canBrowse() && (BROWSE_SITES.includes(this.searchSource) || !!this.siteBrowser));
-      this.setText(this.browseBtn, this.siteBrowser ? '✕ Close Browser' : '@fvp:web Browse');
+      // While it's opening too, so the opening can be called off.
+      const open = !!this.siteBrowser || !!this.browseOpening;
+      this.display(this.browseBtn, onSearch && this.canBrowse() && (BROWSE_SITES.includes(this.searchSource) || open));
+      this.setText(this.browseBtn, open ? '✕ Close Browser' : '@fvp:web Browse');
     }
     if (this.moveBrowseBtn) {
       this.display(this.searchGoBtn, !this.siteBrowser);
@@ -3783,7 +3790,7 @@ var FirePlaylistPanel = class {
     } else if (!items.length) {
       if (onLists) empty = "No saved lists. Paste a YouTube playlist or a list of links into + Search & Add (or More > + Add by link) and choose ★ Save for Everyone or ☆ Save for Me.";
       else if (onSearch) empty = this.karaoke ? 'Search for a song above, or paste a link.' : 'Search YouTube above, or paste a YouTube, Twitch, Vimeo or video link.';
-      else if (this.karaoke) empty = host ? 'No singers yet. Use Search to pick a song and join the queue.' : 'No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first (press ♛ at the top).';
+      else if (this.karaoke) empty = host ? 'No singers yet. Use Search to pick a song and join the queue.' : 'No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first: press the host name at the top, then Take Over.';
       else empty = 'The playlist is empty. Use Search to add videos.';
     }
     this.setText(this.emptyLabel, empty, literal);

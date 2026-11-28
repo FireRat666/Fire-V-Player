@@ -58,10 +58,13 @@ class TtlCache {
     if (this.map.size > this.max) this.map.delete(this.map.keys().next().value);
     return value;
   }
-  /** Keeps `key` for at most `ttl` from now (a list loaded with some of it missing). */
-  shorten(key, ttl) {
+  /**
+   * Keeps `key` for at most `ttl` from now (a list loaded with some of it missing), while it's still
+   * `value` (the load that was partial), not one that has replaced it since.
+   */
+  shorten(key, ttl, value) {
     const hit = this.map.get(key);
-    if (hit) hit.expires = Math.min(hit.expires, Date.now() + ttl);
+    if (hit && (value === undefined || hit.value === value)) hit.expires = Math.min(hit.expires, Date.now() + ttl);
   }
 }
 const listCache = new TtlCache(100);
@@ -107,8 +110,8 @@ function parseLinkList(text) {
 
 function decodeEntities(text) {
   return String(text || '')
-    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/&#(\d+);/g, (m, n) => (Number(n) > 0 && Number(n) <= 0x10ffff ? String.fromCodePoint(Number(n)) : m))
+    .replace(/&#x([0-9a-f]+);/gi, (m, n) => (parseInt(n, 16) > 0 && parseInt(n, 16) <= 0x10ffff ? String.fromCodePoint(parseInt(n, 16)) : m))
     .replace(/&quot;/g, '"')
     .replace(/&#39;|&apos;/g, "'")
     .replace(/&lt;/g, '<')
@@ -581,7 +584,7 @@ async function driveFolder(id, max) {
 }
 
 /** One line of a list file as zero or more playlist items. Lines that can't play are dropped. */
-async function resolveEntry(entry, limit) {
+async function resolveEntry(entry, limit, state = {}) {
   const input = entry.input;
   if (!input || input.length > 2048) return [];
   const titled = (item) => (entry.title ? { ...item, title: clean(entry.title) || item.title } : item);
@@ -596,7 +599,12 @@ async function resolveEntry(entry, limit) {
     }
   }
   const source = listSource(input);
-  if (source && source.kind === 'streaming') return (await streaming.loadList(source)).items.slice(0, limit);
+  if (source && source.kind === 'streaming') {
+    const list = await streaming.loadList(source);
+    // A series with episodes not read in time makes the whole list partial (kept only briefly).
+    if (list.partial) state.partial = true;
+    return list.items.slice(0, limit);
+  }
   if (source && source.kind === 'loc') return (await loc.loadList(source)).items.slice(0, limit);
   if (source && source.kind === 'eso') return (await eso.loadList(source)).items.slice(0, limit);
   if (source && source.kind === 'archive') {
@@ -611,12 +619,13 @@ async function resolveEntry(entry, limit) {
 
 async function resolveEntries(entries, limit) {
   const results = new Array(entries.length);
+  const state = { partial: false };
   let next = 0;
   const worker = async () => {
     while (next < entries.length) {
       const i = next++;
       try {
-        results[i] = await resolveEntry(entries[i], limit);
+        results[i] = await resolveEntry(entries[i], limit, state);
       } catch (e) {
         results[i] = [];
       }
@@ -632,7 +641,7 @@ async function resolveEntries(entries, limit) {
     seen.add(key);
     items.push(item);
   }
-  return { items: items.slice(0, limit), truncated: items.length > limit, dropped: entries.length - results.filter(r => r && r.length).length };
+  return { items: items.slice(0, limit), truncated: items.length > limit, dropped: entries.length - results.filter(r => r && r.length).length, partial: state.partial };
 }
 
 /**
@@ -674,12 +683,12 @@ function loadList(src, limit = MAX_ITEMS) {
     const parsed = parseLinkList(text);
     const entries = parsed.entries.slice(0, MAX_ITEMS);
     if (!entries.length) throw new ListError('That file has no links in it.');
-    const { items, truncated, dropped } = await resolveEntries(entries, limit);
+    const { items, truncated, dropped, partial } = await resolveEntries(entries, limit);
     if (!items.length) throw new ListError('None of the links in that file can be played.');
-    return { title: clean(parsed.title || name || source.name, 120) || 'Playlist', items, truncated: truncated || parsed.entries.length > MAX_ITEMS, dropped };
+    return { title: clean(parsed.title || name || source.name, 120) || 'Playlist', items, truncated: truncated || parsed.entries.length > MAX_ITEMS, dropped, partial };
   });
   // A list with some of it missing is loaded again soon, not kept for LIST_TTL.
-  loaded.then(list => { if (list && list.partial) listCache.shorten(key, PARTIAL_LIST_TTL); }, () => {});
+  loaded.then(list => { if (list && list.partial) listCache.shorten(key, PARTIAL_LIST_TTL, loaded); }, () => {});
   return loaded;
 }
 

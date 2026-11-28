@@ -98,7 +98,7 @@ FVP_STRINGS["es"] = {
   "No results.": "No hay resultados.",
   "No saved lists. Paste a YouTube playlist or a list of links into + Search & Add (or More > + Add by link) and choose ★ Save for Everyone or ☆ Save for Me.": "No hay listas guardadas. Pega una lista de YouTube o una lista de enlaces en + Buscar (o Más > + Añadir por enlace) y elige ★ Guardar para todos o ☆ Guardar para mí.",
   "No singers yet. Use Search to pick a song and join the queue.": "Todavía no hay cantantes. Use Search para elegir una canción y unirse a la cola.",
-  "No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first (press ♛ at the top).": "Todavía no hay cantantes. Usa Buscar para elegir una canción y unirte a la cola. Quien dirija el karaoke debe tomar el control del reproductor primero: pulsa el nombre del anfitrión arriba y luego Tomar el control.",
+  "No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first: press the host name at the top, then Take Over.": "Todavía no hay cantantes. Usa Buscar para elegir una canción y unirte a la cola. Quien dirija el karaoke debe tomar el control del reproductor primero: pulsa el nombre del anfitrión arriba y luego Tomar el control.",
   "Nobody can take over while the host is here.": "Nadie puede hacerse cargo mientras el anfitrión está aquí.",
   "Nobody is singing": "Nadie canta",
   "Not connected to the server. Reconnecting...": "No conectado al servidor. Reconectando...",

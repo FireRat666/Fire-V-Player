@@ -432,7 +432,13 @@ var Core = class {
   async tubiResolver() {
     if (this.destroyed || !window.isBanter) return null;
     if (typeof FireTubiResolver === 'undefined') {
-      if (!this.tubiScript) this.tubiScript = this.setupScript(null, 'tubi-native');
+      if (!this.tubiScript) {
+        // Shared by lookups at the same time; one that ends without the resolver (the script
+        // failed) is forgotten, so a later lookup tries again.
+        const attempt = this.tubiScript = Promise.resolve(this.setupScript(null, 'tubi-native'));
+        const forget = () => { if (this.tubiScript === attempt && typeof FireTubiResolver === 'undefined') this.tubiScript = null; };
+        attempt.then(forget, forget);
+      }
       // A script that neither loads nor fails (a stalled connection) would leave every Tubi lookup
       // waiting for good, and the server never asked: past TUBI_SCRIPT_MS this gives up.
       let timer;
@@ -496,8 +502,9 @@ var Core = class {
     const link = old.link;
     const p = this.player;
     let offset = null;
-    if (old.autoSync === false && old.prepared && p && !p.paused && Number.isFinite(Number(p.lastStartTime))) {
-      offset = old.localTime() - (Date.now() / 1000 - Number(p.lastStartTime));
+    if (old.autoSync === false && old.prepared && p && (p.paused || Number.isFinite(Number(p.lastStartTime)))) {
+      // Paused, the room is at its currentTime; playing, at the time since its start.
+      offset = old.localTime() - (p.paused ? Number(p.currentTime) : Date.now() / 1000 - Number(p.lastStartTime));
       if (!Number.isFinite(offset)) offset = null;
     }
     old.destroy();

@@ -98,7 +98,7 @@ FVP_STRINGS["zh"] = {
   "No results.": "没有结果。",
   "No saved lists. Paste a YouTube playlist or a list of links into + Search & Add (or More > + Add by link) and choose ★ Save for Everyone or ☆ Save for Me.": "没有保存的列表。将 YouTube 播放列表或链接列表粘贴到“+ 搜索并添加”（或“更多 > + 通过链接添加”），然后选择“★ 为所有人保存”或“☆ 为我保存”。",
   "No singers yet. Use Search to pick a song and join the queue.": "还没有歌手。用“搜索”选一首歌并加入排队。",
-  "No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first (press ♛ at the top).": "还没有歌手。用“搜索”选一首歌并加入排队。负责卡拉OK的人应先接管播放器（点顶部的 ♛）。",
+  "No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first: press the host name at the top, then Take Over.": "还没有歌手。用“搜索”选一首歌并加入排队。负责卡拉OK的人应先接管播放器：点顶部的主持人名字，再点“接管”。",
   "Nobody can take over while the host is here.": "主持人在场时，没有人可以接管。",
   "Nobody is singing": "没有人在唱歌",
   "Not connected to the server. Reconnecting...": "未连接到服务器。正在重新连接……",

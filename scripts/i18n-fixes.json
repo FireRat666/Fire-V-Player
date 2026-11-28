@@ -21,19 +21,20 @@
     "Clear Results": "Ergebnisse leeren",
     "Then search here for that name, or paste this link with {name} changed to the same name:": "Suche dann hier nach diesem Namen, oder füge diesen Link ein, mit {name} durch denselben Namen ersetzt:",
     "To share your PC's screen, open this page on the PC, with {name} changed to a name of your own (it can be anything):": "Um den Bildschirm deines PCs zu teilen, öffne diese Seite auf dem PC und ersetze {name} durch einen eigenen Namen (er kann beliebig sein):",
-    "Season {n}": "Staffel {n}"
+    "Season {n}": "Staffel {n}",
+    "No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first: press the host name at the top, then Take Over.": "Noch keine Sänger. Wähle mit der Suche einen Song und reihe dich in die Warteschlange ein. Wer das Karaoke leitet, sollte zuerst den Player übernehmen: oben auf den Namen des Gastgebers drücken, dann auf Übernehmen."
   },
   "fr": {
     "Save for Me": "Enregistrer pour moi",
     "No saved lists. Paste a YouTube playlist or a list of links into + Search & Add (or More > + Add by link) and choose ★ Save for Everyone or ☆ Save for Me.": "Aucune liste enregistrée. Collez une playlist YouTube ou une liste de liens dans + Rechercher et ajouter (ou Plus > + Ajouter par lien) et choisir ★ Enregistrer pour tout le monde ou ☆ Enregistrer pour moi.",
-    "No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first (press ♛ at the top).": "Pas encore de chanteurs. Utilisez Recherche pour choisir une chanson et rejoindre la file d'attente. Celui qui anime le karaoké doit d'abord prendre le contrôle du lecteur : appuyez sur le nom de l'hôte en haut, puis sur Prendre le contrôle quand c'est possible.",
     "Leave": "Quitter",
     "shared": "partagée",
     "Go back from live (everyone):": "Reculer par rapport au direct (tout le monde) :",
     "Search YouTube, Internet Archive, Tubi, NASA+ or ESO: pick the source from the drop-down beside the box. Or paste a link.": "Recherchez sur YouTube, Internet Archive, Tubi, NASA+ ou ESO : choisissez la source dans le menu déroulant à côté du champ. Ou collez un lien.",
     "Search YouTube, Internet Archive, Tubi, NASA+, ESO or a screen share by its room code: pick the source from the drop-down beside the box. Or paste a link.": "Recherchez sur YouTube, Internet Archive, Tubi, NASA+, ESO ou un partage d’écran par son code de salle : choisissez la source dans le menu déroulant à côté du champ. Ou collez un lien.",
     "Pick Shoutcast, internet-radio.com or Tubi in the drop-down to browse its site.": "Choisissez Shoutcast, internet-radio.com ou Tubi dans la liste déroulante pour parcourir son site.",
-    "Looking up \"{title}\"...": "Recherche de \"{title}\"..."
+    "Looking up \"{title}\"...": "Recherche de \"{title}\"...",
+    "No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first: press the host name at the top, then Take Over.": "Pas encore de chanteurs. Utilisez Recherche pour choisir une chanson et rejoindre la file d'attente. Celui qui anime le karaoké doit d'abord prendre le contrôle du lecteur : appuyez sur le nom de l'hôte en haut, puis sur Prendre le contrôle quand c'est possible."
   },
   "ja": {
     "\"{title}\" can't play here.": "「{title}」はここでは再生できません。",
@@ -130,7 +131,6 @@
     "No results.": "結果はありません。",
     "No saved lists. Paste a YouTube playlist or a list of links into + Search & Add (or More > + Add by link) and choose ★ Save for Everyone or ☆ Save for Me.": "保存したリストはありません。YouTube のプレイリストやリンクの一覧を「+ 検索して追加」（または「その他 > + リンクで追加」）に貼り付け、「★ 全員用に保存」か「☆ 自分用に保存」を選んでください。",
     "No singers yet. Use Search to pick a song and join the queue.": "まだ歌い手がいません。「検索」で曲を選んで順番待ちに参加してください。",
-    "No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first (press ♛ at the top).": "まだ歌い手がいません。「検索」で曲を選んで順番待ちに参加してください。カラオケを進行する人は、先にプレーヤーを引き継いでください（上の ♛ を押します）。",
     "Nobody can take over while the host is here.": "ホストがいる間は、誰も引き継げません。",
     "Nobody is singing": "誰も歌っていません",
     "Not connected to the server. Reconnecting...": "サーバーに接続していません。再接続中…",
@@ -329,7 +329,8 @@
     "{count} videos": "動画 {count} 本",
     "Clear Results": "結果を消去",
     "To share your PC's screen, open this page on the PC, with {name} changed to a name of your own (it can be anything):": "PC の画面を共有するには、PC でこのページを開き、{name} を自分の好きな名前に変えてください(何でもかまいません):",
-    "Then search here for that name, or paste this link with {name} changed to the same name:": "次に、ここでその名前を検索するか、{name} を同じ名前に変えたこのリンクを貼り付けてください:"
+    "Then search here for that name, or paste this link with {name} changed to the same name:": "次に、ここでその名前を検索するか、{name} を同じ名前に変えたこのリンクを貼り付けてください:",
+    "No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first: press the host name at the top, then Take Over.": "まだ歌い手がいません。「検索」で曲を選んで順番待ちに参加してください。カラオケを進行する人は、先にプレーヤーを引き継いでください：上のホスト名を押し、「引き継ぐ」を押します。"
   },
   "es": {
     "Season {n}": "Temporada {n}",
@@ -387,7 +388,6 @@
     "Just for you (nobody else's player changes)": "Solo para ti (no cambia el reproductor de nadie más)",
     "More: settings and host controls": "Más: ajustes y controles del anfitrión",
     "Next video (host)": "Vídeo siguiente (anfitrión)",
-    "No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first (press ♛ at the top).": "Todavía no hay cantantes. Usa Buscar para elegir una canción y unirte a la cola. Quien dirija el karaoke debe tomar el control del reproductor primero: pulsa el nombre del anfitrión arriba y luego Tomar el control.",
     "Only the host can change this. A space admin can press Admin Take Over to become the host.": "Solo el anfitrión puede cambiar esto. Un administrador del espacio puede pulsar Tomar el control (admin) para ser el anfitrión.",
     "Only the host can change this. Press Take Over to become the host.": "Solo el anfitrión puede cambiar esto. Pulsa Tomar el control para ser el anfitrión.",
     "Only the host can load a playlist.": "Solo el anfitrión puede cargar una lista de reproducción.",
@@ -433,7 +433,8 @@
     "Pick Shoutcast, internet-radio.com or Tubi in the drop-down to browse its site.": "Elige Shoutcast, internet-radio.com o Tubi en el desplegable para navegar por su sitio.",
     "Clear Results": "Borrar resultados",
     "Then search here for that name, or paste this link with {name} changed to the same name:": "Después busca aquí ese nombre, o pega este enlace con {name} cambiado por el mismo nombre:",
-    "Looking up \"{title}\"...": "Buscando \"{title}\"..."
+    "Looking up \"{title}\"...": "Buscando \"{title}\"...",
+    "No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first: press the host name at the top, then Take Over.": "Todavía no hay cantantes. Usa Buscar para elegir una canción y unirte a la cola. Quien dirija el karaoke debe tomar el control del reproductor primero: pulsa el nombre del anfitrión arriba y luego Tomar el control."
   },
   "pt": {
     "Accent": "Cor de destaque",
@@ -479,7 +480,6 @@
     "Everyone + Take Over": "Todos + Assumir",
     "Just for you (nobody else's player changes)": "Só para você (o player dos outros não muda)",
     "More: settings and host controls": "Mais: configurações e controles do anfitrião",
-    "No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first (press ♛ at the top).": "Ainda não há cantores. Use Buscar para escolher uma música e entrar na fila. Quem comanda o karaokê deve assumir o player primeiro: toque no nome do anfitrião no topo e depois em Assumir.",
     "Nothing playing": "Nada tocando",
     "Now playing": "Tocando agora",
     "Only the host can change this. A space admin can press Admin Take Over to become the host.": "Só o anfitrião pode mudar isso. Um administrador do espaço pode tocar em Assumir (admin) para virar o anfitrião.",
@@ -515,7 +515,10 @@
     "That station can't play here.": "Essa estação não pode ser reproduzida aqui.",
     "The website can't play this station itself, but the Fire Player can: add it with the bar above.": "O site não consegue reproduzir esta estação, mas o Fire Player consegue: adicione-a com a barra acima.",
     "The website can't play this station itself. Checking whether the Fire Player can...": "O site não consegue reproduzir esta estação. Verificando se o Fire Player consegue...",
-    "With Shoutcast, internet-radio.com or Tubi picked, opens its site beside the panel. Play a station, or open a movie or series, and it offers to add it.": "Com Shoutcast, internet-radio.com ou Tubi escolhido, abre o site ao lado do painel. Reproduza uma estação, ou abra um filme ou série, e ele oferece adicioná-lo."
+    "With Shoutcast, internet-radio.com or Tubi picked, opens its site beside the panel. Play a station, or open a movie or series, and it offers to add it.": "Com Shoutcast, internet-radio.com ou Tubi escolhido, abre o site ao lado do painel. Reproduza uma estação, ou abra um filme ou série, e ele oferece adicioná-la.",
+    "No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first: press the host name at the top, then Take Over.": "Ainda não há cantores. Use Buscar para escolher uma música e entrar na fila. Quem comanda o karaokê deve assumir o player primeiro: toque no nome do anfitrião no topo e depois em Assumir.",
+    "Searching Radio Browser's radio stations.": "A pesquisar as estações de rádio do Radio Browser.",
+    "Shoutcast is open beside the panel. Press Play on a station there to add it.": "O Shoutcast está aberto ao lado do painel. Pressione Play numa estação para adicioná-la."
   },
   "zh": {
     "\"{title}\" can't play here.": "“{title}”无法在这里播放。",
@@ -612,7 +615,6 @@
     "No results.": "没有结果。",
     "No saved lists. Paste a YouTube playlist or a list of links into + Search & Add (or More > + Add by link) and choose ★ Save for Everyone or ☆ Save for Me.": "没有保存的列表。将 YouTube 播放列表或链接列表粘贴到“+ 搜索并添加”（或“更多 > + 通过链接添加”），然后选择“★ 为所有人保存”或“☆ 为我保存”。",
     "No singers yet. Use Search to pick a song and join the queue.": "还没有歌手。用“搜索”选一首歌并加入排队。",
-    "No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first (press ♛ at the top).": "还没有歌手。用“搜索”选一首歌并加入排队。负责卡拉OK的人应先接管播放器（点顶部的 ♛）。",
     "Nobody can take over while the host is here.": "主持人在场时，没有人可以接管。",
     "Nobody is singing": "没有人在唱歌",
     "Not connected to the server. Reconnecting...": "未连接到服务器。正在重新连接……",
@@ -811,6 +813,7 @@
     "{count} videos": "{count} 个视频",
     "Clear Results": "清除结果",
     "To share your PC's screen, open this page on the PC, with {name} changed to a name of your own (it can be anything):": "要共享电脑屏幕，请在电脑上打开此页面，并把 {name} 改成你自己的名字（随便什么都行）：",
-    "Then search here for that name, or paste this link with {name} changed to the same name:": "然后在这里搜索这个名字，或粘贴这个链接（把 {name} 改成同一个名字）："
+    "Then search here for that name, or paste this link with {name} changed to the same name:": "然后在这里搜索这个名字，或粘贴这个链接（把 {name} 改成同一个名字）：",
+    "No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first: press the host name at the top, then Take Over.": "还没有歌手。用“搜索”选一首歌并加入排队。负责卡拉OK的人应先接管播放器：点顶部的主持人名字，再点“接管”。"
   }
 }

@@ -114,11 +114,13 @@ function inOrder(ws, job) {
 }
 
 function addToPlaylist(app, ws, v, skipUpdate, isYoutubeWebsite) {
-  return inOrder(ws, () => addNow(app, ws, v, skipUpdate, isYoutubeWebsite));
+  // The room it was asked in: a socket that has moved to another room since doesn't add there.
+  const room = ws.i;
+  return inOrder(ws, () => (ws.i === room ? addNow(app, ws, v, skipUpdate, isYoutubeWebsite, room) : undefined));
 }
 
-async function addNow(app, ws, v, skipUpdate, isYoutubeWebsite) {
-  const player = app.videoPlayers[ws.i];
+async function addNow(app, ws, v, skipUpdate, isYoutubeWebsite, room = ws.i) {
+  const player = app.videoPlayers[room];
   if (player) {
     // Locked, in playlist mode: someone else's video waits for the host to approve it.
     if (player.locked && !player.isKaraoke && ws.u && ws.u.id && player.host && player.host.id !== ws.u.id) {
@@ -138,14 +140,16 @@ async function addNow(app, ws, v, skipUpdate, isYoutubeWebsite) {
         app.send(ws, Commands.ERROR, { message: "This video is already in the playlist." });
         return;
       }
+      // The socket moved to another room during the lookup: not added anywhere.
+      if (ws.i !== room || app.videoPlayers[room] !== player) return;
       // Checked again: the host may have locked the player during the lookup.
       if (player.locked && !(player.host && player.host.id === ws.u.id)) {
         app.send(ws, Commands.ERROR, { message: "The player was locked meanwhile. Add the video again to ask the host." });
         return;
       }
-      appendVideo(app, ws.i, app._createVideoObject(resolvedV, ws.u, 'scraper', isYoutubeWebsite), skipUpdate);
-      dropWaiting(app, ws.i, resolvedV.link);
-      await app.savePlayerState(ws.i);
+      appendVideo(app, room, app._createVideoObject(resolvedV, ws.u, 'scraper', isYoutubeWebsite), skipUpdate);
+      dropWaiting(app, room, resolvedV.link);
+      await app.savePlayerState(room);
     }, player.locked);
   }
 }

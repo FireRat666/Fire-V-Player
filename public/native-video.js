@@ -353,19 +353,24 @@ var FireNativeScreen = (() => {
       if (this.bilibili ? !(BS.Browser || BS.BanterBrowser) : !(BS.VideoPlayer || BS.BanterVideoPlayer)) throw new Error('No BS SDK video player or browser.');
       // In the browser screen's place, under the world's video home if it has one (see HOME_NAME).
       // Made first, so its words ("Loading...") show while a YouTube video is looked up.
+      // One deadline for all of the setup (a YouTube video's lookup counts too): if the SDK never
+      // finishes making the screen, the browser plays it (and anything made after is let go, as
+      // this screen is gone by then). Once the player exists, poll's own check takes over.
+      const u = typeof MediaSources !== 'undefined' ? MediaSources.parseUrl(String(this.link)) : null;
+      const limit = this.youtubeId ? YOUTUBE_PREPARE_TIMEOUT_MS : (!!u && /\.webm$/i.test(u.pathname)) ? WEBM_PREPARE_TIMEOUT_MS : PREPARE_TIMEOUT_MS;
+      this.setupTimer = setTimeout(() => {
+        if (this.destroyed || this.vp || this.warned) return;
+        this.warned = true;
+        console.warn(`[NativeScreen] ${this.link} wasn't set up after ${limit / 1000}s.`);
+        this.toBrowser(this.youtubeId ? 'not loaded in time' : 'setup failed');
+      }, Math.max(0, limit - (performance.now() - this.startedAt)));
       const t = core.screenTransform();
       const home = this.findHome();
       const go = this.go = await core.makeObject('FireVPlayer_VideoScreen', { parent: home || undefined, position: t.position, rotation: t.rotation, scale: t.scale });
-      if (this.destroyed) { core.destroyObject(go); return; }
+      if (this.destroyed || this.warned) { core.destroyObject(go); if (this.go === go) this.go = null; return; }
       this.overlayTimer = setInterval(() => { this.updateOverlay(); this.updateCaptions(); }, OVERLAY_TICK_MS);
       this.updateOverlay();
-      // The lookup failed: the browser plays it, and these words go.
-      const toBrowser = (why) => {
-        this.overlayDone = true;
-        clearInterval(this.overlayTimer);
-        this.showOverlay(false);
-        core.playFileInBrowser(this.link, why);
-      };
+      const toBrowser = why => this.toBrowser(why);
       if (this.bilibili) {
         await this.createPage(go);
         return;
@@ -398,14 +403,6 @@ var FireNativeScreen = (() => {
         }
         this.height = found.height;
         url = found.url;
-        // The same deadline covers making the player: one whose setup never finishes goes to the
-        // browser too (poll's check takes over once the player exists).
-        this.setupTimer = setTimeout(() => {
-          if (this.destroyed || this.vp || this.warned) return;
-          this.warned = true;
-          console.warn(`[NativeScreen] ${this.link} wasn't set up after ${YOUTUBE_PREPARE_TIMEOUT_MS / 1000}s.`);
-          toBrowser('not loaded in time');
-        }, Math.max(0, YOUTUBE_PREPARE_TIMEOUT_MS - (performance.now() - this.startedAt)));
         // Its captions, shown over the picture while the viewer has captions on (see updateCaptions).
         this.cues = Array.isArray(found.cues) ? found.cues : [];
       }
@@ -413,12 +410,12 @@ var FireNativeScreen = (() => {
       // The plane's renderer has to exist before the video player, which draws onto its material.
       await core.addComponent(go, core.bsComponent('Plane', { width: w, height: h }, 'BanterPlane', [w, h]));
       await core.addComponent(go, core.bsComponent('Material', { shaderName: 'Unlit/Diffuse' }, 'BanterMaterial', ['Unlit/Diffuse']));
-      if (this.destroyed || (this.youtubeId && this.warned)) return;
+      if (this.destroyed || this.warned) return;
       const settings = { url, volume: this.unityVolume(), loop: false, playOnAwake: !this.wantPaused && !this.held(), skipOnDrop: true, waitForFirstFrame: true };
       const vp = await core.addComponent(go, core.bsComponent('VideoPlayer', settings,
         'BanterVideoPlayer', [settings.url, settings.volume, settings.loop, settings.playOnAwake, settings.skipOnDrop, settings.waitForFirstFrame]));
       clearTimeout(this.setupTimer);
-      if (this.destroyed || (this.youtubeId && this.warned)) return;
+      if (this.destroyed || this.warned) return;
       this.vp = vp;
       this.trace(`made the player: playOnAwake ${settings.playOnAwake}, volume ${settings.volume}, held ${this.held()}, wantPaused ${this.wantPaused}`);
       // time only reaches the page when watched. The other read-only values (isPrepared,
@@ -429,6 +426,14 @@ var FireNativeScreen = (() => {
       if (!this.youtubeId) this.startedAt = performance.now();
       this.startPolling();
       console.log(`[NativeScreen] Playing ${this.link}${this.youtubeId ? ` (${this.height}p)` : ''} on the world's video player.`);
+    }
+
+    /** The world's player can't play it (or didn't set up in time): the browser plays it, and these words go. */
+    toBrowser(why) {
+      this.overlayDone = true;
+      clearInterval(this.overlayTimer);
+      this.showOverlay(false);
+      this.core.playFileInBrowser(this.link, why);
     }
 
     /** Starts reading the player's state, and Auto Sync's checks. */
@@ -464,6 +469,8 @@ var FireNativeScreen = (() => {
       // As the browser screen's: the same volume everywhere, and core.js applyAudio places it.
       if ('rolloffMode' in component || core.modernSdk()) component.rolloffMode = 0;
       this.pageSize = [w, h];
+      clearTimeout(this.setupTimer);
+      if (this.destroyed || this.warned) return;
       this.vp = new PageVideo(holder, component, this.unityVolume(), !this.wantPaused && !this.held());
       this.vp.onFresh = () => { if (!this.destroyed) this.requestSync(true); };
       this.applyResolution(); // the viewer may have changed it while the page was being made
@@ -588,7 +595,7 @@ var FireNativeScreen = (() => {
       // Loaded once Unity says so, or once the time starts moving (in case it never does).
       // A page's video only once it says it has a frame: its length can come first.
       const page = typeof vp.read === 'function';
-      if (!this.prepared && (this.state.isPrepared || (!page && this.state.duration > 0) || Number(vp.time) > 0)) {
+      if (!this.prepared && (this.state.isPrepared || (!page && (this.state.duration > 0 || Number(vp.time) > 0)))) {
         this.prepared = true;
         this.trace(`prepared (isPrepared ${this.state.isPrepared}, duration ${this.state.duration}, time ${vp.time})`);
         this.core.syncSecondScreens(); // its picture is a texture they can show now (see textureId)
@@ -605,7 +612,7 @@ var FireNativeScreen = (() => {
       if (!this.prepared && now - this.startedAt > timeout && !this.warned) {
         this.warned = true;
         console.warn(`[NativeScreen] ${this.link} hasn't loaded after ${timeout / 1000}s.`);
-        if (typeof this.core.playFileInBrowser === 'function') this.core.playFileInBrowser(this.link, this.youtubeId ? 'not loaded in time' : undefined);
+        if (typeof this.core.playFileInBrowser === 'function') this.core.playFileInBrowser(this.link, 'not loaded in time');
         else this.core.showToast("This file won't load on the world's video player. The link may be wrong, or the format unsupported.", 8000);
       }
       if (this.prepared) {
@@ -848,7 +855,7 @@ var FireNativeScreen = (() => {
         // The last line started by now that hasn't ended (lines are in order of their start).
         let lo = 0, hi = cues.length - 1, at = -1;
         while (lo <= hi) { const mid = (lo + hi) >> 1; if (cues[mid][0] <= t) { at = mid; lo = mid + 1; } else hi = mid - 1; }
-        for (let i = at; i >= 0 && i > at - 4; i--) {
+        for (let i = at; i >= 0; i--) {
           if (t < cues[i][0] + Math.max(cues[i][1], 500)) { text = cues[i][2]; break; }
         }
       }
@@ -928,7 +935,7 @@ var FireNativeScreen = (() => {
      * @param {number} seconds
      */
     setHold(seconds) {
-      if (!this.holding()) this.warmSkipped = false; // a new countdown: it may warm this time
+      if (!this.holding()) { this.warmSkipped = false; this.rewindCancelled = false; } // a new countdown: it may warm (and go back) this time
       this.holdUntil = performance.now() + seconds * 1000;
       clearTimeout(this.countdownTimer);
       this.countdownTimer = setTimeout(() => {
@@ -1010,7 +1017,7 @@ var FireNativeScreen = (() => {
     scheduleRewind() {
       // Already back at the start for this countdown: a sync that moves its end by a moment (as
       // each sync's own delay does) doesn't send it back again.
-      if (this.rewoundFor != null && Math.abs(this.holdUntil - this.rewoundFor) < 500) return;
+      if (this.rewindCancelled || (this.rewoundFor != null && Math.abs(this.holdUntil - this.rewoundFor) < 500)) return;
       clearTimeout(this.rewindTimer);
       this.rewindTimer = setTimeout(() => {
         if (this.destroyed || !this.warming || !this.vp) return;
@@ -1223,7 +1230,7 @@ var FireNativeScreen = (() => {
           }
           // A skip during the countdown's warming stands: it isn't taken back to the start before
           // the end (it stays muted until then, as the countdown's warming does).
-          if (this.warming) { clearTimeout(this.rewindTimer); this.rewoundFor = this.holdUntil; }
+          if (this.warming) { clearTimeout(this.rewindTimer); this.rewindCancelled = true; }
           const amount = this.core.isKaraoke ? SKIP_KARAOKE_S : SKIP_S;
           this.seek(this.localTime() + (msg.path === Commands.SKIP_FORWARD ? amount : -amount));
           break;

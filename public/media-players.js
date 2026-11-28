@@ -204,7 +204,8 @@ class RadioCard {
     card.appendChild(sub);
     this.site = site;
     opts.container.appendChild(card);
-    const update = () => this.show(!el.paused && el.readyState >= 2, el.paused && el.readyState >= 2);
+    // Playing only with sound to come (HAVE_FUTURE_DATA, as VideoElementSource.state() has it), not while it waits for more.
+    const update = () => this.show(!el.paused && el.readyState >= 3, el.paused && el.readyState >= 2);
     ['playing', 'pause', 'waiting', 'stalled', 'canplay', 'loadstart', 'emptied'].forEach(n => el.addEventListener(n, update));
     el.addEventListener('error', () => this.show(false, false, true));
     this.show(false, false);
@@ -374,7 +375,11 @@ class VideoElementSource extends BaseMediaSource {
           // Live, it starts on the first data rather than waiting to gather some (the stash), so
           // a VRCDN stream starts in a second or two instead of many.
           media.live ? { liveBufferLatencyChasing: true, lazyLoad: false, enableStashBuffer: false } : { lazyLoad: true });
-        m.on(mpegts.Events.ERROR, () => opts.onError("Couldn't play this stream. It may be offline, or the site may not allow it here."));
+        m.on(mpegts.Events.ERROR, () => {
+          // A station's card says so too, not "Tuning in...".
+          if (this.radioCard) this.radioCard.show(false, false, true);
+          opts.onError("Couldn't play this stream. It may be offline, or the site may not allow it here.");
+        });
         m.attachMediaElement(el);
         m.load();
       }).catch(err => { if (!this.destroyed) opts.onError(err.message); });
@@ -1355,7 +1360,9 @@ class BilibiliSource extends BaseMediaSource {
   }
   seek(t) {
     t = Math.max(0, Number(t) || 0);
-    // Each seek reloads the embed, so one to about where it is already is left alone.
+    // Paused, a seek only moves where it will start, so even a small one (karaoke's 0.25 s nudge) counts.
+    if (!this.frame) { this.t = t; this.tAt = performance.now(); return; }
+    // Playing, each seek reloads the embed, so one to about where it is already is left alone.
     if (Math.abs(t - this.time()) < 1.5) return;
     if (this.frame) this.load(t);
     else { this.t = t; this.tAt = performance.now(); }

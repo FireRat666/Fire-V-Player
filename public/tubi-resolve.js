@@ -12,7 +12,7 @@
  * Messages in (BS Browser "postmessage" actions, as bsmessage events):
  *   { type: 'search', n, term }
  *   { type: 'stream', n, kind, id }      kind 'movie' or 'episode'
- *   { type: 'series', n, id, season }  season: one season's number, or 0 for them all
+ *   { type: 'series', n, id, season }  season: one season's number (0 is the specials); none for them all
  * Messages out (window.O.sendMessage), all with from: 'tubi-resolve':
  *   { type: 'ready' }
  *   { type: 'result', n, ok: true, ... } or { type: 'result', n, ok: false, reason }
@@ -254,8 +254,8 @@
           }).filter(function (ep) { return /^\d{1,12}$/.test(ep.id); })
         };
       }).sort(function (a, b) { return a.n - b.n; });
-      var seasons = season ? listed.filter(function (x) { return x.n === season; }) : listed;
-      if (season && !seasons.length) throw new Error('That Tubi series has no season ' + season + ' here.');
+      var seasons = season != null ? listed.filter(function (x) { return x.n === season; }) : listed;
+      if (season != null && !seasons.length) throw new Error('That Tubi series has no season ' + season + ' here.');
       var wanted = [];
       seasons.forEach(function (x) {
         x.eps.slice().sort(function (a, b) { return a.num - b.num; }).forEach(function (ep) {
@@ -304,7 +304,7 @@
           if (!known) partial = true;
         }
         var name = clean(s.title, 120) || 'Tubi series';
-        send({ type: 'result', n: n, ok: true, title: season ? clean(name + ', Season ' + season, 120) : name, items: items, partial: partial, ratings: ratings(s) });
+        send({ type: 'result', n: n, ok: true, title: season != null ? clean(name + ', Season ' + season, 120) : name, items: items, partial: partial, ratings: ratings(s) });
       });
     }).catch(function (e) { send({ type: 'result', n: n, ok: false, reason: String(e && e.message || e) }); });
   }
@@ -317,7 +317,7 @@
     if (!msg || typeof msg !== 'object' || typeof msg.n !== 'number') return;
     if (msg.type === 'search' && typeof msg.term === 'string') search(msg.n, clean(msg.term, 100));
     else if (msg.type === 'stream' && /^\d{1,12}$/.test(String(msg.id))) stream(msg.n, msg.kind === 'episode' ? 'episode' : 'movie', String(msg.id));
-    else if (msg.type === 'series' && /^\d{1,12}$/.test(String(msg.id))) series(msg.n, String(msg.id), /^\d{1,3}$/.test(String(msg.season || '')) ? Number(msg.season) : 0);
+    else if (msg.type === 'series' && /^\d{1,12}$/.test(String(msg.id))) series(msg.n, String(msg.id), /^\d{1,3}$/.test(String(msg.season)) ? Number(msg.season) : null);
   });
 
   send({ type: 'ready' });

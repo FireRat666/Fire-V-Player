@@ -304,6 +304,17 @@ var Karaoke = class {
           this.updatePlaylist(this.core.player);
         }
         break;
+      case Commands.READY_START: {
+        // Everyone has the song: it starts at a new time (see the server's releaseIfReady).
+        const p = this.core.player;
+        const track = p && Array.isArray(p.playlist) ? p.playlist[p.currentTrack] : null;
+        if (track && json.data && track.link === json.data.link) {
+          p.lastStartTime = json.data.newLastStartTime;
+          p.currentTime = json.data.newCurrentTime;
+          this.startUiUpdater();
+        }
+        break;
+      }
       case Commands.AUTO_SYNC_STATE_CHANGED:
         this.autoSyncEnabled = json.data.enabled;
         this.autoSync.innerText = this.autoSyncEnabled ? "Auto Sync: On" : "Auto Sync: Off";

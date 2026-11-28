@@ -37,6 +37,8 @@ const SEARCH_TTL_MS = 10 * 60 * 1000;
 /** A station's stream addresses, and whether its stream answers over https. */
 const STATION_TTL_MS = 10 * 60 * 1000;
 const HTTPS_TTL_MS = 60 * 60 * 1000;
+/** How long a stream that sent no sound is taken at its word before it's asked again. */
+const RETRY_TTL_MS = 60 * 1000;
 const MAX_RESULTS = 40;
 /** The biggest radio playlist file read. Real ones are a few hundred bytes. */
 const MAX_PLAYLIST_BYTES = 64 * 1024;
@@ -44,6 +46,8 @@ const MAX_PLAYLIST_BYTES = 64 * 1024;
 const MAX_RELAYS = Number(process.env.RADIO_RELAY_MAX) > 0 ? Number(process.env.RADIO_RELAY_MAX) : 40;
 const MAX_RELAYS_PER_IP = 3;
 const MAX_RELAY_MS = 8 * 60 * 60 * 1000;
+/** The longest one of a station's streams gets to send its first sound to the relay. */
+const ATTEMPT_MS = 6000;
 /** What a stream may be sent as: sound, or a type that some servers send sound as. */
 const AUDIO_TYPE = /^(audio\/|application\/ogg|video\/mp2t|application\/octet-stream)/i;
 /** A playlist's types, which are sent as audio/... too. */
@@ -61,8 +65,8 @@ const lists = () => require('./lists.js');
 
 const clean = (s, max = 200) => String(s || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
 const decodeEntities = s => String(s || '')
-  .replace(/&#(\d+);/g, (m, n) => String.fromCodePoint(Number(n)))
-  .replace(/&#x([0-9a-f]+);/gi, (m, n) => String.fromCodePoint(parseInt(n, 16)))
+  .replace(/&#(\d+);/g, (m, n) => (Number(n) > 0 && Number(n) <= 0x10ffff ? String.fromCodePoint(Number(n)) : m))
+  .replace(/&#x([0-9a-f]+);/gi, (m, n) => (parseInt(n, 16) > 0 && parseInt(n, 16) <= 0x10ffff ? String.fromCodePoint(parseInt(n, 16)) : m))
   .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 
 /** Whether the relay is on: only when the server's RADIO_RELAY setting is on (off by default). */
@@ -135,7 +139,9 @@ function looksLikeRadio(text, type) {
   const parsed = parsePlaylist(text);
   if (!parsed.streams.length) return false;
   if (parsed.format !== 'm3u') return true;
-  if (parsed.streams.some(s => MediaSources.detect(s.url) && MediaSources.detect(s.url).type !== 'radio')) return false;
+  // Video links make it a list of videos; a station's own addresses, radio links and sound files
+  // (a live .mp3 stream, often given twice) don't (see isStationStream).
+  if (!parsed.streams.every(s => isStationStream(s.url))) return false;
   return /mpegurl|scpls/i.test(type || '') || parsed.streams.length <= 10;
 }
 
@@ -290,12 +296,13 @@ async function sniff(link) {
  * address: a station's may have no .m3u8). A PLS, XSPF or plain .m3u list isn't either. It throws
  * when the station can't be reached at all, which isn't kept.
  */
-async function answersWithSound(url, ua = UA) {
+async function answersWithSound(url, ua = UA, httpsOnly = /^https:/i.test(url)) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5000);
   try {
-    // The https probe must stay on https: one redirected to http couldn't play there either.
-    const res = await lists().fetchPublic(url, { signal: controller.signal, httpsOnly: /^https:/i.test(url), headers: { 'User-Agent': ua, 'Accept': '*/*', 'Accept-Encoding': 'identity' } });
+    // The https probe (for playing it directly) must stay on https: one redirected to http
+    // couldn't play there either. The relay's may go where the relay would (see relayType).
+    const res = await lists().fetchPublic(url, { signal: controller.signal, httpsOnly, headers: { 'User-Agent': ua, 'Accept': '*/*', 'Accept-Encoding': 'identity' } });
     const type = String(res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
     // An .m3u8 address is read as one whatever its type (some servers send text/plain).
     if (res.ok && (HLS_TYPE.test(type) || /\.m3u8($|\?)/i.test(url))) {
@@ -397,8 +404,13 @@ async function streamFor(link) {
  * page at its root address, and the relay its stream.
  */
 async function relayType(url) {
+  const key = `relaytype:${url}`;
   try {
-    return await cache.remember(`relaytype:${url}`, HTTPS_TTL_MS, () => answersWithSound(url, RELAY_UA));
+    // As the relay fetches (it follows redirects to http too).
+    const type = await cache.remember(key, HTTPS_TTL_MS, () => answersWithSound(url, RELAY_UA, false));
+    // No sound this time may be a passing failure (a 503): asked again in a minute, not an hour.
+    if (!type) cache.set(key, '', RETRY_TTL_MS);
+    return type;
   } catch (e) {
     return '';
   }
@@ -424,12 +436,11 @@ async function relay(req, res, allowed) {
   relays.byIp.set(ip, (relays.byIp.get(ip) || 0) + 1);
   const controller = new AbortController();
   let released = false;
-  let firstByte = 0, longest = 0;
+  let longest = 0;
   const release = () => {
     if (released) return;
     released = true;
     controller.abort();
-    clearTimeout(firstByte);
     clearTimeout(longest);
     relays.total--;
     const n = (relays.byIp.get(ip) || 1) - 1;
@@ -446,18 +457,27 @@ async function relay(req, res, allowed) {
     return;
   }
   if (released || res.destroyed) { release(); return; }
-  firstByte = setTimeout(() => controller.abort(), TIMEOUT_MS);
   longest = setTimeout(release, MAX_RELAY_MS);
   let lastError = 'The station sent no sound.';
   // The stream streamFor picked first, then the others, as long as they're the kind the player
-  // was told (MPEG-TS or plain sound), which it was set up to play.
+  // was told (MPEG-TS or plain sound), which it was set up to play. Each gets up to ATTEMPT_MS (and
+  // all of them TIMEOUT_MS) to send its first sound; only then does the viewer's reply start, so
+  // one that answers and sends nothing gives way to the next.
   const streams = s.streams.slice(0, 3);
   const from = Math.max(0, Math.min(streams.length - 1, parseInt(req.query.s, 10) || 0));
   const kind = req.query.kind === 'ts' || req.query.kind === 'audio' ? req.query.kind : '';
+  const startBy = Date.now() + TIMEOUT_MS;
   for (const url of [streams[from], ...streams.filter((u, i) => i !== from)].filter(Boolean)) {
     if (released) return;
+    const left = startBy - Date.now();
+    if (left <= 0) { lastError = "The station didn't answer."; break; }
+    const attempt = new AbortController();
+    const stop = () => attempt.abort();
+    controller.signal.addEventListener('abort', stop);
+    const timer = setTimeout(stop, Math.min(left, ATTEMPT_MS));
+    let started = false;
     try {
-      const upstream = await lists().fetchPublic(url, { signal: controller.signal, headers: { 'User-Agent': RELAY_UA, 'Accept': '*/*', 'Accept-Encoding': 'identity' } });
+      const upstream = await lists().fetchPublic(url, { signal: attempt.signal, headers: { 'User-Agent': RELAY_UA, 'Accept': '*/*', 'Accept-Encoding': 'identity' } });
       const type = String(upstream.headers.get('content-type') || '');
       const wrongKind = kind && (/^video\/mp2t/i.test(type) ? 'ts' : 'audio') !== kind;
       if (!upstream.ok || !AUDIO_TYPE.test(type) || PLAYLIST_TYPE.test(type) || wrongKind) {
@@ -465,19 +485,41 @@ async function relay(req, res, allowed) {
         try { await upstream.body?.cancel(); } catch (e) {}
         continue;
       }
+      const reader = upstream.body.getReader();
+      let first = null;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value && value.length) { first = value; break; }
+      }
+      if (!first) { lastError = 'The station sent no sound.'; continue; }
+      if (released || res.destroyed) { try { await reader.cancel(); } catch (e) {} return; }
+      started = true;
+      clearTimeout(timer);
       // AAC+ is sent as audio/aacp, which browsers don't all take: it's AAC to them.
       const sent = type.split(';')[0].trim().replace(/^audio\/aacp$/i, 'audio/aac');
       res.status(200).set({ 'Content-Type': sent, 'Cache-Control': 'no-store' });
-      const body = Readable.fromWeb(upstream.body);
-      // The wait for its first sound ends with its first bytes, not its headers: a station that
-      // answers and then sends nothing is cut off and gives its slot back.
-      body.on('data', function first(chunk) { if (chunk && chunk.length) { clearTimeout(firstByte); body.off('data', first); } });
+      async function* sound() {
+        try {
+          yield Buffer.from(first);
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) return;
+            if (value && value.length) yield Buffer.from(value);
+          }
+        } finally {
+          reader.cancel().catch(() => {});
+        }
+      }
+      const body = Readable.from(sound());
       body.on('error', () => { release(); res.destroy(); });
       body.on('end', () => { release(); res.end(); });
       body.pipe(res);
       return;
     } catch (e) {
       lastError = e && e.name === 'AbortError' ? "The station didn't answer." : (e && e.message) || "Couldn't reach the station.";
+    } finally {
+      if (!started) { clearTimeout(timer); controller.signal.removeEventListener('abort', stop); }
     }
   }
   release();

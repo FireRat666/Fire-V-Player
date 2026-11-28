@@ -13,7 +13,7 @@ var FireTubiResolver = (() => {
   /** The page the hidden browser sits on: on Tubi's own site, and tiny. */
   const PAGE_URL = 'https://tubitv.com/robots.txt';
   /** Bump when tubi-resolve.js changes, so browsers don't keep an old copy. */
-  const SCRIPT_VERSION = 6;
+  const SCRIPT_VERSION = 7;
   const INJECT_EVERY_MS = 500;
   const READY_TIMEOUT_MS = 20000;
   /** The longest a search, and any other lookup, may take. */
@@ -56,13 +56,15 @@ var FireTubiResolver = (() => {
       // Out of sight (52 m below the screen) and too small to see or click.
       const position = new BS.Vector3(t.position.x, t.position.y - 52, t.position.z);
       const go = await core.makeObject('FireVPlayer_TubiLookup', { position, scale: new BS.Vector3(0.0001, 0.0001, 0.0001) });
-      if (this.destroyed) { core.destroyObject(go); return; }
+      // Removed, or given up on (it didn't start in time): what was made goes.
+      if (this.destroyed || this.failed) { core.destroyObject(go); return; }
       this.go = go;
       go.On('browser-message', e => this.onMessage(e));
       const component = await core.addComponent(go, core.bsComponent('Browser',
         { url: PAGE_URL, pageWidth: 320, pageHeight: 180 }, 'BanterBrowser', [PAGE_URL, false, 1300, 320, 180, null]));
-      // Removed meanwhile: destroy() has already destroyed the object (this.go).
+      // Removed meanwhile: destroy() has already destroyed the object (this.go). Given up on: it goes now.
       if (this.destroyed) return;
+      if (this.failed) { core.destroyObject(go); this.go = null; return; }
       this.component = component;
       try { if (typeof component.ToggleInteraction === 'function') component.ToggleInteraction(false); } catch (e) {}
       // Quiet: Tubi's search page has no sound, but it's a browser all the same.
@@ -208,10 +210,12 @@ var FireTubiResolver = (() => {
     async series(link) {
       const media = window.MediaSources ? MediaSources.detect(link) : null;
       if (!media || media.type !== 'tubi' || media.kind !== 'series') return null;
-      const key = `series:${media.id}:${media.season || 'all'}`;
+      // Season 0 (specials) is a season; no season asks for them all.
+      const one = Number.isInteger(media.season);
+      const key = `series:${media.id}:${one ? media.season : 'all'}`;
       const hit = this.cached(key, SERIES_CACHE_MS);
       if (hit) return hit;
-      const msg = await this.ask({ type: 'series', id: media.id, season: media.season || 0 }, SERIES_TIMEOUT_MS);
+      const msg = await this.ask(Object.assign({ type: 'series', id: media.id }, one ? { season: media.season } : {}), SERIES_TIMEOUT_MS);
       if (!msg.ok || !Array.isArray(msg.items)) {
         console.warn(`[TubiNative] Series ${link}: ${msg.reason || 'no answer'}`);
         return null;
@@ -227,7 +231,9 @@ var FireTubiResolver = (() => {
           thumbnail: /^https:\/\//.test(String(x.thumbnail || '')) ? x.thumbnail : '',
           duration: Math.max(0, Number(x.duration) || 0),
           link: x.link,
-          mature: seriesMature || (Array.isArray(x.ratings) ? MediaSources.tubiMature(x.ratings) : false)
+          // Without its ratings (its details weren't read) it counts as for adults, as Tubi's
+          // "not rated" does, so it isn't shown where the world doesn't allow them.
+          mature: seriesMature || (Array.isArray(x.ratings) ? MediaSources.tubiMature(x.ratings) : true)
         }))
       };
       // Missing some episodes' details: not kept, so the next look reads them again.

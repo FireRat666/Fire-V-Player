@@ -178,7 +178,7 @@
     q += 2;                                           // reserved
     var count = dv.getUint16(q); q += 2;
     var refs = [];
-    for (var i = 0; i < count && q + 12 <= dv.byteLength; i++) {
+    for (var i = 0; i < count && q + 12 <= off + boxSize; i++) {
       refs.push([dv.getUint32(q) & 0x7fffffff, Math.max(1, Math.round(dv.getUint32(q + 4) * 1000 / timescale))]);
       q += 12;
     }
@@ -281,6 +281,8 @@
   // made by people before YouTube's automatic one), else the first made by people, else any. None
   // is fine: the video plays without. Kept small, as they go over to the world in one message.
   var MAX_CUES = 4000, MAX_CUE_TEXT = 300, MAX_CUE_CHARS = 300000, CAPTIONS_TIMEOUT_MS = 6000;
+  // How long a lookup whose streams are ready waits for captions still on their way.
+  var CAPTIONS_GRACE_MS = 500;
   function captions(json) {
     var list = (((json && json.captions) || {}).playerCaptionsTracklistRenderer || {}).captionTracks || [];
     var en = list.filter(function (t) { return /^en/i.test(String(t.languageCode || '')); });
@@ -332,7 +334,13 @@
         fail(n, tall ? "It's a vertical video (a Short)." : 'YouTube gave no H.264 and AAC streams for it.', { shorts: tall });
         return;
       }
-      return Promise.all([firstVideo(videoChoices(formats, maxHeight)), readIndex(a), captions(json)]).then(function (idx) {
+      // Captions are asked for alongside, but the video doesn't wait for them: once the streams
+      // are ready they get CAPTIONS_GRACE_MS more, and it plays without them after that.
+      var caps = captions(json);
+      return Promise.all([firstVideo(videoChoices(formats, maxHeight)), readIndex(a)]).then(function (idx) {
+        var late = new Promise(function (r) { setTimeout(function () { r([]); }, CAPTIONS_GRACE_MS); });
+        return Promise.race([caps, late]).then(function (cues) { return [idx[0], idx[1], cues]; });
+      }).then(function (idx) {
         v = idx[0].f;
         var spec = { v: track(v, idx[0].sidx, true), a: track(a, idx[1], false), durMs: Number(v.approxDurationMs) || Number(a.approxDurationMs) || 0 };
         return packToFit(spec).then(function (m) {

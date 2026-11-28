@@ -46,8 +46,8 @@ const episodeCache = new TtlCache({ maxEntries: 3000 });
 
 const clean = (s, max = 200) => String(s || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
 const decodeEntities = s => String(s || '')
-  .replace(/&#(\d+);/g, (m, n) => String.fromCodePoint(Number(n)))
-  .replace(/&#x([0-9a-f]+);/gi, (m, n) => String.fromCodePoint(parseInt(n, 16)))
+  .replace(/&#(\d+);/g, (m, n) => (Number(n) > 0 && Number(n) <= 0x10ffff ? String.fromCodePoint(Number(n)) : m))
+  .replace(/&#x([0-9a-f]+);/gi, (m, n) => (parseInt(n, 16) > 0 && parseInt(n, 16) <= 0x10ffff ? String.fromCodePoint(parseInt(n, 16)) : m))
   .replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
 const https = url => (String(url || '').startsWith('//') ? `https:${url}` : String(url || ''));
 
@@ -259,8 +259,11 @@ async function readTubiSeries(id, season, limit) {
   const entry = (k, item) => {
     const { season: n, ep } = wanted[k];
     item = Object.assign({}, item || { title: '', thumbnail: '', duration: 0, link: `https://tubitv.com/tv-shows/${ep.id}` });
-    // One without its details goes by the series' rating.
-    item.mature = seriesMature || (typeof item.mature === 'boolean' ? item.mature : seriesMature);
+    // A series for adults marks every episode. Otherwise an episode keeps its own rating, and one
+    // without its details has none, so it's checked on its own when it's listed or added where the
+    // world doesn't allow titles for adults (see media.screenMature).
+    if (seriesMature) item.mature = true;
+    else if (typeof item.mature !== 'boolean') delete item.mature;
     // Most titles already say "S01:E03 - ..."; one that doesn't gets it.
     if (!/^S\d+\s*:?\s*E\d+/i.test(item.title) && n < 1000 && ep.num < 1000) {
       item.title = clean(`S${String(n).padStart(2, '0')}:E${String(ep.num).padStart(2, '0')}${item.title ? ` - ${item.title}` : ''}`);

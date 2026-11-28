@@ -98,7 +98,7 @@ FVP_STRINGS["ja"] = {
   "No results.": "結果はありません。",
   "No saved lists. Paste a YouTube playlist or a list of links into + Search & Add (or More > + Add by link) and choose ★ Save for Everyone or ☆ Save for Me.": "保存したリストはありません。YouTube のプレイリストやリンクの一覧を「+ 検索して追加」（または「その他 > + リンクで追加」）に貼り付け、「★ 全員用に保存」か「☆ 自分用に保存」を選んでください。",
   "No singers yet. Use Search to pick a song and join the queue.": "まだ歌い手がいません。「検索」で曲を選んで順番待ちに参加してください。",
-  "No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first (press ♛ at the top).": "まだ歌い手がいません。「検索」で曲を選んで順番待ちに参加してください。カラオケを進行する人は、先にプレーヤーを引き継いでください（上の ♛ を押します）。",
+  "No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first: press the host name at the top, then Take Over.": "まだ歌い手がいません。「検索」で曲を選んで順番待ちに参加してください。カラオケを進行する人は、先にプレーヤーを引き継いでください：上のホスト名を押し、「引き継ぐ」を押します。",
   "Nobody can take over while the host is here.": "ホストがいる間は、誰も引き継げません。",
   "Nobody is singing": "誰も歌っていません",
   "Not connected to the server. Reconnecting...": "サーバーに接続していません。再接続中…",

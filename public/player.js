@@ -1618,8 +1618,9 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       const pd = this.playerData;
       const roomTrack = pd && Array.isArray(pd.playlist) ? pd.playlist[pd.currentTrack] : null;
       const active = !!(video && video.link) && (this.previewVideo ? true : !!(roomTrack && roomTrack.link === video.link));
-      // Why it can't play, while that's still what's loaded (see MediaSwitch's onError).
-      const failure = active && this.failure && this.failure.link === video.link && this.loadedLink !== video.link ? this.failure : null;
+      // Why it can't play, while that's still what's loaded (see MediaSwitch's onError): also when
+      // it had played before failing (a stream that dropped), until something is loaded again.
+      const failure = active && this.failure && this.failure.link === video.link ? this.failure : null;
       let want = active && video.link !== this.unplayableLink && !this.countdownEl && !(pd && pd.paused && !this.previewVideo);
       if (want && this.player) {
         try {

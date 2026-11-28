@@ -733,7 +733,8 @@ class TwitchSource extends BaseMediaSource {
     if (T.ENDED) p.addEventListener(T.ENDED, () => { const s = owner(); if (s) { s.setPlaying(false); s.ended = true; } });
     if (T.OFFLINE) p.addEventListener(T.OFFLINE, () => {
       const s = owner();
-      if (s && s.live) { s.offline = true; s.opts.onError(`${s.channel} isn't live on Twitch right now.`); }
+      // A notice: Twitch's own player says so too, and plays it if the channel comes back (ONLINE).
+      if (s && s.live) { s.offline = true; s.opts.onError(`${s.channel} isn't live on Twitch right now.`, true); }
     });
     if (T.ONLINE) p.addEventListener(T.ONLINE, () => { const s = owner(); if (s) s.offline = false; });
   }

@@ -308,7 +308,7 @@ Tubi and the Internet Archive have films for adults among the rest, and neither 
 
 **Browse** opens Tubi's site whatever the setting, as only the viewer who opened it sees it, but a title for adults found there can't be added to the playlist without `mature-links`.
 
-Each viewer's own world must allow them for them to play on their screen, as with `untrusted-links`. The two are separate: `untrusted-links` doesn't allow titles for adults.
+Each viewer's own world must allow them for them to play on their screen, as with `untrusted-links`.
 
 #### Internet radio
 

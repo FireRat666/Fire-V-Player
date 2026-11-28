@@ -415,7 +415,7 @@ var Playlist = class {
     const source = document.querySelector('#search-source');
     this.searchId = (this.searchId || 0) + 1;
     const data = { term, searchId: this.searchId };
-    if (source && ['archive', 'tubi', 'nasa', 'eso', 'esodome', 'shoutcast', 'radiobrowser', 'somafm'].includes(source.value)) data.source = source.value;
+    if (source && ['archive', 'tubi', 'nasa', 'eso', 'esodome', 'shoutcast', 'radiobrowser', 'somafm', 'internetradio'].includes(source.value)) data.source = source.value;
     this.core.sendMessage({path: Commands.SEARCH, data });
   }
   updatePlaylist(player) {

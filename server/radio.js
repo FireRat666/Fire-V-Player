@@ -1,6 +1,7 @@
 /**
  * @fileoverview Internet radio: Shoutcast's station directory (its search and its stations'
- * tune-in links), radio playlist files (.pls, .m3u, .xspf) and the streams they name.
+ * tune-in links), Radio Browser's, SomaFM's and internet-radio.com's (its search and its station
+ * pages), radio playlist files (.pls, .m3u, .xspf) and the streams they name.
  *
  * A station in the playlist keeps the link it was added by (a Shoutcast tune-in link, or the
  * playlist file's), as a station's stream address can change. The player asks for the stream
@@ -24,6 +25,7 @@ const MediaSources = require('../public/media-sources.js');
 const AUDIO_FILE = /\.(mp3|m4a|aac|wav|flac|opus|ogg|oga)$/i;
 
 const SHOUTCAST = 'https://directory.shoutcast.com';
+const INTERNET_RADIO = 'https://www.internet-radio.com';
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
 /**
  * The relay's name to stations. A Shoutcast server sends its HTML status page, not the stream, to
@@ -208,6 +210,8 @@ function station(link) {
   return cache.remember(`station:${key}`, STATION_TTL_MS, async () => {
     try {
       if (media.site === 'radiobrowser') return await radioBrowserStation(media.id);
+      if (media.site === 'internetradio' && media.listed) return await readStation(media.id);
+      if (media.site === 'internetradio') return await internetRadioStation(media.id);
       if (media.site === 'somafm') {
         const s = await readStation(`https://api.somafm.com/${media.id}.pls`);
         // "SomaFM: Groove Salad (#1): A nicely chilled plate of..." is each stream's title.
@@ -234,7 +238,8 @@ async function resolveLink(link) {
   const s = await station(link);
   const keep = media.site === 'shoutcast' ? stationLink(media.id)
     : media.site === 'radiobrowser' ? `https://www.radio-browser.info/history/${media.id}`
-      : media.site === 'somafm' ? `https://somafm.com/${media.id}/` : String(link).trim();
+      : media.site === 'somafm' ? `https://somafm.com/${media.id}/`
+        : media.site === 'internetradio' ? (media.listed ? `${media.id}#internet-radio` : internetRadioLink(media.id)) : String(link).trim();
   return { title: `${stationTitle(s.title) || MediaSources.nameFromLink(keep)} (radio)`, thumbnail: '', duration: 0, link: keep };
 }
 
@@ -610,7 +615,109 @@ async function searchSomaFM(term) {
     .slice(0, 100).map(somaItem); // all of them: SomaFM has about 50
 }
 
+// ------------------------------------------------------------------ internet-radio.com
+
+/** An internet-radio.com station's page, the link its stations are kept by. */
+const internetRadioLink = id => `${INTERNET_RADIO}/station/${id}/`;
+
+/** A page of internet-radio.com, as text (its pages are about 100 KB). */
+async function internetRadioPage(url) {
+  const res = await fetch(url, { headers: { 'user-agent': UA, accept: 'text/html' }, signal: AbortSignal.timeout(TIMEOUT_MS) });
+  if (res.status === 404) {
+    try { await res.body?.cancel(); } catch (e) {}
+    throw new Error("That internet-radio.com station doesn't exist (any more).");
+  }
+  if (!res.ok) {
+    try { await res.body?.cancel(); } catch (e) {}
+    throw new Error(`internet-radio.com answered ${res.status}.`);
+  }
+  const text = await res.text();
+  if (text.length > 2 * 1024 * 1024) throw new Error("internet-radio.com's page is too big.");
+  return { url: res.url || url, text };
+}
+
+/**
+ * What a station's Play button on internet-radio.com plays: its stream (often internet-radio.com's
+ * own https proxy of it) and the station's own address, its name and what it's playing.
+ */
+function internetRadioButton(html) {
+  const attr = name => decodeEntities(((new RegExp(`\\b${name}="([^"]*)"`)).exec(html) || [])[1] || '').trim();
+  const streams = [...new Set([attr('data-stream-url'), attr('data-fallback-url')].filter(u => /^https?:\/\/\S+$/i.test(u)))];
+  return { streams, title: clean(attr('data-title'), 120), meta: clean(attr('data-meta'), 200) };
+}
+
+/** A station's name and streams, from its page (the Play button at its top). */
+async function internetRadioStation(id) {
+  const { text } = await internetRadioPage(internetRadioLink(id));
+  // The page's top band is the station; the stations under "You might also like" aren't.
+  const start = text.indexOf('class="station-band"');
+  const end = start < 0 ? -1 : text.indexOf('</section>', start);
+  const band = start < 0 ? '' : text.slice(start, end < 0 ? undefined : end);
+  const button = /<button\b[^>]*data-stream-url="[^>]*>/i.exec(band);
+  const st = button ? internetRadioButton(button[0]) : { streams: [] };
+  if (!st.streams.length) throw new Error('That internet-radio.com station has no stream.');
+  const h1 = /<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(band);
+  return { title: st.title || clean(decodeEntities(h1 ? h1[1].replace(/<[^>]*>/g, ' ') : ''), 120), streams: st.streams };
+}
+
+/**
+ * A station row of internet-radio.com's search or genre pages as a search result, or null. A
+ * station it hosts has a page there, which it's kept by; one it only lists has none, so it's kept
+ * by its stream's address, marked #internet-radio.
+ */
+function internetRadioItem(row) {
+  const slug = /href="\/station\/([a-z0-9][a-z0-9._-]{0,79})\/"/i.exec(row);
+  const button = /<button\b[^>]*data-stream-url="[^>]*>/i.exec(row);
+  if (!button) return null;
+  const st = internetRadioButton(button[0]);
+  if (!slug && !st.streams.length) return null;
+  const link = slug ? internetRadioLink(slug[1].toLowerCase()) : `${st.streams[0].replace(/#.*$/, '')}#internet-radio`;
+  const id = slug ? slug[1].toLowerCase() : link;
+  const text = s => clean(decodeEntities(String(s || '').replace(/<[^>]*>/g, ' ')), 200);
+  const genres = /Genres:([\s\S]*?)<\/div>/i.exec(row);
+  const listeners = /([\d,]+)\s+listeners?\b/i.exec(row);
+  const kbps = /(\d+)\s*kbps/i.exec(row);
+  const bits = [genres ? text(genres[1]).split(/\s+/).slice(0, 3).join(', ') : '', kbps ? `${kbps[1]} kbps` : '',
+    listeners ? `${listeners[1]} listening` : ''].filter(Boolean);
+  const name = st.title || text((/<strong>([\s\S]*?)<\/strong>/i.exec(row) || [])[1]) || 'Radio station';
+  const item = {
+    id,
+    title: `${clean(name, 120)} (radio)`,
+    thumbnail: '',
+    duration: 0,
+    link,
+    channel: { name: bits.length ? `internet-radio.com: ${bits.join(', ')}` : 'internet-radio.com', link: '' },
+    description: st.meta,
+    source: 'internetradio'
+  };
+  return item;
+}
+
+/**
+ * Searches internet-radio.com's stations (names, genres and what they're playing), as its own
+ * search does. A genre's name (jazz) goes to that genre's page, which is asked for 50 stations.
+ */
+function searchInternetRadio(term) {
+  const q = clean(term, 100);
+  // Its search takes 3 letters or more.
+  if (q.length < 3) return Promise.resolve([]);
+  return cache.remember(`ir:search:${q.toLowerCase()}`, SEARCH_TTL_MS, async () => {
+    let page = await internetRadioPage(`${INTERNET_RADIO}/search/?radio=${encodeURIComponent(q)}&size=50`);
+    const genre = /^https:\/\/www\.internet-radio\.com\/stations\/[^/?#]+\/$/i.test(page.url);
+    if (genre) page = await internetRadioPage(`${page.url}?size=50`);
+    const seen = new Set();
+    const items = [];
+    for (const row of page.text.split(/<tr\b[^>]*class="station-row/i).slice(1)) {
+      const item = internetRadioItem(row.split(/<\/tr>/i)[0]);
+      if (!item || seen.has(item.id)) continue;
+      seen.add(item.id);
+      items.push(item);
+    }
+    return items.slice(0, 50);
+  });
+}
+
 module.exports = {
   parsePlaylist, looksLikeRadio, resolveLink, sniff, streamFor, relay, stationLink,
-  searchShoutcast, searchRadioBrowser, searchSomaFM
+  searchShoutcast, searchRadioBrowser, searchSomaFM, searchInternetRadio
 };

@@ -1,16 +1,19 @@
 /**
- * @fileoverview Browse: a site (Shoutcast's directory, or Tubi) in a BS Browser window beside the
+ * @fileoverview Browse: a site (Shoutcast's or internet-radio.com's directory, or Tubi) in a BS Browser window beside the
  * playlist panel, for picking something to add by looking around the site itself.
  *
  * A small script is put on each page the window loads (a "runscript" action, again every second,
  * as the page changes under it). It tells the panel which page is open (Tubi's movie, episode and
  * series pages are what can be added), and on Shoutcast which station was played: the site plays
- * a station through its startPlayStation(station), which the script wraps. The page shows a bar
+ * a station through its startPlayStation(station), which the script wraps. On internet-radio.com, a
+ * station's Play button (data-stream-url) says which station, by its page or (one the site only
+ * lists, with no page) its stream. The page shows a bar
  * offering to add what was found, and the panel shows the same offer (see playlist-panel.js).
  *
  * Messages out (window.O.sendMessage), all with from: 'fvp-browse':
  *   { type: 'page', url, title }                 each time the page's address changes
  *   { type: 'station', id, name, genre }         a Shoutcast station was played
+ *   { type: 'station', site: 'internetradio', id | stream, name }  an internet-radio.com one was
  *   { type: 'add', what }                        the page's Add button ('page' or 'station')
  *   { type: 'now', what }                        the page's Play Now button (the host)
  *   { type: 'alert', text }                      the site's alert(), shown on the page as a note
@@ -23,7 +26,8 @@
 var FireSiteBrowser = (() => {
   const SITES = {
     shoutcast: { url: 'https://directory.shoutcast.com/', name: 'Shoutcast' },
-    tubi: { url: 'https://tubitv.com/', name: 'Tubi' }
+    tubi: { url: 'https://tubitv.com/', name: 'Tubi' },
+    internetradio: { url: 'https://www.internet-radio.com/', name: 'internet-radio.com' }
   };
   /** The page's size in pixels, and how wide the window is in the world. */
   const PAGE_W = 1280;
@@ -161,6 +165,22 @@ var FireSiteBrowser = (() => {
       send({ type: 'station', id: m[1], name: name ? String(name.textContent || '').trim() : '', genre: '' });
     }, true);
   }
+  // internet-radio.com plays a station from its Play button, which holds the stream. Its own player
+  // plays it here too, but one it opens in a popup (an http stream) would open nothing here.
+  if (/internet-radio\\.com$/.test(location.hostname)) {
+    document.addEventListener('click', function (e) {
+      var b = e.target && e.target.closest && e.target.closest('[data-stream-url]');
+      if (!b) return;
+      if (b.getAttribute('data-popup') === 'true') { e.preventDefault(); e.stopPropagation(); }
+      // A row of stations, or a station's own page (its Play button at the top).
+      var row = b.closest('tr, .similar-row');
+      var a = row ? row.querySelector('a[href^="/station/"]') : null;
+      var m = /^\\/station\\/([A-Za-z0-9][A-Za-z0-9._-]{0,79})\\/?$/.exec(a ? a.getAttribute('href') || '' : row ? '' : location.pathname);
+      var name = String(b.getAttribute('data-title') || '').trim();
+      if (m) send({ type: 'station', site: 'internetradio', id: m[1].toLowerCase(), name: name });
+      else send({ type: 'station', site: 'internetradio', stream: String(b.getAttribute('data-stream-url') || ''), name: name });
+    }, true);
+  }
   // The offer bar, at the top of the page.
   var bar = null;
   function button(text, color, onClick) {
@@ -275,7 +295,7 @@ var FireSiteBrowser = (() => {
       inject();
     }
 
-    /** Opens a site ('shoutcast' or 'tubi') in the window. */
+    /** Opens a site ('shoutcast', 'internetradio' or 'tubi') in the window. */
     async open(site) {
       const s = SITES[site];
       if (!s) return;

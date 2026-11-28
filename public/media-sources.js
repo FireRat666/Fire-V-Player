@@ -16,7 +16,9 @@
  *   ESA/Hubble video page, which the server turns into the video's .mp4 on cdn.eso.org (or
  *   cdn.esahubble.org): a fulldome video's dome preview, or any other's 1080p file. 'radio' is an
  *   internet radio station: a Shoutcast tune-in link (site 'shoutcast'), a Radio Browser station
- *   page (site 'radiobrowser'), a SomaFM channel (site 'somafm'), a .pls or .xspf playlist
+ *   page (site 'radiobrowser'), a SomaFM channel (site 'somafm'), an internet-radio.com station
+ *   page (site 'internetradio'; a station it only lists, with no page, is its stream's address
+ *   marked #internet-radio, with `listed` set and the address as its `id`), a .pls or .xspf playlist
  *   file, or a link the server found to be a station (a radio .m3u, or the stream itself), which it
  *   marks with #radio. The player asks the server for the station's stream when it plays.
  * @property {string} [channel] - Twitch channel name if applicable.
@@ -41,8 +43,9 @@
  * @property {number} [season] - For a Tubi series: the one season its link is for (a season's page).
  * @property {string} [slug] - For NASA+: the video's name in its address.
  * @property {boolean} [stream] - True when the player gets the stream from the server (/api/stream).
- * @property {'shoutcast'|'radiobrowser'|'somafm'} [site] - For 'radio': a station in Shoutcast's or
- *   Radio Browser's directory, or a SomaFM channel, by its `id`.
+ * @property {boolean} [listed] - For an internet-radio.com station with no page there: `id` is its stream's address.
+ * @property {'shoutcast'|'radiobrowser'|'somafm'|'internetradio'} [site] - For 'radio': a station in
+ *   Shoutcast's, Radio Browser's or internet-radio.com's directory, or a SomaFM channel, by its `id`.
  */
 
 var MediaSources = (() => {
@@ -247,6 +250,17 @@ var MediaSources = (() => {
     if (host === 'somafm.com' && parts.length === 1 && /^[a-z0-9]{2,40}$/.test(parts[0]) && !SOMAFM_PAGES.has(parts[0])) {
       return { type: 'radio', site: 'somafm', id: parts[0], stream: true };
     }
+    // A station internet-radio.com only lists (it has no page there): its stream's address, marked.
+    // Trusted like the directory's other stations, as a station only ever plays as sound (its
+    // picture, if it has one, isn't shown: see media-players.js).
+    if (u.hash === '#internet-radio' && /^https?:$/.test(u.protocol)) {
+      const id = u.href.replace(/#.*$/, '');
+      return id.length <= 500 ? { type: 'radio', site: 'internetradio', id, listed: true, stream: true } : null;
+    }
+    // An internet-radio.com station's page (www.internet-radio.com/station/<name>/).
+    if (host === 'internet-radio.com' && parts[0] === 'station' && parts.length === 2 && /^[a-z0-9][a-z0-9._-]{0,79}$/i.test(parts[1])) {
+      return { type: 'radio', site: 'internetradio', id: parts[1].toLowerCase(), stream: true };
+    }
     // Its .pls names may end in a quality (groovesalad130.pls); a channel's own digits (7soul, sf1033) stay.
     const pls = host === 'api.somafm.com' && parts.length === 1 ? /^([a-z0-9]{2,40}?)(?:32|64|128|130|256|320)?\.pls$/i.exec(parts[0]) : null;
     if (pls) return { type: 'radio', site: 'somafm', id: pls[1].toLowerCase(), stream: true };
@@ -289,7 +303,7 @@ var MediaSources = (() => {
    * Library of Congress's films (its pages and its tile.loc.gov files), and ESO's and ESA/Hubble's
    * videos (their pages and their own servers' files). Shoutcast's and Radio Browser's stations
    * are too, as they come from their directories (by id) rather than from an address anyone typed,
-   * and SomaFM's channels; other radio links aren't.
+   * and SomaFM's channels and internet-radio.com's stations; other radio links aren't.
    */
   const TRUSTED = new Set(['youtube', 'twitch', 'twitchclip', 'vimeo', 'archive', 'loc', 'tubi', 'nasa', 'eso']);
 
@@ -305,7 +319,7 @@ var MediaSources = (() => {
   }
 
   /** Rejection message displayed when untrusted direct media links are queued in restricted rooms. */
-  const UNTRUSTED_MESSAGE = 'This world only plays YouTube, Twitch, Vimeo, Tubi, NASA+, Internet Archive, Library of Congress, ESO and radio directory (Shoutcast, Radio Browser, SomaFM) links. Its owner can allow other links with the untrusted-links snippet setting.';
+  const UNTRUSTED_MESSAGE = 'This world only plays YouTube, Twitch, Vimeo, Tubi, NASA+, Internet Archive, Library of Congress, ESO and radio directory (Shoutcast, Radio Browser, SomaFM, internet-radio.com) links. Its owner can allow other links with the untrusted-links snippet setting.';
 
   /**
    * The 11-character id of a YouTube video, from a bare id or a YouTube link (with or without

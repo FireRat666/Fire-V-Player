@@ -60,7 +60,7 @@ var SETUP_GUIDE_QR = [
   '1111111001110111111100011'
 ];
 // Sources whose site can be opened in a browser window beside the panel (Browse, site-browser.js).
-var BROWSE_SITES = ['shoutcast', 'tubi'];
+var BROWSE_SITES = ['shoutcast', 'internetradio', 'tubi'];
 // What Search can search, in the order its dropdown lists them.
 var SEARCH_SOURCES = {
   youtube: { label: 'YouTube', status: 'Searching YouTube.' },
@@ -72,6 +72,7 @@ var SEARCH_SOURCES = {
   shoutcast: { label: 'Shoutcast', status: "Searching Shoutcast's radio stations." },
   radiobrowser: { label: 'Radio Browser', status: "Searching Radio Browser's radio stations." },
   somafm: { label: 'SomaFM', status: "Searching SomaFM's radio channels. Search somafm to see them all." },
+  internetradio: { label: 'internet-radio.com', status: "Searching internet-radio.com's radio stations." },
   // A room on screen.sdq.st, by its code or a link to it. Only with untrusted-links, as screen
   // shares can't play without it (see searchSources).
   screen: { label: 'Screen Share', status: 'Searching screen.sdq.st: type a room code, or paste its link.' }
@@ -1393,12 +1394,12 @@ var FirePlaylistPanel = class {
       this.sourceDropdown = this.kitDropdown(this.searchRow, [], k => {
         this.searchSource = k;
         this.setStatus(this.tr('Search will look on {source}.', { source: SEARCH_SOURCES[k].label }), 4000);
-        // Browse shows for Shoutcast and Tubi (and while a window is open, so it can be closed).
+        // Browse shows for Shoutcast, internet-radio.com and Tubi (and while a window is open, so it can be closed).
         this.render();
       }, { width: '200px', marginRight: '6px' });
       this.fillLookChoices();
     }
-    // Shoutcast's or Tubi's own site in a browser window beside the panel (see toggleBrowse).
+    // Shoutcast's, internet-radio.com's or Tubi's own site in a browser window beside the panel (see toggleBrowse).
     if (!this.karaoke) this.browseBtn = await this.button(this.searchRow, '@fvp:web Browse', () => this.toggleBrowse(), { backgroundColor: '#00838f' });
     // Turns while a search is waiting for its results (see render).
     this.searchSpinner = this.ui.CreateKitSpinner(this.searchRow);
@@ -1514,7 +1515,7 @@ var FirePlaylistPanel = class {
       ['+ Search & Add', this.core.allowUntrusted === true
         ? 'Search YouTube, Internet Archive, Tubi, NASA+, ESO or a screen share by its room code: pick the source from the drop-down beside the box. Or paste a link.'
         : 'Search YouTube, Internet Archive, Tubi, NASA+ or ESO: pick the source from the drop-down beside the box. Or paste a link.'],
-      ['Browse', "With Shoutcast or Tubi picked, opens its site beside the panel. Play a station, or open a movie or series, and it offers to add it."],
+      ['Browse', "With Shoutcast, internet-radio.com or Tubi picked, opens its site beside the panel. Play a station, or open a movie or series, and it offers to add it."],
       ['☎ Phone', 'Shows a code. Send a link from your phone into your search, no typing in VR.'],
       ['☰ Lists', 'Saved playlists for this room. + All puts a whole list on the end.'],
       ['♛ Host', 'Runs the player for everyone. Press the host name at the top to see who else can control it, or to take over.'],
@@ -2597,7 +2598,7 @@ var FirePlaylistPanel = class {
     return !this.karaoke && typeof BS !== 'undefined' && (typeof BS.Browser === 'function' || typeof BS.BanterBrowser === 'function');
   }
 
-  // Opens the picked source's site (Shoutcast or Tubi) in a window beside the panel, or closes the
+  // Opens the picked source's site (Shoutcast, internet-radio.com or Tubi) in a window beside the panel, or closes the
   // one that's open.
   async toggleBrowse() {
     if (this.siteBrowser || this.browseOpening) {
@@ -2606,7 +2607,7 @@ var FirePlaylistPanel = class {
     }
     const site = this.searchSource;
     if (!BROWSE_SITES.includes(site)) {
-      this.setStatus('Pick Shoutcast or Tubi in the drop-down to browse its site.');
+      this.setStatus('Pick Shoutcast, internet-radio.com or Tubi in the drop-down to browse its site.');
       return;
     }
     if (!this.canBrowse()) { this.setStatus("This app can't open a browser window here."); return; }
@@ -2642,9 +2643,9 @@ var FirePlaylistPanel = class {
       this.render();
       return;
     }
-    this.setStatus(site === 'tubi'
-      ? 'Tubi is open beside the panel. Open a movie or a series there to add it.'
-      : 'Shoutcast is open beside the panel. Press Play on a station there to add it.', 8000);
+    this.setStatus(site === 'tubi' ? 'Tubi is open beside the panel. Open a movie or a series there to add it.'
+      : site === 'internetradio' ? "internet-radio.com is open beside the panel. Press Play on a station there, or open a station's page, to add it."
+        : 'Shoutcast is open beside the panel. Press Play on a station there to add it.', 8000);
     this.render();
   }
 
@@ -2689,6 +2690,18 @@ var FirePlaylistPanel = class {
     if (msg.type === 'add') { this.addBrowseOffer(false); return; }
     if (msg.type === 'now') { this.addBrowseOffer(true); return; }
     if (msg.type === 'extra') { this.showEpisodes(this.browseOffer && this.browseOffer.link); return; }
+    if (msg.type === 'station' && msg.site === 'internetradio') {
+      const name = String(msg.name || '').trim().slice(0, 120) || this.tr('Radio station');
+      const id = String(msg.id || '');
+      const stream = String(msg.stream || '').replace(/#.*$/, '');
+      // A station the site hosts is kept by its page; one it only lists, by its stream (marked).
+      const link = /^[a-z0-9][a-z0-9._-]{0,79}$/.test(id) ? `https://www.internet-radio.com/station/${id}/`
+        : /^https?:\/\/\S+$/i.test(stream) ? `${stream}#internet-radio` : '';
+      if (!link) return;
+      this.setBrowseOffer({ link, title: name, kind: 'station', check: 'checking' });
+      this.askRadioCheck(link);
+      return;
+    }
     if (msg.type === 'station' && /^\d{1,12}$/.test(String(msg.id || ''))) {
       const name = String(msg.name || '').trim().slice(0, 120) || this.tr('Radio station');
       const link = `https://directory.shoutcast.com/sbin/tunein-station.m3u?id=${msg.id}`;
@@ -2699,6 +2712,15 @@ var FirePlaylistPanel = class {
     }
     if (msg.type !== 'page') return;
     const media = window.MediaSources ? MediaSources.detect(String(msg.url || '')) : null;
+    // An internet-radio.com station's own page offers that station ("Name - Internet Radio").
+    if (media && media.type === 'radio' && media.site === 'internetradio') {
+      const link = `https://www.internet-radio.com/station/${media.id}/`;
+      if (this.browseOffer && this.browseOffer.link === link) return;
+      const name = String(msg.title || '').replace(/\s+-\s+Internet Radio\s*$/i, '').trim().slice(0, 120) || this.tr('Radio station');
+      this.setBrowseOffer({ link, title: name, kind: 'station', check: 'checking' });
+      this.askRadioCheck(link);
+      return;
+    }
     if (!media || media.type !== 'tubi') {
       // Moving to another page leaves a Shoutcast station's offer up, but not a Tubi title's.
       if (this.browseOffer && this.browseOffer.kind !== 'station') this.setBrowseOffer(null);
@@ -3581,7 +3603,7 @@ var FirePlaylistPanel = class {
     this.showSearchSource();
     this.display(this.searchSpinner, onSearch && !!this.searchTimer);
 
-    // What the browser window has open that can be added, and the Browse button (Shoutcast and Tubi).
+    // What the browser window has open that can be added, and the Browse button (Shoutcast, internet-radio.com and Tubi).
     const bo = this.browseOffer;
     this.display(this.browseOfferRow, !!bo);
     if (bo) {

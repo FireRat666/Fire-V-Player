@@ -161,7 +161,7 @@ class RadioCard {
    * @param {HTMLMediaElement} el - The element playing the sound.
    */
   constructor(opts, media, el) {
-    const sites = { shoutcast: 'Shoutcast', radiobrowser: 'Radio Browser', somafm: 'SomaFM' };
+    const sites = { shoutcast: 'Shoutcast', radiobrowser: 'Radio Browser', somafm: 'SomaFM', internetradio: 'internet-radio.com' };
     let site = sites[media.site] || '';
     if (!site) { try { site = new URL(opts.link).hostname.replace(/^www\./, ''); } catch (e) {} }
     const name = String(opts.title || '').replace(/\s*\(radio\)\s*$/i, '').trim()
@@ -246,8 +246,12 @@ class VideoElementSource extends BaseMediaSource {
     opts.container.appendChild(el);
     this.setVolume(opts.volume);
     this.setMuted(opts.muted);
-    // A station is only sound: the screen shows what's on instead of a black picture.
-    if (media.type === 'radio') this.radioCard = new RadioCard(opts, media, el);
+    // A station is only sound: the screen shows what's on instead of a black picture. Its own
+    // picture, if its stream has one, is never shown (the element is hidden, not just covered).
+    if (media.type === 'radio') {
+      el.style.visibility = 'hidden';
+      this.radioCard = new RadioCard(opts, media, el);
+    }
 
     el.addEventListener('loadedmetadata', () => {
       this.ready = true;

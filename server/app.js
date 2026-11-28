@@ -1127,11 +1127,11 @@ class App {
    * Transmits `SEARCH_RESULTS` back to the requesting WebSocket client.
    *
    * The SEARCH message's data is either a plain string (a YouTube search or a link) or
-   * `{ term: string, source: 'youtube' | 'archive' | 'tubi' | 'nasa' | 'eso' | 'esodome' | 'shoutcast' | 'radiobrowser' | 'somafm' | 'screen', searchId?: string|number }`;
+   * `{ term: string, source: 'youtube' | 'archive' | 'tubi' | 'nasa' | 'eso' | 'esodome' | 'shoutcast' | 'radiobrowser' | 'somafm' | 'internetradio' | 'screen', searchId?: string|number }`;
    * 'screen' takes a screen.sdq.st room code (or its link) and gives that room's screen share.
    * 'archive' searches the Internet Archive's public-domain movies and TV, 'tubi' the titles in Tubi's
    * categories, 'nasa' NASA+ (see server/streaming.js), 'eso' ESO's videos and 'esodome' its fulldome ones (server/eso.js),
-   * and 'shoutcast', 'radiobrowser' and 'somafm' radio stations in Shoutcast's and Radio Browser's directories and SomaFM's channels (server/radio.js). A pasted link is looked up whichever source
+   * and 'shoutcast', 'radiobrowser', 'somafm' and 'internetradio' radio stations in Shoutcast's, Radio Browser's and internet-radio.com's directories and SomaFM's channels (server/radio.js). A pasted link is looked up whichever source
    * is picked. A `searchId` comes back on the SEARCH_RESULTS reply (and on the search's ERROR), so
    * a client can tell which of its searches a reply answers. Every search gets one SEARCH_RESULTS.
    *
@@ -1142,7 +1142,7 @@ class App {
   async search(data, ws) {
     const isObject = data && typeof data === 'object';
     let term = String((isObject ? data.term : data) || '').trim().slice(0, 500);
-    const source = isObject && ['archive', 'tubi', 'nasa', 'eso', 'esodome', 'shoutcast', 'radiobrowser', 'somafm', 'screen'].includes(data.source) ? data.source : 'youtube';
+    const source = isObject && ['archive', 'tubi', 'nasa', 'eso', 'esodome', 'shoutcast', 'radiobrowser', 'somafm', 'internetradio', 'screen'].includes(data.source) ? data.source : 'youtube';
     // A screen share's room code is its watch link; a pasted link (watch or publish) is used as it is.
     if (source === 'screen' && term && !/^(https?:\/\/|www\.)/i.test(term)) {
       term = `https://screen.sdq.st:8443/?room=${encodeURIComponent(term.slice(0, 100))}`;
@@ -1230,7 +1230,8 @@ class App {
       }
       return;
     }
-    const radioSearches = { shoutcast: ['Shoutcast', radio.searchShoutcast], radiobrowser: ['Radio Browser', radio.searchRadioBrowser], somafm: ['SomaFM', radio.searchSomaFM] };
+    const radioSearches = { shoutcast: ['Shoutcast', radio.searchShoutcast], radiobrowser: ['Radio Browser', radio.searchRadioBrowser], somafm: ['SomaFM', radio.searchSomaFM],
+      internetradio: ['internet-radio.com', radio.searchInternetRadio] };
     if (radioSearches[source]) {
       const [name, searchFn] = radioSearches[source];
       try {

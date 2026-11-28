@@ -10,10 +10,9 @@
 // Words in braces ({name}, {count}) are filled in after translating: tr('Added by {name}', { name }).
 var FVP_LANGUAGES = [
   ['en', 'English'],
-  // Japanese (i18n/ja.js) is translated but not offered yet: the panel's font (Inter, from the
-  // SDK's theme) has no Japanese letters and a script can't give it another, so it showed boxes.
-  // Put it back once the SDK has a fallback font for them.
-  // ['ja', '日本語'],
+  // Japanese and Chinese need a font with their letters: the app's UI now falls back to one.
+  ['ja', '日本語'],
+  ['zh', '简体中文'],
   ['fr', 'Français'],
   ['de', 'Deutsch'],
   ['es', 'Español'],

@@ -28,6 +28,8 @@
  * @property {string} [clip] - Twitch clip slug if applicable.
  * @property {string} [id] - Vimeo video ID if applicable; a Bilibili video's BV (or av) id.
  * @property {number} [part] - For Bilibili: which part of a video with several (its ?p=), from 1.
+ * @property {string} [bilibili] - For a 'file' from biliplayer.91vrchat.com (a service that sends a
+ *   Bilibili video's own .mp4): the Bilibili video's link.
  * @property {string} [hash] - Vimeo unlisted hash token if applicable.
  * @property {string} [name] - VDO.Ninja stream/room identifier if applicable.
  * @property {boolean} [live] - True for an MPEG-TS link that is a live stream (VRCDN's .live.ts).
@@ -132,6 +134,16 @@ var MediaSources = (() => {
       const next = parts[i + 1] || '';
       const hash = u.searchParams.get('h') || (/^[0-9a-f]{6,}$/i.test(next) ? next : '');
       return { type: 'vimeo', id: parts[i], hash };
+    }
+
+    // biliplayer.91vrchat.com/player/?url=<a Bilibili video's link>: a service (made for VRChat)
+    // that answers with a redirect to the video's .mp4 on Bilibili's servers, fresh each time. It
+    // plays as a file from another site (untrusted-links), on the world's video player in a world.
+    if (host === 'biliplayer.91vrchat.com' && /^\/player\/?$/.test(u.pathname)) {
+      const inner = detect(u.searchParams.get('url') || '');
+      if (!inner || inner.type !== 'bilibili') return null;
+      const page = `https://www.bilibili.com/video/${inner.id}/${inner.part > 1 ? `?p=${inner.part}` : ''}`;
+      return { type: 'file', url: `https://biliplayer.91vrchat.com/player/?url=${encodeURIComponent(page)}`, bilibili: page };
     }
 
     // Bilibili: bilibili.com/video/<BV id or av id>/ (also /en/video/... and the like, ?p=<part>),
@@ -398,7 +410,7 @@ var MediaSources = (() => {
    * @returns {boolean}
    */
   function needsRating(media) {
-    return !!media && (media.type === 'tubi' || media.type === 'archive' || media.type === 'bilibili' || (media.type === 'file' && !!media.archive));
+    return !!media && (media.type === 'tubi' || media.type === 'archive' || media.type === 'bilibili' || (media.type === 'file' && (!!media.archive || !!media.bilibili)));
   }
 
   /** Shown when a title for adults is refused because the world doesn't allow them. */
@@ -413,7 +425,7 @@ var MediaSources = (() => {
    */
   function matureMessage(media) {
     const m = typeof media === 'string' ? detect(media) : media;
-    return m && m.type === 'bilibili' ? UNRATED_SITE_MESSAGE : MATURE_MESSAGE;
+    return m && (m.type === 'bilibili' || m.bilibili) ? UNRATED_SITE_MESSAGE : MATURE_MESSAGE;
   }
 
   return { detect, nameFromLink, parseUrl, isTrusted, youtubeId, tubiMature, needsRating, matureMessage, UNTRUSTED_MESSAGE, MATURE_MESSAGE };

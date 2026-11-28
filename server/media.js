@@ -143,6 +143,9 @@ async function resolveMediaLink(link) {
 
   // A Bilibili video plays in Bilibili's own embed player; its page gives its title and length.
   if (media.type === 'bilibili') return bilibili.resolveLink(link);
+  // A biliplayer.91vrchat.com link plays the video's .mp4 it redirects to; the Bilibili page gives
+  // its title and length. It keeps the biliplayer link, as the .mp4's address expires.
+  if (media.type === 'file' && media.bilibili) return { ...(await bilibili.resolveLink(media.bilibili)), link: media.url };
 
   // A radio station (Shoutcast, or a .pls or .xspf file) keeps its link too: the player asks for
   // its stream (/api/stream), as a station's stream address can change.
@@ -206,7 +209,7 @@ function allowedFor(ws, link) {
 async function isMature(link) {
   const m = MediaSources.detect(link);
   if (!MediaSources.needsRating(m)) return false;
-  if (m.type === 'bilibili') return true;
+  if (m.type === 'bilibili' || m.bilibili) return true;
   return m.type === 'tubi' ? streaming.isMature(link) : archive.isMature(link);
 }
 

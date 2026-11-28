@@ -45,6 +45,11 @@ const MAX_SPEED_ADJUSTMENT = 0.05;  // Max speed change is now 5% (0.95x to 1.05
 // without telling the page, and the screen stays on the error. A track that should be playing
 // but hasn't moved for this long is loaded again where the world is; if it still doesn't move,
 // the YouTube player is replaced with a new one, as reloading the page would.
+// Karaoke's countdown shows numbers for its last this many seconds (the server's karaoke
+// countdown). Before that the room is waiting for everyone's screen to load, which says Get ready.
+const COUNTDOWN_NUMBERS_S = 3;
+// How often the "Loading..." over the screen is checked, how long a track loads before it shows, and the longest it shows (see updateLoading).
+const LOADING_TICK_MS = 300, LOADING_SHOW_MS = 700, LOADING_MAX_MS = 45000;
 const STALL_CHECK_MS = 2000;
 const STALL_RELOAD_MS = 15000;
 // A live point report the server didn't take (it couldn't confirm the video is live) is sent again
@@ -118,6 +123,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       await this.setupBrowserMessaging();
       this.setupVisibilityHandler();
       this.setupStatusDisplay();
+      this.loadingTimer = setInterval(() => this.updateLoading(), LOADING_TICK_MS);
       this.isResumingFromPassthrough = false;
       this.initialSyncComplete = false;
       this.currentTime = 0;
@@ -133,8 +139,9 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         const start = this.core.params.start || 0;
         this.setupYoutubeScript(start);
         // The room's old code as well: this page can join before the space page does.
+        // Whether the world allows titles for adults (mature-links, from the space page's URL).
         this.core.sendMessage({path: "instance", data: this.core.params.instance, u: window.user,
-          legacy: this.core.params['legacy-instance'] || undefined});
+          mature: this.core.allowMature === true, legacy: this.core.params['legacy-instance'] || undefined});
         this.core.sendMessage({path: "user-video-player", data: window.user});
       }, ()=>{
           this.core.showToast("Reconnecting...");
@@ -348,19 +355,56 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       this.player = window.MediaSwitch ? new MediaSwitch(this.yt, {
         getId: link => this.core.getId(link),
         onDuration: (link, seconds) => this.reportMediaDuration(link, seconds),
-        onError: message => {
-          this.core.showToast(message, 6000);
+        onError: (message, notice, link) => {
+          // A notice (a Twitch clip that can't be turned down) plays on: a toast says so.
+          // Otherwise this load won't play (copy protection, a title for adults here, a link this
+          // world doesn't allow...), and the screen says why in place of "Loading..." until
+          // something else is loaded (see updateLoading), so everyone watching can see it.
+          // The link that failed, as MediaSwitch says: a refusal comes before playVidya has made
+          // it the current video.
+          const failed = this.previewVideo || this.currentVideo;
+          const failedLink = link || (failed && failed.link);
+          if (notice || !failedLink) this.core.showToast(message, 6000);
+          else {
+            this.failure = { link: failedLink, message: String(message || "This can't play here.") };
+            this.updateLoading();
+          }
           if (this.previewVideo) {
             this.sendBrowserMessage({ path: Commands.ERROR, data: { message, preview: true } });
           }
         },
         // Untrusted links only play if this viewer's own world allows them.
         allowUntrusted: () => this.core.allowUntrusted === true,
+        // Titles for adults (Tubi's R and TV-MA, the Archive's adult films) only play if this
+        // viewer's own world allows them.
+        allowMature: () => this.core.allowMature === true,
         // Asks this viewer's world to click the middle of their screen, for players (Twitch) that
         // won't start on their own until someone does.
-        requestClick: () => this.clickMiddle()
+        requestClick: () => this.clickMiddle(),
+        // A Tubi stream looked up from this viewer's own device (see askWorldForTubiStream).
+        deviceStream: link => this.askWorldForTubiStream(link)
       }) : this.yt;
       if (this.player.setCaptions) this.player.setCaptions(this.core.captions !== false);
+    }
+
+    /**
+     * Asks this viewer's world for a Tubi stream looked up from their own device (tubi-native.js),
+     * as the server may be in a country Tubi doesn't serve. Null when there's no world to ask, or
+     * it couldn't: the server's lookup is used then.
+     * @param {string} link - A Tubi movie or episode link.
+     * @returns {Promise<{url: string, mature: boolean}|null>} mature: the title is for adults.
+     */
+    askWorldForTubiStream(link) {
+      const inWorld = !!(window.O && typeof window.O.sendMessage === 'function') || !!window.bantermessage || !!spaceFrame;
+      if (!inWorld) return Promise.resolve(null);
+      this.tubiAsks = this.tubiAsks || new Map();
+      const n = (this.tubiAskN = (this.tubiAskN || 0) + 1);
+      return new Promise(resolve => {
+        // The first lookup makes the hidden Tubi browser, which takes a few seconds.
+        const timer = setTimeout(() => { this.tubiAsks.delete(n); resolve(null); }, 30000);
+        this.tubiAsks.set(n, { resolve, timer });
+        this.sendBrowserMessage({ path: Commands.TUBI_STREAM, data: { n, link } });
+      });
     }
 
     /** The YouTube player's settings, for the first player and any that replaces it. */
@@ -806,6 +850,16 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
           this.sendBrowserMessage(json);
         }
         break;
+      case Commands.TUBI_STREAM_RESULT: {
+        const d = json.data || {};
+        const wait = this.tubiAsks && this.tubiAsks.get(d.n);
+        if (wait) {
+          this.tubiAsks.delete(d.n);
+          clearTimeout(wait.timer);
+          wait.resolve(d.ok && /^https:\/\//.test(String(d.url || '')) ? { url: d.url, mature: d.mature !== false } : null);
+        }
+        break;
+      }
       case Commands.PREVIEW_VIDEO:
         this.applyPreview(json.data);
         break;
@@ -928,7 +982,8 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         }
         break;
       case Commands.READY_START: {
-        // Every screen has loaded the new track (see holdStart), so the wait ends sooner.
+        // Every screen has loaded the new track (see holdStart), so the wait ends at a new time:
+        // sooner, or for karaoke a full countdown from now, which can be later.
         const d = json.data;
         if (!d || !this.playerData) break;
         const track = this.playerData.playlist && this.playerData.playlist[this.playerData.currentTrack];
@@ -1402,10 +1457,13 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       // Told once, when this screen has loaded the track: the room starts it when every screen has
       // (see App.holdForReady). Karaoke's countdown doesn't wait for it, which does no harm.
       let readySent = false;
+      // The start this hold is for: a report meant for an earlier start of the same track (a
+      // restarted song) isn't counted for this one (see App.trackReady).
+      const start = this.playerData ? Number(this.playerData.lastStartTime) : NaN;
       const ready = () => {
         if (readySent || !video.link) return;
         readySent = true;
-        this.core.sendMessage({ path: Commands.TRACK_READY, data: { link: video.link } });
+        this.core.sendMessage({ path: Commands.TRACK_READY, data: Object.assign({ link: video.link }, Number.isFinite(start) ? { start } : {}) });
       };
       // Held at its start once it plays (see onYouTubeState, and below). A video that hasn't
       // started loading is left to load: paused then, YouTube may never load it at all.
@@ -1435,9 +1493,10 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
           this.syncAfterLoad();
           return;
         }
-        // A new number each second, over the whole screen.
+        // A new number each second, over the whole screen, for the last few: before that it's
+        // still waiting for everyone's screen to load the song (see the server's holdForReady).
         const left = Math.ceil((this.holdUntil - Date.now()) / 1000);
-        if (countdown && left !== shown) { shown = left; this.showCountdown(left); }
+        if (countdown && left !== shown && left <= COUNTDOWN_NUMBERS_S) { shown = left; this.showCountdown(left); }
         try {
           const state = this.player.getPlayerState();
           if (!this.hasTrackLoaded(video)) {
@@ -1549,6 +1608,63 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       num.classList.add('pop'); sweep.classList.add('run');
     }
 
+    /**
+     * "Loading..." over the screen while a track (or a preview) hasn't played yet, so viewers know
+     * it's coming: a stream (a VRCDN .live.ts) can take a while. Not over karaoke's countdown, nor
+     * once the track has played (a later stall is YouTube's own spinner). After LOADING_SHOW_MS,
+     * so a quick start doesn't flash it.
+     */
+    updateLoading() {
+      const video = this.previewVideo || this.currentVideo;
+      // Only for what should be playing now: the preview, or the room's current track (not a
+      // track that has gone from the playlist), and not one YouTube says can never play here.
+      const pd = this.playerData;
+      const roomTrack = pd && Array.isArray(pd.playlist) ? pd.playlist[pd.currentTrack] : null;
+      const active = !!(video && video.link) && (this.previewVideo ? true : !!(roomTrack && roomTrack.link === video.link));
+      // Why it can't play, while that's still what's loaded (see MediaSwitch's onError): also when
+      // it had played before failing (a stream that dropped), until something is loaded again.
+      const failure = active && this.failure && this.failure.link === video.link ? this.failure : null;
+      let want = active && video.link !== this.unplayableLink && !this.countdownEl && !(pd && pd.paused && !this.previewVideo);
+      if (want && this.player) {
+        try {
+          if (this.player.getPlayerState() === YT.PlayerState.PLAYING && this.hasTrackLoaded(video)) this.loadedLink = video.link;
+        } catch (e) {}
+      }
+      if (want && this.loadedLink === video.link) want = false;
+      if (want && this.loadingFor !== video.link) { this.loadingFor = video.link; this.loadingSince = Date.now(); }
+      // Twitch waits for a click on its own player, which this would hide; and past LOADING_MAX_MS
+      // something else is wrong, which the player itself may say.
+      if (want && window.MediaSources && /^twitch/.test((MediaSources.detect(video.link) || {}).type || '')) want = false;
+      if (want && (Date.now() - this.loadingSince < LOADING_SHOW_MS || Date.now() - this.loadingSince > LOADING_MAX_MS)) want = false;
+      if (failure) want = true; // from the moment it fails, for as long as it's the track
+      let el = this.loadingEl;
+      if (!want) {
+        if (el) { el.remove(); this.loadingEl = null; }
+        return;
+      }
+      if (!el) {
+        el = this.loadingEl = document.createElement('div');
+        Object.assign(el.style, {
+          position: 'fixed', inset: '0', zIndex: '99990', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+          background: 'rgba(0, 0, 0, 0.72)', color: '#fff', fontFamily: "'Roboto', sans-serif", pointerEvents: 'none', textAlign: 'center'
+        });
+        el.innerHTML = '<div class="head" style="font-size: 9vh; font-weight: 700; letter-spacing: 0.04em">Loading...</div>'
+          + '<div class="why" style="display: none; font-size: 5vh; margin-top: 2vh; max-width: 85vw; line-height: 1.3"></div>'
+          + '<div class="what" style="font-size: 4vh; margin-top: 2vh; opacity: 0.85; max-width: 85vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis"></div>';
+        document.body.appendChild(el);
+      }
+      // "Can't play this here", and why, in place of "Loading..." once it has failed.
+      const head = el.querySelector('.head'), why = el.querySelector('.why');
+      const headText = failure ? "Can't play this here" : 'Loading...';
+      if (head.textContent !== headText) head.textContent = headText;
+      const whyText = failure ? failure.message : '';
+      if (why.textContent !== whyText) why.textContent = whyText;
+      why.style.display = failure ? '' : 'none';
+      const what = el.querySelector('.what');
+      const title = video.title || '';
+      if (what.textContent !== title) what.textContent = title;
+    }
+
     /** Fades the countdown out and removes it. */
     hideCountdown() {
       const el = this.countdownEl;
@@ -1584,6 +1700,13 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       this.resumeSyncTimer = setTimeout(resync, 500);
     }
 
+    /** A new load (of a track or a preview, the same link again too): the "Loading..." counts from now (see updateLoading). */
+    restartLoading() {
+      this.loadedLink = null;
+      this.loadingFor = null;
+      this.loadingSince = 0;
+    }
+
     /**
      * Starts or stops a local song preview on this viewer's screen.
      * While previewing, room playback updates are recorded in `this.playerData` without
@@ -1606,9 +1729,11 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         this.readyToPlay = true;
         clearTimeout(this.syncTimeout);
         try { this.player.setPlaybackRate(1.0); } catch (e) {}
-        if (this.player.loadMedia) this.player.loadMedia(video.link, 0);
+        this.failure = null; // a new load: its own failure, if any, says so
+        if (this.player.loadMedia) this.player.loadMedia(video.link, 0, video);
         else this.player.loadVideoById(this.core.getId(video.link), 0);
         this.player.playVideo();
+        this.restartLoading();
         this.setVolume("spatial");
         this.lastUrl = video.link;
         this.currentVideo = video;
@@ -1660,8 +1785,10 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         if(this.lastUrl !== video.link || force) {
           const start = this.startAt(video, currentTime);
           this.liveJumped = null; // see onYouTubeState
-          if (this.player.loadMedia) this.player.loadMedia(video.link, start);
+          this.failure = null; // a new load: its own failure, if any, says so
+          if (this.player.loadMedia) this.player.loadMedia(video.link, start, video);
           else this.player.loadVideoById(this.core.getId(video.link), start);
+          this.restartLoading();
           if (this.playerData.paused) {
             this.player.pauseVideo();
           } else {

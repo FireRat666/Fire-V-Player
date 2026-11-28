@@ -59,6 +59,8 @@ var SETUP_GUIDE_QR = [
   '1000001011100010110001000',
   '1111111001110111111100011'
 ];
+// Sources whose site can be opened in a browser window beside the panel (Browse, site-browser.js).
+var BROWSE_SITES = ['shoutcast', 'internetradio', 'tubi'];
 // What Search can search, in the order its dropdown lists them.
 var SEARCH_SOURCES = {
   youtube: { label: 'YouTube', status: 'Searching YouTube.' },
@@ -67,11 +69,23 @@ var SEARCH_SOURCES = {
   nasa: { label: 'NASA+', status: 'Searching NASA+.' },
   eso: { label: 'ESO', status: "Searching ESO's videos." },
   esodome: { label: 'ESO Fulldome', status: "Searching ESO's fulldome videos, for domes." },
+  shoutcast: { label: 'Shoutcast', status: "Searching Shoutcast's radio stations." },
+  radiobrowser: { label: 'Radio Browser', status: "Searching Radio Browser's radio stations." },
+  somafm: { label: 'SomaFM', status: "Searching SomaFM's radio channels. Search somafm to see them all." },
+  internetradio: { label: 'internet-radio.com', status: "Searching internet-radio.com's radio stations." },
   // A room on screen.sdq.st, by its code or a link to it. Only with untrusted-links, as screen
   // shares can't play without it (see searchSources).
   screen: { label: 'Screen Share', status: 'Searching screen.sdq.st: type a room code, or paste its link.' }
 };
+// How to share a screen with screen.sdq.st, shown on Search while Screen Share is picked and there
+// are no results: the page to open on the PC, and the link a room's name gives.
+var SCREEN_SHARE_PUBLISH = 'https://screen.sdq.st:8443/publish.html?room=YOURNAME&fps=30&width=1920&height=1080';
+var SCREEN_SHARE_WATCH = 'https://screen.sdq.st:8443/?room=YOURNAME';
 // The server works on 3 list previews at a time per connection and refuses more, so the rest wait.
+/** Where Browse's window can go round the panel, in the order Move Browser takes them. */
+var BROWSE_PLACES = ['right', 'left', 'front'];
+// How long Browse waits for the server to say whether a station can play before asking again.
+var RADIO_CHECK_RETRY_MS = 15000;
 var LIST_PREVIEWS_AT_ONCE = 3;
 // A list preview older than this is loaded again when it's next shown (the server re-reads lists
 // after 5 minutes too), and a request with no reply after LIST_REPLY_MS is given up on.
@@ -203,6 +217,7 @@ var FirePlaylistPanel = class {
     this.searchId = 0; // the latest search's ID: only its reply is shown (see doSearch)
     this.openListId = null;
     this.searchResults = [];
+    this.searchHidden = 0; // results left out as titles for adults (see the note under the results)
     this.searchQuery = '';
     this.searchSource = 'youtube'; // a key of SEARCH_SOURCES
     // Recent searches, kept on this device (like the full playlist page did).
@@ -210,7 +225,9 @@ var FirePlaylistPanel = class {
     this.recentSearches = this.loadRecent();
     // Results of recent successful searches, kept on this device so going back to one shows it
     // straight away instead of searching again.
-    this.searchCacheKey = `fvpSearchCache${this.karaoke ? 'Karaoke' : ''}`;
+    // (Version 2: kept per mature-links setting. Older results weren't, so they're dropped.)
+    try { localStorage.removeItem(`fvpSearchCache${this.karaoke ? 'Karaoke' : ''}`); } catch (e) {}
+    this.searchCacheKey = `fvpSearchCache2${this.karaoke ? 'Karaoke' : ''}`;
     this.pendingSearchKey = null;
     this.restoreLastSearch();
     // Lists this viewer saved from a link, kept on this device for this world.
@@ -866,6 +883,23 @@ var FirePlaylistPanel = class {
     try { localStorage.setItem(this.recentKey, JSON.stringify(this.recentSearches)); } catch (e) {}
   }
 
+  // Search's results go, and a search still waiting is dropped: Search shows what it does before a
+  // search. They stay kept on this device (searching the same again is quick), but opening the
+  // panel again doesn't bring them back.
+  clearResults() {
+    clearInterval(this.searchTimer);
+    this.searchTimer = null;
+    this.searchId++; // a search still waiting doesn't bring results back when it's answered
+    this.pendingSearchKey = null;
+    this.searchResults = [];
+    this.searchHidden = 0;
+    this.searchPage = 0;
+    try { localStorage.setItem(`${this.searchCacheKey}:cleared`, String(Date.now())); } catch (e) {}
+    this.resetScroll();
+    this.setStatus('');
+    this.render();
+  }
+
   clearRecent() {
     this.recentSearches = [];
     try { localStorage.removeItem(this.recentKey); } catch (e) {}
@@ -875,8 +909,19 @@ var FirePlaylistPanel = class {
 
   // ---- search results kept on this device
 
+  // Kept apart by whether the world allows titles for adults: the server's results have lost
+  // their marks, so results kept where they were allowed can't be filtered afterwards.
   searchKey(query, source) {
-    return `${source || 'youtube'}:${String(query || '').trim().toLowerCase()}`;
+    return `${source || 'youtube'}:${this.matureTag()}:${String(query || '').trim().toLowerCase()}`;
+  }
+  matureTag() {
+    return this.core.allowMature === true ? 'all' : 'safe';
+  }
+  // Kept results as this world allows them (device results still have their marks), with the
+  // ones left out added to the hidden count.
+  keptResults(hit) {
+    const results = this.withoutMature(hit.results);
+    return { results, hidden: (Number(hit.hidden) || 0) + hit.results.length - results.length };
   }
   readSearchCache() {
     try {
@@ -894,9 +939,9 @@ var FirePlaylistPanel = class {
     return hit;
   }
   // Keeps a successful search's results, the newest SEARCH_CACHE_SIZE searches only.
-  saveSearch(key, query, results) {
+  saveSearch(key, query, results, hidden) {
     const all = this.readSearchCache();
-    all[key] = { query, at: Date.now(), results };
+    all[key] = { query, at: Date.now(), results, hidden: Number(hidden) || 0 };
     const keys = Object.keys(all).sort((a, b) => (all[b].at || 0) - (all[a].at || 0));
     keys.slice(SEARCH_CACHE_SIZE).forEach(k => delete all[k]);
     try {
@@ -909,10 +954,17 @@ var FirePlaylistPanel = class {
   // Opening the panel again shows the last search's results, if they were kept.
   restoreLastSearch() {
     const all = this.readSearchCache();
-    const newest = Object.keys(all).sort((a, b) => (all[b].at || 0) - (all[a].at || 0))[0];
+    const tag = this.matureTag();
+    const newest = Object.keys(all).filter(k => k.split(':')[1] === tag).sort((a, b) => (all[b].at || 0) - (all[a].at || 0))[0];
     const hit = newest && this.cachedSearch(newest);
     if (!hit) return;
-    this.searchResults = hit.results;
+    // Not results cleared since (see clearResults).
+    let cleared = 0;
+    try { cleared = Number(localStorage.getItem(`${this.searchCacheKey}:cleared`)) || 0; } catch (e) {}
+    if ((all[newest].at || 0) <= cleared) return;
+    const kept = this.keptResults(hit);
+    this.searchResults = kept.results;
+    this.searchHidden = kept.hidden;
     this.searchQuery = hit.query || '';
     const source = newest.split(':')[0];
     if (SEARCH_SOURCES[source] && this.searchSources().includes(source)) this.searchSource = source;
@@ -1327,6 +1379,17 @@ var FirePlaylistPanel = class {
     this.promptVideoBtn = await this.button(promptBtns, '+ Just This Video', () => this.answerListPrompt('video'));
     await this.button(promptBtns, '✕ Cancel', () => this.answerListPrompt(null), { backgroundColor: GREY });
 
+    // Browse: what the browser window has open that can be added (see onBrowseMessage).
+    this.browseOfferRow = await this.div(rootEl, {
+      display: 'none', flexDirection: 'row', alignItems: 'center', flexShrink: 0, marginTop: '6px', backgroundColor: '#004d40',
+      borderRadius: '10px', paddingLeft: '12px', paddingRight: '8px', paddingTop: '6px', paddingBottom: '6px'
+    });
+    this.browseOfferLabel = await this.label(this.browseOfferRow, '', { fontSize: '20px', flexGrow: 1, flexShrink: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' });
+    this.browseNowBtn = await this.button(this.browseOfferRow, '▶ Now', () => this.addBrowseOffer(true), { backgroundColor: '#2e7d32' });
+    this.browseAddBtn = await this.button(this.browseOfferRow, '+ Add', () => this.addBrowseOffer(false));
+    this.browseEpisodesBtn = await this.button(this.browseOfferRow, '▼ Episodes', () => this.showEpisodes(this.browseOffer && this.browseOffer.link), { backgroundColor: '#6a1b9a' });
+    await this.button(this.browseOfferRow, '✕', () => this.setBrowseOffer(null), { backgroundColor: GREY });
+
     // ---- Main view: playlist / search
     this.mainView = await this.div(rootEl, { display: 'flex', flexDirection: 'column', flexGrow: 1, flexShrink: 1, overflow: 'hidden' });
 
@@ -1350,21 +1413,30 @@ var FirePlaylistPanel = class {
     this.searchRow = await row(this.mainView, { marginTop: '4px' });
     const searchHint = this.karaoke ? 'Search for a song to sing, or paste a video link' : 'Search YouTube, or paste a YouTube / Twitch / Vimeo / video link';
     this.searchField = await this.textField(this.searchRow, searchHint, v => { this.searchQuery = v; }, () => this.doSearch(), true);
-    // What to search: YouTube, Internet Archive films and TV, Tubi, NASA+, ESO or a screen share
-    // (not for karaoke).
+    // What to search: YouTube, Internet Archive films and TV, Tubi, NASA+, ESO, Shoutcast radio or a
+    // screen share (not for karaoke).
     if (!this.karaoke) {
       this.sourceDropdown = this.kitDropdown(this.searchRow, [], k => {
         this.searchSource = k;
         this.setStatus(this.tr('Search will look on {source}.', { source: SEARCH_SOURCES[k].label }), 4000);
+        // Browse shows for Shoutcast, internet-radio.com and Tubi (and while a window is open, so it can be closed).
+        this.render();
       }, { width: '200px', marginRight: '6px' });
       this.fillLookChoices();
     }
+    // Shoutcast's, internet-radio.com's or Tubi's own site in a browser window beside the panel (see toggleBrowse).
+    if (!this.karaoke) this.browseBtn = await this.button(this.searchRow, '@fvp:web Browse', () => this.toggleBrowse(), { backgroundColor: '#00838f' });
     // Turns while a search is waiting for its results (see render).
     this.searchSpinner = this.ui.CreateKitSpinner(this.searchRow);
     this.searchSpinner.size = 'lg';
     this.searchSpinner.tone = 'accent';
     this.searchSpinner.SetStyles({ display: 'none', flexShrink: 0, marginLeft: '4px', marginRight: '10px' });
-    await this.button(this.searchRow, '@search Search', () => this.doSearch(), { backgroundColor: '#1565c0' });
+    this.searchGoBtn = await this.button(this.searchRow, '@search Search', () => this.doSearch(), { backgroundColor: '#1565c0' });
+    // While Browse's window is open it takes Search's place: it moves the window round the panel.
+    if (!this.karaoke) {
+      this.moveBrowseBtn = await this.button(this.searchRow, '⇄ Move Browser', () => this.moveBrowse(), { backgroundColor: '#00838f' });
+      this.display(this.moveBrowseBtn, false);
+    }
     // Typing a link on a headset is hard: get a code, and send the link from a phone instead.
     await this.button(this.searchRow, '☎ Phone', () => this.askPasteCode(), { backgroundColor: '#6a1b9a' });
     // Speak (speech to text, toggleSpeech) stays hidden until Altspace answers StartTTS/StopTTS:
@@ -1401,8 +1473,8 @@ var FirePlaylistPanel = class {
     await this.button(phoneFoot, '✓ Done', () => this.hidePasteCode(), { backgroundColor: '#455a64' });
 
     // Search helpers: karaoke's words to add to the search, then recent searches, as the kit's
-    // chips (as its filter rows have).
-    this.searchToolsRow = await row(this.mainView, { overflow: 'hidden' });
+    // chips (as its filter rows have). They wrap onto a second line rather than squeeze together.
+    this.searchToolsRow = await row(this.mainView, { flexWrap: 'wrap', overflow: 'hidden' });
     if (this.karaoke) {
       for (const word of ['karaoke', 'lyrics', 'zoom karaoke']) this.kitChip(this.searchToolsRow, word, () => this.addSearchWord(word), 'add', 'add');
     }
@@ -1416,16 +1488,22 @@ var FirePlaylistPanel = class {
         this.setSearchText(q);
         this.doSearch();
       }, 'filter', 'schedule');
-      chip.SetStyles({ flexShrink: 1, maxWidth: '240px' });
+      chip.SetStyles({ maxWidth: '200px', overflow: 'hidden' });
       this.recentBtns.push(chip);
     }
     this.clearRecentBtn = this.kitChip(this.searchToolsRow, 'Clear', () => this.clearRecent(), 'danger', 'close');
+    // Takes the results away, back to the page as it was before a search (for this viewer only).
+    this.clearResultsBtn = this.kitChip(this.searchToolsRow, 'Clear Results', () => this.clearResults(), 'danger', 'close');
+    // A little room between the two lines when they wrap.
+    for (const chip of [...this.recentBtns, this.clearRecentBtn, this.clearResultsBtn]) chip.SetStyles({ marginTop: '2px', marginBottom: '2px' });
 
     // List rows: a fixed pool in the kit's scroll view (with its thin scrollbar), re-filled as the
     // list or its window changes.
     const made = await this.kitScrollColumn(this.mainView, { marginTop: '6px' });
     const list = this.listCol = made.col;
     this.scroller = made.scroller;
+    // Under the search results: how many were left out as titles for adults (see render).
+    this.hiddenNote = await this.label(this.mainView, '', { display: 'none', color: '#aaaaaa', fontSize: '18px', textAlign: 'center', whiteSpace: 'normal', flexShrink: 0, marginTop: '4px' });
     // First, so rows added later go after it (it only shows when there are no rows): the kit's
     // empty state, a quiet glyph and a line or two (its icon is set in render).
     this.emptyLabel = this.ui.CreateKitEmptyState(list);
@@ -1466,6 +1544,7 @@ var FirePlaylistPanel = class {
       ['+ Search & Add', this.core.allowUntrusted === true
         ? 'Search YouTube, Internet Archive, Tubi, NASA+, ESO or a screen share by its room code: pick the source from the drop-down beside the box. Or paste a link.'
         : 'Search YouTube, Internet Archive, Tubi, NASA+ or ESO: pick the source from the drop-down beside the box. Or paste a link.'],
+      ['Browse', "With Shoutcast, internet-radio.com or Tubi picked, opens its site beside the panel. Play a station, or open a movie or series, and it offers to add it."],
       ['☎ Phone', 'Shows a code. Send a link from your phone into your search, no typing in VR.'],
       ['☰ Lists', 'Saved playlists for this room. + All puts a whole list on the end.'],
       ['♛ Host', 'Runs the player for everyone. Press the host name at the top to see who else can control it, or to take over.'],
@@ -1475,7 +1554,7 @@ var FirePlaylistPanel = class {
     // which have no icon, so they are just their tab's name.
     const TABS = { '+ Search Songs': 'Search Songs', '+ Search & Add': 'Search', '☰ Lists': 'Lists' };
     // The host is the padlock at the top (the crown is Take Over, in More).
-    const TIP_ICONS = { '♪ Sing It': '@mic', '♛ Host': '@lock' };
+    const TIP_ICONS = { '♪ Sing It': '@mic', '♛ Host': '@lock', Browse: '@fvp:web' };
     for (const [name, text] of tips) {
       const tip = await row(howCol, { alignItems: 'flex-start', marginTop: '8px' });
       const nameBox = await row(tip, { width: '190px', flexShrink: 0, alignItems: 'center' });
@@ -1909,13 +1988,14 @@ var FirePlaylistPanel = class {
     this.built = false;
     this.visible = false;
     if (this.core && this.core.previewVideo && typeof this.core.stopPreview === 'function') this.core.stopPreview();
-    [this.tickTimer, this.renderTimer, this.statusTimer, this.searchTimer, this.scrollTimer, this.listExpiryTimer].forEach(t => { clearTimeout(t); clearInterval(t); });
-    this.tickTimer = this.renderTimer = this.statusTimer = this.searchTimer = this.scrollTimer = this.listExpiryTimer = null;
+    [this.tickTimer, this.renderTimer, this.statusTimer, this.searchTimer, this.scrollTimer, this.listExpiryTimer, this.radioCheckTimer].forEach(t => { clearTimeout(t); clearInterval(t); });
+    this.tickTimer = this.renderTimer = this.statusTimer = this.searchTimer = this.scrollTimer = this.listExpiryTimer = this.radioCheckTimer = null;
     (this.thumbTimers || []).forEach(clearTimeout);
     this.thumbTimers = [];
     if (typeof this.core.removeMessageListener === 'function') this.core.removeMessageListener(this.onMessageFn);
     clearTimeout(this.speechTimer);
     clearTimeout(this.pasteCodeTimer);
+    if (this.siteBrowser) { this.siteBrowser.destroy(); this.siteBrowser = null; }
     if (this.onTranscription) {
       const scene = this.core.banterScene();
       try { if (scene && typeof scene.Off === 'function') scene.Off('transcription', this.onTranscription); } catch (e) {}
@@ -2159,6 +2239,8 @@ var FirePlaylistPanel = class {
    */
   async close() {
     this.stopPreview(true);
+    // The Browse window closes with the panel: on Quest its sound isn't placed, so it would carry on.
+    if (this.siteBrowser || this.browseOpening) this.closeBrowse();
     if (this.held && this.mover && typeof this.mover.ReleaseGrab === 'function') {
       try { await this.mover.ReleaseGrab(); } catch (e) {}
     }
@@ -2485,6 +2567,13 @@ var FirePlaylistPanel = class {
     this.render();
   }
 
+  // Takes a list opened for this visit out of the Lists tab.
+  removeExtraList(id) {
+    this.extraLists = this.extraLists.filter(l => l.id !== id);
+    if (this.openListId === id) this.openListId = null;
+    this.render();
+  }
+
   // Search covers the whole panel; Back returns to where it was opened from.
   openSearch() {
     if (this.tab !== 'search') this.tabBeforeSearch = this.tab;
@@ -2531,6 +2620,269 @@ var FirePlaylistPanel = class {
     this.render();
   }
 
+  // ---------------------------------------------------------------- Browse (site-browser.js)
+
+  // Whether this client can open a site in a browser window (a BS Browser).
+  canBrowse() {
+    return !this.karaoke && typeof BS !== 'undefined' && (typeof BS.Browser === 'function' || typeof BS.BanterBrowser === 'function');
+  }
+
+  // Opens the picked source's site (Shoutcast, internet-radio.com or Tubi) in a window beside the panel, or closes the
+  // one that's open.
+  async toggleBrowse() {
+    if (this.siteBrowser || this.browseOpening) {
+      this.closeBrowse();
+      return;
+    }
+    const site = this.searchSource;
+    if (!BROWSE_SITES.includes(site)) {
+      this.setStatus('Pick Shoutcast, internet-radio.com or Tubi in the drop-down to browse its site.');
+      return;
+    }
+    if (!this.canBrowse()) { this.setStatus("This app can't open a browser window here."); return; }
+    if (typeof FireSiteBrowser === 'undefined') {
+      this.setStatus('Opening the browser...', 0);
+      // This opening's own token: a Close (or a newer opening) meanwhile takes it away.
+      const token = this.browseOpening = {};
+      this.render();
+      try {
+        await this.withTimeout(this.core.setupScript(null, 'site-browser'), 20000, 'Loading the browser');
+      } catch (e) {
+        console.warn('[PlaylistPanel]', e && e.message || e);
+      }
+      if (this.browseOpening !== token) return;
+      this.browseOpening = false;
+      if (this.destroyed) return;
+      this.render();
+      if (typeof FireSiteBrowser === 'undefined') { this.setStatus("Couldn't open the browser."); return; }
+    }
+    // Beside the panel (or in front of it: see moveBrowse), in the panel's mover so it moves with it.
+    const browser = this.siteBrowser = new FireSiteBrowser(this.core, {
+      parent: this.mover,
+      position: this.browsePosition(this.browsePlace()),
+      onMessage: msg => this.onBrowseMessage(msg),
+      // The site's own sound plays at the volume this viewer hears the Fire Player at.
+      getVolume: () => (typeof this.core.heardVolume === 'function' ? this.core.heardVolume() : 100)
+    });
+    try {
+      await browser.open(site);
+    } catch (e) {
+      // The failed attempt's window goes, and only while it's still the open one does it say so:
+      // a Close, or a newer Browse, since then has its own say.
+      const ours = this.siteBrowser === browser;
+      if (ours) this.siteBrowser = null;
+      try { browser.destroy(); } catch (err) {}
+      if (!ours) return;
+      this.setStatus("Couldn't open the browser.");
+      this.render();
+      return;
+    }
+    if (this.siteBrowser !== browser || this.destroyed) return;
+    this.setStatus(site === 'tubi' ? 'Tubi is open beside the panel. Open a movie or a series there to add it.'
+      : site === 'internetradio' ? "internet-radio.com is open beside the panel. Press Play on a station there, or open a station's page, to add it."
+        : 'Shoutcast is open beside the panel. Press Play on a station there to add it.', 8000);
+    this.render();
+  }
+
+  // Where Browse's window goes, kept on this device for this world (its page's own storage): 'right'
+  // of the panel, 'left' of it (when the panel sits left of the screen, the right is behind the
+  // screen), or 'front', nearer the viewer and low enough that the panel's top (Close Browser,
+  // Move Browser) shows above it.
+  browsePlace() {
+    return this.loadSetting('fvpBrowsePlace', BROWSE_PLACES, 'right');
+  }
+  browsePosition(place) {
+    const beside = this.panelWidthM / 2 + 0.06 + FireSiteBrowser.width() / 2;
+    if (place === 'left') return new BS.Vector3(-beside, this.handleDrop, 0);
+    if (place === 'front') return new BS.Vector3(0, this.handleDrop - FireSiteBrowser.height() / 2 - 0.1, -0.45);
+    return new BS.Vector3(beside, this.handleDrop, 0);
+  }
+  moveBrowse() {
+    const browser = this.siteBrowser;
+    if (!browser) return;
+    const place = BROWSE_PLACES[(BROWSE_PLACES.indexOf(this.browsePlace()) + 1) % BROWSE_PLACES.length];
+    this.saveSetting('fvpBrowsePlace', place);
+    browser.moveTo(this.browsePosition(place));
+    this.setStatus({ right: 'The browser is on the right of the panel.', left: 'The browser is on the left of the panel.', front: 'The browser is in front of the panel.' }[place], 4000);
+  }
+
+  // Closes the browser window. The panel forgets it first, so Close works even if removing the
+  // window fails.
+  closeBrowse() {
+    this.browseOpening = false;
+    const browser = this.siteBrowser;
+    this.siteBrowser = null;
+    this.browseOffer = null;
+    if (browser) {
+      try { browser.destroy(); } catch (e) { console.warn('[PlaylistPanel] Could not close the browser window:', e); }
+      console.log('[PlaylistPanel] Closed the browser window.');
+    }
+    this.renderSoon();
+  }
+
+  // A message from the browser window's page: the page it moved to, or a station played there.
+  onBrowseMessage(msg) {
+    // The bar's buttons act only on the offer they were shown for: one pressed as the offer changed
+    // (another page, or a station played meanwhile), or a message that doesn't name the offer, is
+    // ignored. The panel's own buttons are the ones to trust; the bar is the same offer on the page.
+    if (msg.type === 'add' || msg.type === 'now' || msg.type === 'extra') {
+      const o = this.browseOffer;
+      if (!o || msg.link !== o.link || msg.token !== o.token) {
+        if (o) this.setStatus('That offer changed. Press it again.');
+        return;
+      }
+      if (msg.type === 'extra') this.showEpisodes(o.link);
+      else this.addBrowseOffer(msg.type === 'now');
+      return;
+    }
+    if (msg.type === 'station' && msg.site === 'internetradio') {
+      const name = String(msg.name || '').trim().slice(0, 120) || this.tr('Radio station');
+      const id = String(msg.id || '');
+      const stream = String(msg.stream || '').replace(/#.*$/, '');
+      // A station the site hosts is kept by its page; one it only lists, by its stream (marked).
+      const link = /^[a-z0-9][a-z0-9._-]{0,79}$/.test(id) ? `https://www.internet-radio.com/station/${id}/`
+        : /^https?:\/\/\S+$/i.test(stream) ? `${stream}#internet-radio` : '';
+      if (!link) return;
+      this.setBrowseOffer({ link, title: name, kind: 'station', check: 'checking' });
+      this.askRadioCheck(link);
+      return;
+    }
+    if (msg.type === 'station' && /^\d{1,12}$/.test(String(msg.id || ''))) {
+      const name = String(msg.name || '').trim().slice(0, 120) || this.tr('Radio station');
+      const link = `https://directory.shoutcast.com/sbin/tunein-station.m3u?id=${msg.id}`;
+      // The server says whether it can play here (an https stream, or the relay): RADIO_CHECK_RESULT.
+      this.setBrowseOffer({ link, title: name, kind: 'station', check: 'checking' });
+      this.askRadioCheck(link);
+      return;
+    }
+    if (msg.type !== 'page') return;
+    const media = window.MediaSources ? MediaSources.detect(String(msg.url || '')) : null;
+    // An internet-radio.com station's own page offers that station ("Name - Internet Radio").
+    if (media && media.type === 'radio' && media.site === 'internetradio') {
+      const link = `https://www.internet-radio.com/station/${media.id}/`;
+      if (this.browseOffer && this.browseOffer.link === link) return;
+      const name = String(msg.title || '').replace(/\s+-\s+Internet Radio\s*$/i, '').trim().slice(0, 120) || this.tr('Radio station');
+      this.setBrowseOffer({ link, title: name, kind: 'station', check: 'checking' });
+      this.askRadioCheck(link);
+      return;
+    }
+    if (!media || media.type !== 'tubi') {
+      // Moving to another page leaves a Shoutcast station's offer up, but not a Tubi title's.
+      if (this.browseOffer && this.browseOffer.kind !== 'station') this.setBrowseOffer(null);
+      return;
+    }
+    // The page's title: "Name (2020) - Stream Free | Tubi" (a movie) or "Watch Name Streaming
+    // Online | Tubi Free TV" (a series).
+    const title = String(msg.title || '').replace(/^Watch\s+/i, '').replace(/\s*\|\s*Tubi.*$/i, '')
+      .replace(/\s+[-–]\s+Stream(ing)? Free.*$/i, '').replace(/\s+Streaming Online$/i, '').replace(/\s*\(\d{4}\)\s*$/, '').trim().slice(0, 120)
+      || this.tr(media.kind === 'series' ? 'Tubi series' : 'Tubi video');
+    const path = media.kind === 'series' ? 'series' : media.kind === 'episode' ? 'tv-shows' : 'movies';
+    // A season picked on a series' page (its address ends in /season-2) offers that season alone.
+    // Season 0 (specials) is a season too; a series with none named has no season part.
+    const season = media.kind === 'series' && Number.isInteger(media.season) ? media.season : null;
+    this.setBrowseOffer({
+      link: `https://tubitv.com/${path}/${media.id}${season != null ? `/season-${season}` : ''}`,
+      title: season != null && !/season\s*\d/i.test(title) ? `${title}, ${this.tr('Season {n}', { n: season })}` : title,
+      kind: media.kind === 'series' ? 'series' : 'video'
+    });
+  }
+
+  // Asks the server whether a station can play here, and again every RADIO_CHECK_RETRY_MS while
+  // its offer still waits: a reply lost with the connection would leave it checking for good.
+  // The server keeps its answer a while, so asking again costs it little.
+  askRadioCheck(link) {
+    clearTimeout(this.radioCheckTimer);
+    this.send(Commands.RADIO_CHECK, { link });
+    this.radioCheckTimer = setTimeout(() => {
+      const o = this.browseOffer;
+      if (this.destroyed || !o || o.link !== link || o.check !== 'checking') return;
+      this.askRadioCheck(link);
+    }, RADIO_CHECK_RETRY_MS);
+  }
+
+  // Shows what Browse found, in the panel and as a bar on the page, or hides it (null).
+  setBrowseOffer(offer) {
+    // Each offer shown gets its own token, which the bar's buttons send back (see onBrowseMessage).
+    if (offer && !offer.token) offer.token = Math.random().toString(36).slice(2, 12);
+    this.browseOffer = offer;
+    if (this.siteBrowser) {
+      // A station the server found can't play here (only over http, with the relay off) has no buttons.
+      const bad = !!offer && offer.check === 'bad';
+      // A station still being checked shows no buttons yet either.
+      const ready = !!offer && !bad && offer.check !== 'checking';
+      const note = !offer || offer.kind !== 'station' ? ''
+        : bad ? (offer.error || this.tr("That station can't play here."))
+          : offer.check === 'ok' ? this.tr("The website can't play this station itself, but the Fire Player can: add it with the bar above.")
+            : this.tr("The website can't play this station itself. Checking whether the Fire Player can...");
+      this.siteBrowser.offer(offer ? {
+        text: bad ? this.tr('"{title}" can\'t play here.', { title: offer.title })
+          : this.tr(offer.kind === 'series' ? 'Add episodes of "{title}" to the playlist?' : 'Add "{title}" to the playlist?', { title: offer.title }),
+        now: ready && offer.kind !== 'series' && this.isHost() ? this.tr('Play Now') : '',
+        add: !ready || offer.kind === 'series' ? '' : this.tr('Add to Playlist'),
+        extra: offer.kind === 'series' ? this.tr('Pick Episodes') : '',
+        note,
+        what: offer.kind,
+        link: offer.link,
+        token: offer.token
+      } : null);
+    }
+    this.renderSoon();
+  }
+
+  // Adds what Browse found, or plays it now (the host). The server looks its title and length up,
+  // except a Tubi title's, which this device looks up when it can (the server may be in a country
+  // Tubi doesn't serve).
+  async addBrowseOffer(now) {
+    const o = this.browseOffer;
+    if (!o) return;
+    if (o.kind === 'series') { this.showEpisodes(o.link); return; }
+    if (o.check === 'bad') { this.setStatus(o.error || "That station can't play here."); return; }
+    if (o.check === 'checking') { this.setStatus("The website can't play this station itself. Checking whether the Fire Player can..."); return; }
+    if (now && !this.isHost()) { this.setStatus('Only the host can play something now.'); return; }
+    if (!now && !this.canAdd() && !this.addWaits()) { this.setStatus('The player is locked: only the host can add videos.'); return; }
+    if (!this.core.connected()) { this.setStatus('Not connected to the server. Reconnecting...', 4000); return; }
+    let what = o.link;
+    // The window this offer came from: a lookup below may outlast it (closed, or Browse opened again).
+    const browser = this.siteBrowser;
+    // Only the latest Add or Now may close the window or put its offer back.
+    const n = this.browseActionN = (this.browseActionN || 0) + 1;
+    const ours = () => n === this.browseActionN && !!browser && this.siteBrowser === browser && (!this.browseOffer || this.browseOffer === o);
+    if (o.kind === 'video' && window.isBanter && typeof this.core.tubiResolver === 'function') {
+      this.setBrowseOffer(null);
+      this.setStatus(this.tr('Looking up "{title}"...', { title: o.title }), 0);
+      try {
+        const tubi = await this.core.tubiResolver();
+        const found = tubi ? await tubi.stream(o.link) : null;
+        if (found && found.ok) what = { title: found.title || o.title, link: o.link, duration: found.duration, thumbnail: found.thumbnail, mature: found.mature };
+      } catch (e) {}
+      if (this.destroyed) return;
+      // A newer Add or Now was pressed during the lookup: this one is dropped, so it can't start
+      // playback (or add) after it.
+      if (n !== this.browseActionN) return;
+    }
+    if (!this.send(now ? Commands.ADD_AND_PLAY : Commands.ADD_TO_PLAYLIST, what)) {
+      // Not sent (the connection dropped): the offer stays, to press again once it's back.
+      if (!this.browseOffer && ours()) this.setBrowseOffer(o);
+      this.setStatus('Not connected to the server. Reconnecting...', 4000);
+      return;
+    }
+    // Sent, so done with the site: it closes (Browse opens it again for more), unless it's
+    // another window now, or the same one with a newer offer.
+    if (ours()) this.closeBrowse();
+    if (now) this.setStatus(this.tr('Playing "{title}"', { title: o.title }));
+    else this.setStatus(this.addWaits() ? this.tr('Asking the host to add "{title}"...', { title: o.title }) : this.tr('Adding "{title}"...', { title: o.title }));
+  }
+
+  // A Tubi series' episodes, in the Lists tab: each one to add, play or play next, or all of them.
+  showEpisodes(link) {
+    if (!link) return;
+    // Browse's series: its episodes are picked in the panel, so the site closes (Browse opens it again).
+    // A series opened from Search leaves Browse's offer (another title, or a station) as it is.
+    if (this.browseOffer && this.browseOffer.link === link) this.closeBrowse();
+    this.browseList(link);
+    this.setStatus('The episodes are in Lists: add the ones you want, or + All.', 6000);
+  }
+
   // The sources this world can use: a screen share needs links from other sites (untrusted-links).
   searchSources() {
     return Object.keys(SEARCH_SOURCES).filter(k => k !== 'screen' || this.core.allowUntrusted === true);
@@ -2566,15 +2918,20 @@ var FirePlaylistPanel = class {
     // A search made recently on this device shows its kept results straight away. Links are
     // always looked up again (a stream may have gone live or offline).
     // A screen share room is looked up each time too, as it's a link made from the code.
-    const isLink = /^(https?|rtspt?):\/\//i.test(q) || !!this.core.getId(q) || this.searchSource === 'screen';
+    // A bare 11-character word is a YouTube id only when searching YouTube: on Tubi and the rest
+    // it's a search (a pasted YouTube link still goes to the server, whatever the source).
+    const bareId = !/[\/.]/.test(q);
+    const isLink = /^(https?|rtspt?):\/\//i.test(q) || (!!this.core.getId(q) && (!bareId || this.searchSource === 'youtube')) || this.searchSource === 'screen';
     const key = this.searchKey(q, this.searchSource);
-    const kept = !isLink && this.cachedSearch(key);
+    const hit = !isLink && this.cachedSearch(key);
+    const kept = hit && this.keptResults(hit);
     if (kept) {
       clearInterval(this.searchTimer);
       this.searchTimer = null;
       this.searchId++; // a search still waiting doesn't replace these when it's answered
       this.pendingSearchKey = null;
       this.searchResults = kept.results;
+      this.searchHidden = Number(kept.hidden) || 0;
       this.searchPage = 0;
       this.resetScroll();
       const n = kept.results.length;
@@ -2588,7 +2945,10 @@ var FirePlaylistPanel = class {
     this.pendingSearchKey = isLink ? null : { key, query: q };
     const data = { term: q, searchId };
     if (this.searchSource !== 'youtube') data.source = this.searchSource;
-    this.send(Commands.SEARCH, data);
+    // Tubi is searched from this device first, as its own site does (the server may be in a
+    // country Tubi doesn't serve), then by the server.
+    if (this.searchSource === 'tubi' && !isLink && window.isBanter && typeof this.core.tubiResolver === 'function') this.searchTubiHere(q, data);
+    else this.send(Commands.SEARCH, data);
     console.log(`[PlaylistPanel] Searching for "${q}"...`);
     this.setStatus('Searching...', 0);
     // The first search after the server starts can take a while, so count up instead of giving up early.
@@ -2608,6 +2968,27 @@ var FirePlaylistPanel = class {
     }, 1000);
     this.tab = 'search';
     this.render();
+  }
+
+  // A Tubi search from this device (tubi-native.js); the server's search if it finds nothing or can't.
+  async searchTubiHere(q, data) {
+    let results = null;
+    try {
+      const tubi = await this.core.tubiResolver();
+      if (tubi) results = await tubi.search(q);
+    } catch (e) {
+      console.warn('[PlaylistPanel] Tubi search on this device failed:', e);
+    }
+    if (this.destroyed || data.searchId !== this.searchId) return; // a newer search replaced it
+    // Titles for adults are left out where the world doesn't allow them (as the server does),
+    // and the note under the results says how many.
+    if (results && results.length) {
+      const allowed = this.withoutMature(results);
+      this.onMessage({ path: Commands.SEARCH_RESULTS, data: allowed, searchId: data.searchId, hidden: results.length - allowed.length });
+      return;
+    }
+    console.log('[PlaylistPanel] No Tubi results from this device, so the server searches.');
+    this.send(Commands.SEARCH, data);
   }
 
   // Karaoke: join the singer queue with this song.
@@ -2799,10 +3180,58 @@ var FirePlaylistPanel = class {
   // was shown before keeps its videos on screen while it's loaded again.
   requestList(id, force) {
     this.checkListRequests();
-    if (this.listsOut.has(id) || this.listQueue.includes(id)) return;
+    if (this.listsOut.has(id) || this.listQueue.includes(id) || (this.deviceLists && this.deviceLists.has(id))) return;
     const had = this.listData.get(id);
-    if (had && had.state === 'ready' && !force && Date.now() - had.at < LIST_FRESH_MS) return;
+    // A list missing some episodes' details (a Tubi series read on this device) is read again.
+    if (had && had.state === 'ready' && !had.partial && !force && Date.now() - had.at < LIST_FRESH_MS) return;
     if (!(had && had.state === 'ready')) this.listData.set(id, { state: 'loading', at: Date.now() });
+    // A Tubi series is read from this device first (see loadSeriesHere).
+    if (this.isTubiSeries(id) && window.isBanter && typeof this.core.tubiResolver === 'function') {
+      this.loadSeriesHere(id);
+      return;
+    }
+    this.listQueue.push(id);
+    this.pumpLists();
+    this.renderSoon();
+  }
+
+  // The items this world allows: those marked for adults are left out unless it allows them.
+  withoutMature(items) {
+    return this.core.allowMature === true ? items : items.filter(item => !(item && item.mature === true));
+  }
+
+  isTubiSeries(link) {
+    const m = window.MediaSources ? MediaSources.detect(String(link || '')) : null;
+    return !!m && m.type === 'tubi' && m.kind === 'series';
+  }
+
+  // A Tubi series' episodes from this device (tubi-native.js), as the server may be in a country
+  // Tubi doesn't serve; the server's list if this device can't.
+  async loadSeriesHere(id) {
+    (this.deviceLists = this.deviceLists || new Set()).add(id);
+    let list = null;
+    try {
+      const tubi = await this.core.tubiResolver();
+      if (tubi) list = await tubi.series(id);
+    } catch (e) {
+      console.warn('[PlaylistPanel] Tubi series on this device failed:', e);
+    }
+    this.deviceLists.delete(id);
+    if (this.destroyed) return;
+    if (list && list.items.length) {
+      // Episodes for adults (or a whole series) are left out where the world doesn't allow them.
+      const items = this.withoutMature(list.items);
+      if (!items.length) {
+        const why = this.tr("This series is for adults, and this world doesn't allow them.");
+        this.listData.set(id, { state: 'error', error: why });
+        if (this.openListId === id) this.setStatus(why, 6000);
+        this.renderSoon();
+        return;
+      }
+      this.listData.set(id, { state: 'ready', at: Date.now(), title: list.title, items, skipped: list.items.length - items.length, truncated: false, device: true, partial: !!list.partial });
+      this.renderSoon();
+      return;
+    }
     this.listQueue.push(id);
     this.pumpLists();
     this.renderSoon();
@@ -2862,7 +3291,8 @@ var FirePlaylistPanel = class {
       return;
     }
     const items = Array.isArray(data.items) ? data.items : [];
-    this.listData.set(data.id, { state: 'ready', at: Date.now(), title: data.title || '', items, skipped: data.skipped || 0, truncated: !!data.truncated });
+    // partial: some of it is missing (a Tubi series' episodes not read in time), so it's asked for again rather than kept fresh.
+    this.listData.set(data.id, { state: 'ready', at: Date.now(), title: data.title || '', items, skipped: data.skipped || 0, truncated: !!data.truncated, partial: !!data.partial });
     // A saved list keeps its real name for next time.
     const mine = data.title && this.userLists.find(l => l.id === data.id);
     if (mine && mine.label !== data.title) { mine.label = data.title; this.saveUserLists(); }
@@ -2888,6 +3318,19 @@ var FirePlaylistPanel = class {
   // Adds a whole list to the end of the playlist (the host, or anyone while unlocked).
   appendList(id) {
     if (!this.canAdd()) { this.setStatus('The player is locked: only the host can add videos.'); return; }
+    // A list read on this device (a Tubi series) may be one the server can't read: its videos are
+    // added one by one, as they are.
+    const data = this.listData.get(id);
+    if (data && data.device && data.state === 'ready') {
+      const inPlaylist = new Set(((this.core.player && this.core.player.playlist) || []).map(v => v.link));
+      const items = data.items.filter(v => !inPlaylist.has(v.link)).slice(0, 300);
+      if (!items.length) { this.setStatus('All of these are already in the playlist.', 4000); return; }
+      // Only what was sent is counted; the list stays here, so + All can be pressed again.
+      const sent = items.filter(v => this.send(Commands.ADD_TO_PLAYLIST, v)).length;
+      if (sent < items.length) { this.setStatus('Not connected to the server. Reconnecting...', 4000); return; }
+      this.setStatus(this.tr(sent === 1 ? 'Adding {count} video...' : 'Adding {count} videos...', { count: sent }), 6000);
+      return;
+    }
     this.send(Commands.FROM_PLAYLIST, { id, append: true, fromPlaylist: true });
     this.setStatus('Adding the list to the playlist...', 0);
   }
@@ -2895,6 +3338,8 @@ var FirePlaylistPanel = class {
   // Replaces the playlist with a list (the host only).
   replaceWithList(id) {
     if (!this.isHost()) { this.setStatus('Only the host can load a playlist.'); return; }
+    const data = this.listData.get(id);
+    if (data && data.device) { this.setStatus('Use + All to add these episodes.'); return; }
     this.send(Commands.FROM_PLAYLIST, { id, shouldClear: true, fromPlaylist: true });
     this.setStatus('Loading playlist...', 0);
   }
@@ -2926,9 +3371,11 @@ var FirePlaylistPanel = class {
         clearInterval(this.searchTimer);
         this.searchTimer = null;
         this.searchResults = Array.isArray(json.data) ? json.data : [];
-        console.log(`[PlaylistPanel] Got ${this.searchResults.length} search results.`);
+        // How many were left out as titles for adults, where the world doesn't allow them.
+        this.searchHidden = Math.max(0, Math.floor(Number(json.hidden) || 0));
+        console.log(`[PlaylistPanel] Got ${this.searchResults.length} search results${this.searchHidden ? ` (${this.searchHidden} hidden as titles for adults)` : ''}.`);
         if (this.pendingSearchKey && this.searchResults.length) {
-          this.saveSearch(this.pendingSearchKey.key, this.pendingSearchKey.query, this.searchResults);
+          this.saveSearch(this.pendingSearchKey.key, this.pendingSearchKey.query, this.searchResults, this.searchHidden);
         }
         this.pendingSearchKey = null;
         this.view = 'main';
@@ -2964,6 +3411,17 @@ var FirePlaylistPanel = class {
       case Commands.LIST_PREVIEW_RESULT:
         this.onListPreview(json.data);
         break;
+      case Commands.RADIO_CHECK_RESULT: {
+        // Whether the station Browse offers can play here (see onBrowseMessage).
+        const o = this.browseOffer;
+        const d = json.data || {};
+        if (o && o.kind === 'station' && d.link === o.link) {
+          o.check = d.ok ? 'ok' : 'bad';
+          o.error = d.ok ? '' : String(d.error || '').slice(0, 200);
+          this.setBrowseOffer(o);
+        }
+        break;
+      }
       case Commands.LISTS_UPDATED:
         this.loadSavedLists(); // names and sizes of any new ones
         break;
@@ -3002,7 +3460,8 @@ var FirePlaylistPanel = class {
     if (this.renderTimer) return;
     this.renderTimer = setTimeout(() => {
       this.renderTimer = null;
-      this.render();
+      // One failed redraw is logged, and doesn't stop the next.
+      try { this.render(); } catch (e) { console.warn('[PlaylistPanel] Redraw failed:', e && e.stack || e); }
     }, 100);
   }
 
@@ -3210,6 +3669,29 @@ var FirePlaylistPanel = class {
     this.showSearchSource();
     this.display(this.searchSpinner, onSearch && !!this.searchTimer);
 
+    // What the browser window has open that can be added, and the Browse button (Shoutcast, internet-radio.com and Tubi).
+    const bo = this.browseOffer;
+    this.display(this.browseOfferRow, !!bo);
+    if (bo) {
+      const bad = bo.check === 'bad';
+      this.setText(this.browseOfferLabel, bad ? this.tr('"{title}" can\'t play here.', { title: bo.title })
+        : this.tr(bo.kind === 'series' ? 'In the browser: "{title}" (series)' : 'In the browser: "{title}"', { title: bo.title }));
+      const ready = !bad && bo.check !== 'checking';
+      this.display(this.browseNowBtn, ready && bo.kind !== 'series' && host);
+      this.display(this.browseAddBtn, ready && bo.kind !== 'series' && (this.canAdd() || this.addWaits()));
+      this.display(this.browseEpisodesBtn, bo.kind === 'series');
+    }
+    if (this.browseBtn) {
+      // While it's opening too, so the opening can be called off.
+      const open = !!this.siteBrowser || !!this.browseOpening;
+      this.display(this.browseBtn, onSearch && this.canBrowse() && (BROWSE_SITES.includes(this.searchSource) || open));
+      this.setText(this.browseBtn, open ? '✕ Close Browser' : '@fvp:web Browse');
+    }
+    if (this.moveBrowseBtn) {
+      this.display(this.searchGoBtn, !this.siteBrowser);
+      this.display(this.moveBrowseBtn, !!this.siteBrowser);
+    }
+
     // A pasted playlist's question.
     const pl = this.pendingList;
     this.display(this.listPromptRow, !!pl);
@@ -3222,7 +3704,8 @@ var FirePlaylistPanel = class {
       this.setText(this.listPromptLabel, failed
         ? this.tr('That link isn\'t a playlist or video this player can use: {error}', { error: data.error })
         : this.tr('That\'s a playlist: {name}{size}. Replace the playlist, add it all to the end, or save it to Lists (for everyone here, or just for you)?', { name, size }) + (can ? ' ' + this.tr(can.trim()) : ''));
-      this.display(this.promptReplaceBtn, host && !failed);
+      // A list read on this device (a Tubi series) may be one the server can't load (as in Lists).
+      this.display(this.promptReplaceBtn, host && !failed && !(data && data.device));
       this.display(this.promptAppendBtn, this.canAdd() && !failed);
       this.display(this.promptShareBtn, this.canAdd() && !failed);
       this.display(this.promptSaveBtn, !failed);
@@ -3259,6 +3742,7 @@ var FirePlaylistPanel = class {
     });
     this.display(this.recentLabel, recent.length > 0);
     this.display(this.clearRecentBtn, recent.length > 0);
+    this.display(this.clearResultsBtn, onSearch && (this.searchResults.length > 0 || this.searchHidden > 0 || !!this.searchTimer));
 
     const items = onLists ? this.listEntries() : onSearch ? this.searchResults : list;
     const size = this.pageSize();
@@ -3298,28 +3782,45 @@ var FirePlaylistPanel = class {
     }
 
     let empty = '';
-    if (!items.length) {
+    let literal = false;
+    if (!items.length && onSearch && !this.karaoke && this.searchSource === 'screen') {
+      // What a screen share's name is, and how to start one (see SCREEN_SHARE_PUBLISH).
+      const name = { name: 'YOURNAME' };
+      empty = [this.tr("To share your PC's screen, open this page on the PC, with {name} changed to a name of your own (it can be anything):", name),
+        SCREEN_SHARE_PUBLISH,
+        this.tr('Then search here for that name, or paste this link with {name} changed to the same name:', name),
+        SCREEN_SHARE_WATCH].join('\n\n');
+      literal = true;
+    } else if (!items.length) {
       if (onLists) empty = "No saved lists. Paste a YouTube playlist or a list of links into + Search & Add (or More > + Add by link) and choose ★ Save for Everyone or ☆ Save for Me.";
       else if (onSearch) empty = this.karaoke ? 'Search for a song above, or paste a link.' : 'Search YouTube above, or paste a YouTube, Twitch, Vimeo or video link.';
-      else if (this.karaoke) empty = host ? 'No singers yet. Use Search to pick a song and join the queue.' : 'No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first (press ♛ at the top).';
+      else if (this.karaoke) empty = host ? 'No singers yet. Use Search to pick a song and join the queue.' : 'No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first: press the host name at the top, then Take Over.';
       else empty = 'The playlist is empty. Use Search to add videos.';
     }
-    this.setText(this.emptyLabel, empty);
+    this.setText(this.emptyLabel, empty, literal);
     this.display(this.emptyLabel, !!empty);
     if (empty) {
-      const icon = onLists ? 'bookmark' : onSearch ? 'search' : this.karaoke ? 'mic' : 'videocam';
+      const icon = onLists ? 'bookmark' : literal ? 'videocam' : onSearch ? 'search' : this.karaoke ? 'mic' : 'videocam';
       if (this._changed(this.emptyLabel, 'icon', icon)) this.emptyLabel.icon = icon;
     }
     this.display(this.madeWithRow, onSearch && !items.length);
+    const hidden = onSearch ? this.searchHidden || 0 : 0;
+    if (hidden) this.setText(this.hiddenNote, this.tr(hidden === 1 ? '{count} result hidden: it is for adults, and this world does not allow those.' : '{count} results hidden: they are for adults, and this world does not allow those.', { count: hidden }));
+    this.display(this.hiddenNote, hidden > 0);
   }
 
   // YouTube's search thumbnails (e.g. .../hq720.jpg?sqp=...&rs=...) are often WebP despite the
   // .jpg name, and Unity can't decode WebP, so they fail to load. /vi/<id>/mqdefault.jpg is
   // always a JPEG (320x180, the same shape as the thumbnail box).
+  // Tubi's pictures are often WebP too (its picture server sends WebP unless asked for a JPEG,
+  // and Unity can't ask), so they come through the server, which asks (/api/tubi-picture).
   thumbUrl(url, link) {
     const fromThumb = /^https?:\/\/i\d*\.ytimg\.com\/vi(?:_webp)?\/([a-zA-Z0-9_-]{11})\//.exec(String(url || ''));
     const id = (fromThumb && fromThumb[1]) || (link && this.core.getId ? this.core.getId(link) : null);
-    const out = id ? `https://i.ytimg.com/vi/${id}/mqdefault.jpg` : String(url || '');
+    let out = id ? `https://i.ytimg.com/vi/${id}/mqdefault.jpg` : String(url || '');
+    if (!id && /^https:\/\/canvas-lb\.tubitv\.com\//.test(out) && this.core.hostUrl) {
+      out = `${this.core.getProtocol()}://${this.core.hostUrl}/api/tubi-picture?u=${encodeURIComponent(out)}`;
+    }
     if (!/^https?:\/\//.test(out)) return out;
     return `${out}${out.includes('?') ? '&' : '?'}fvp=${THUMB_VISIT}`;
   }
@@ -3486,6 +3987,12 @@ var FirePlaylistPanel = class {
       this.setButtons(slot, defs);
       return;
     }
+    // A Tubi series is a list of episodes: they open in Lists, to pick from.
+    const media = window.MediaSources ? MediaSources.detect(v.link) : null;
+    if (media && media.type === 'tubi' && media.kind === 'series') {
+      this.setButtons(slot, [{ text: '▼ Episodes', color: '#6a1b9a', fn: () => this.showEpisodes(v.link) }]);
+      return;
+    }
     // Adding stays on the results, so several can be added from one search.
     // Play comes first, on the left, as in the playlist.
     const defs = [];
@@ -3524,7 +4031,8 @@ var FirePlaylistPanel = class {
     else {
       if (canAdd) defs.push({ text: '+ All', fn: () => this.appendList(list.id) });
       // A row has 4 buttons: a viewer's own list uses the last two for Share and Remove.
-      if (host && !list.user) defs.push({ text: '⇄ Replace', color: '#2e7d32', fn: () => this.replaceWithList(list.id) });
+      // A list read on this device (a Tubi series) is one the server may not be able to load.
+      if (host && !list.user && !data.device) defs.push({ text: '⇄ Replace', color: '#2e7d32', fn: () => this.replaceWithList(list.id) });
     }
     // Shared lists can be taken out by whoever may add (the host, or anyone while unlocked); a
     // viewer's own list can be shared, or taken out again.
@@ -3533,6 +4041,9 @@ var FirePlaylistPanel = class {
     } else if (list.user) {
       if (canAdd && data.state !== 'error') defs.push({ text: '★ Share', color: '#6a1b9a', fn: () => this.shareList(list.id) });
       defs.push({ text: '✕', color: '#c62828', fn: () => this.removeList(list.id) });
+    } else if (this.extraLists.some(l => l.id === list.id)) {
+      // One opened for this visit (a pasted link, a Tubi series from Browse) can be closed too.
+      defs.push({ text: '✕', color: '#c62828', fn: () => this.removeExtraList(list.id) });
     }
     this.setButtons(slot, defs);
   }
@@ -3571,7 +4082,8 @@ var FirePlaylistPanel = class {
     if (m.drive) return 'Google Drive';
     if (/dropbox/i.test(String(link))) return 'Dropbox';
     if (/archive\.org/i.test(String(link))) return 'archive.org';
-    return ({ youtube: 'YouTube', twitch: 'Twitch', twitchclip: 'Twitch clip', vimeo: 'Vimeo', vdoninja: 'VDO.Ninja', sdq: 'Screen share', hls: 'Stream', mpegts: 'Stream', file: 'File' })[m.type] || '';
+    if (m.bilibili) return 'Bilibili';
+    return ({ youtube: 'YouTube', twitch: 'Twitch', twitchclip: 'Twitch clip', vimeo: 'Vimeo', vdoninja: 'VDO.Ninja', sdq: 'Screen share', hls: 'Stream', mpegts: 'Stream', file: 'File', radio: 'Radio', tubi: 'Tubi', bilibili: 'Bilibili' })[m.type] || '';
   }
 };
 window.FirePlaylistPanel = FirePlaylistPanel;

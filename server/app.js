@@ -11,9 +11,11 @@ const compression = require('compression');
 const http = require('http');
 const path = require('path');
 const { searchVideos, videoById } = require('./youtube/search.js');
+const youtubeHls = require('./youtube/hls.js');
 const archive = require('./archive.js');
 const streaming = require('./streaming.js');
 const eso = require('./eso.js');
+const radio = require('./radio.js');
 const media = require('./media.js');
 const MediaSources = require('../public/media-sources.js');
 const Commands = require('../public/commands.js');
@@ -36,11 +38,15 @@ const SkipJumpTimeKaraoke = 0.25;
  * The longest a new playlist track waits for the room's screens to load it before it starts,
  * unless the snippet's ready-delay says otherwise (see holdForReady).
  */
-const READY_DELAY_DEFAULT_S = 5;
+const READY_DELAY_DEFAULT_S = 8;
 /** The most ready-delay can be. */
 const READY_DELAY_MAX_S = 15;
-/** How far ahead a track starts once every screen has loaded it, so the message reaches them first. */
-const READY_LEAD_S = 0.3;
+/**
+ * How far ahead a track starts once every screen has loaded it: the message reaches them first,
+ * and the world's video player has time to go back to the start it has been playing muted from
+ * (about 1.3 s there) before the sound comes on (see native-video.js WARM_REWIND_MS).
+ */
+const READY_LEAD_S = 2;
 // How many times YouTube is asked whether a reported live video is live, and how far apart.
 const LIVE_CHECK_TRIES = 3;
 /** The shortest length a screen may report for a track (see setMediaDuration). */
@@ -242,14 +248,48 @@ class App {
     // The stream to play for a Tubi or NASA+ link, asked for by the player page when it plays one
     // (Tubi's stream links expire, so the playlist keeps the page's link). Only those sites' pages
     // are looked up, from the id in the link.
+    // A radio station's stream is looked up the same way (server/radio.js).
     this.app.get('/api/stream', async (req, res) => {
-      const link = String(req.query.link || '').slice(0, 500);
+      const link = String(req.query.link || '').slice(0, 1000);
       try {
-        res.set('Cache-Control', 'no-store').json(await streaming.streamFor(link));
+        const kind = media.detect(link);
+        res.set('Cache-Control', 'no-store').json(await (kind && kind.type === 'radio' ? radio.streamFor(link) : streaming.streamFor(link)));
       } catch (e) {
         res.status(422).json({ error: e.message || "Couldn't find that video's stream." });
       }
     });
+    // Whether a Tubi or Internet Archive link is for adults (see media.isMature), asked for by the
+    // player page before it plays an Archive file where the viewer's world doesn't allow them.
+    this.app.get('/api/rating', async (req, res) => {
+      const link = String(req.query.link || '').slice(0, 1000);
+      try {
+        res.set('Cache-Control', 'no-store').json({ mature: await media.isMature(link) });
+      } catch (e) {
+        res.status(422).json({ error: e.message || "Couldn't look that video's rating up." });
+      }
+    });
+    // A Tubi picture as a JPEG, for the panel's thumbnails: Unity can't show the WebP that
+    // Tubi's picture server sends it (see streaming.tubiPictureFile). Only Tubi's pictures.
+    this.app.get('/api/tubi-picture', async (req, res) => {
+      try {
+        const { type, body } = await streaming.tubiPictureFile(String(req.query.u || '').slice(0, 600));
+        res.set({ 'Content-Type': type, 'Cache-Control': 'public, max-age=604800' }).send(body);
+      } catch (e) {
+        res.status(404).set('Cache-Control', 'no-store').json({ error: e.message || "Couldn't get that picture." });
+      }
+    });
+    // A radio station that only streams over http, sent on to the player page (see radio.relay).
+    // Only stations in a room's playlist are relayed, so it can't be used to relay any station.
+    const queued = link => Object.values(this.videoPlayers).some(p => p && Array.isArray(p.playlist) && p.playlist.some(t => t && t.link === link));
+    this.app.get('/api/radio', (req, res) => {
+      radio.relay(req, res, queued).catch(e => {
+        console.warn('[RADIO] Relay failed:', e && e.message);
+        if (!res.headersSent) res.status(502).json({ error: "Couldn't relay that station." });
+        else res.destroy();
+      });
+    });
+    // A YouTube video's stream as HLS, for the world's own video player (see youtube/hls.js).
+    youtubeHls.setupRoutes(this.app);
     // A browser may keep the files, but checks with the server each time a page loads: an
     // unchanged file is answered "not changed" with no body, and an updated one is sent in full,
     // so nobody is left on an older version after an update.
@@ -340,10 +380,14 @@ class App {
 
     // Remove the disconnected socket
     videoPlayer.sockets = videoPlayer.sockets.filter(_ws => _ws !== ws);
-    // A screen that left can't load the track the room is waiting on.
-    if (videoPlayer.readyGate) {
-      videoPlayer.readyGate.waiting.delete(ws);
-      this.releaseIfReady(instanceId);
+    // A viewer who left can't load the track the room is waiting on. One still here with their
+    // other page (the browser page goes as the world's video player takes its place) still can.
+    if (videoPlayer.readyGate && App.isScreenSocket(ws)) {
+      const key = App.viewerKey(ws);
+      if (!videoPlayer.sockets.some(s => App.isScreenSocket(s) && App.viewerKey(s) === key)) {
+        videoPlayer.readyGate.waiting.delete(key);
+        this.releaseIfReady(instanceId);
+      }
     }
 
     // Handle host disconnection. This logic is specifically for when the host leaves the 3D space.
@@ -441,6 +485,9 @@ class App {
           ws.i = msg.data;
           // The world's snippet may allow links from any site (untrusted-links="true").
           ws.allowUntrusted = msg.untrusted === true;
+          // And titles for adults from Tubi and the Internet Archive (mature-links="true"), which
+          // untrusted-links allows too: a file from any site has no rating to check.
+          ws.allowMature = msg.mature === true || ws.allowUntrusted;
           // The space and player pages also name the room its code used before (core.js setRoom),
           // so the old room is copied whichever of them joins first.
           await this.createVideoPlayer(msg.data, msg.u, ws, typeof msg.legacy === 'string' ? msg.legacy : null);
@@ -512,6 +559,25 @@ class App {
       case Commands.SEARCH:
         this.search(msg.data, ws);
         break;
+      case Commands.RADIO_CHECK: {
+        // Whether a station Browse found can play here: what /api/stream would give (kept a while).
+        // The reply names the link exactly as it came, which the panel matches its offer by.
+        const link = String(msg.data && msg.data.link || '');
+        if (link.length > 1000) {
+          this.send(ws, Commands.RADIO_CHECK_RESULT, { link, ok: false, error: "That station's link is too long." });
+          break;
+        }
+        const kind = MediaSources.detect(link);
+        // Every check gets an answer, so the panel's offer doesn't wait on one that never comes.
+        if (!kind || kind.type !== 'radio') {
+          this.send(ws, Commands.RADIO_CHECK_RESULT, { link, ok: false, error: "That isn't a radio station's link." });
+          break;
+        }
+        radio.streamFor(link).then(
+          () => this.send(ws, Commands.RADIO_CHECK_RESULT, { link, ok: true }),
+          e => this.send(ws, Commands.RADIO_CHECK_RESULT, { link, ok: false, error: String(e && e.message || "Couldn't reach that radio station.") }));
+        break;
+      }
       case Commands.PASTE_CODE_REQUEST:
         this.pasteCodes.issue(ws);
         break;
@@ -729,10 +795,23 @@ class App {
    */
   localSkip(ws, isForward) {
     // This function relays a skip command from a UI to that user's specific player instance.
-    if (ws.user_video) {
-      const command = isForward ? Commands.SKIP_FORWARD : Commands.SKIP_BACK;
-      this.send(ws.user_video, command);
-    }
+    const command = isForward ? Commands.SKIP_FORWARD : Commands.SKIP_BACK;
+    this.userScreens(ws).forEach(screen => this.send(screen, command));
+  }
+
+  /**
+   * The sockets that play a user's screen: their browser page (user_video, see
+   * setUserVideoPlayer) while it's open, or else their space pages, which run the world's video
+   * player while it takes the browser page's place (core.js passes these on to it). A browser
+   * page that comes back registers again, and is the user's player once more.
+   * @param {Object} ws - A socket of the user's (their menu page, say).
+   * @returns {Object[]}
+   */
+  userScreens(ws) {
+    if (ws.user_video && ws.user_video.readyState === 1) return [ws.user_video];
+    const player = this.videoPlayers[ws.i];
+    if (!player || !ws.u || ws.u.id == null) return [];
+    return player.sockets.filter(s => s.type === 'space' && s.u && s.u.id === ws.u.id && s.readyState === 1);
   }
 
   /**
@@ -743,9 +822,7 @@ class App {
    * @returns {void}
    */
   setAutoSync(autoSync, ws) {
-    if (ws.user_video) {
-      this.send(ws.user_video, Commands.AUTO_SYNC, autoSync);
-    }
+    this.userScreens(ws).forEach(screen => this.send(screen, Commands.AUTO_SYNC, autoSync));
   }
 
   /**
@@ -819,6 +896,8 @@ class App {
     this.videoPlayers[ws.i].playlist.length = 0;
     this.videoPlayers[ws.i].currentTrack = 0;
     this.videoPlayers[ws.i].currentTime = 0;
+    // Adds asked for before this (still waiting their turn) don't go into the new playlist.
+    this.videoPlayers[ws.i].gen = (this.videoPlayers[ws.i].gen || 0) + 1;
   }
 
   /**
@@ -895,38 +974,70 @@ class App {
    * (TRACK_READY); once all have, it starts at once (READY_START). A screen that never says only
    * holds the room for the delay, and then catches up as before.
    *
-   * Karaoke has its own countdown, a paused track waits for the host anyway, and a live video
-   * starts at its live point, so none of them wait. Nor does a room with no screen.
+   * The room waits for each viewer, not each page: a viewer's screen is a browser page (a
+   * "player" socket) or the world's own video player, which reports over their space page's
+   * socket (TRACK_READY with native: true), so a viewer counts while either socket is here. The
+   * browser page goes as the world's player takes its place, so counting pages would stop
+   * waiting for exactly the screens that load slowest.
+   *
+   * Karaoke waits too, for up to its ready-delay, then counts down (`minWait`) from when everyone
+   * has loaded the song, or the wait is over, so every singer gets one full countdown. A paused track
+   * waits for the host anyway, and a live video starts at its live point, so neither waits. Nor
+   * does a room with no screen.
    * @param {Object} player - The room.
+   * @param {number} [minWait] - Karaoke's countdown, in seconds: the song never starts sooner.
    */
-  holdForReady(player) {
+  holdForReady(player, minWait = 0) {
     player.readyGate = null;
     // A track start, even of the same track again: the next tick takes a live one to its live
     // point (see tickAllInstances), and a seek made before it no longer counts.
     player.liveTrack = null;
     player.seekedTrack = null;
-    if (player.isKaraoke || player.paused) return;
+    if (player.paused || (player.isKaraoke && !(minWait > 0))) return;
     const track = player.playlist[player.currentTrack];
+    // A live video starts at its live point, and a radio station is live too: neither waits.
     if (!track || track.live) return;
-    const wait = player.readyDelay != null ? player.readyDelay : READY_DELAY_DEFAULT_S;
-    const screens = player.sockets.filter(s => s.type === 'player');
-    if (!(wait > 0) || !screens.length) return;
+    const kind = MediaSources.detect(track.link || '');
+    if (kind && kind.type === 'radio') return;
+    const delay = player.readyDelay != null ? player.readyDelay : READY_DELAY_DEFAULT_S;
+    const wait = Math.max(minWait, delay);
+    const viewers = new Set(player.sockets.filter(App.isScreenSocket).map(App.viewerKey));
+    if (!(delay > 0) || !viewers.size) return;
     const now = new Date().getTime() / 1000;
-    player.lastStartTime = now + wait;
-    player.currentTime = -wait;
-    player.readyGate = { link: track.link, start: player.lastStartTime, since: now, waiting: new Set(screens) };
+    // Karaoke's countdown comes after the wait, not inside it, so it never runs twice: everyone's
+    // screen shows its numbers only in the last minWait seconds, which start once all have loaded
+    // the song (see releaseIfReady), or when the wait for them is over.
+    const total = minWait > 0 ? delay + minWait : wait;
+    player.lastStartTime = now + total;
+    player.currentTime = -total;
+    player.readyGate = { link: track.link, start: player.lastStartTime, deadline: now + total - minWait, since: now, waiting: viewers, lead: minWait };
+  }
+
+  /** A socket that is, or speaks for, a viewer's screen: their browser page, or their space page (the world's video player). */
+  static isScreenSocket(s) {
+    return (s.type === 'player' || s.type === 'space') && !!s.u && s.u.id != null && s.u.id !== '';
+  }
+
+  /** The viewer a screen socket belongs to (see holdForReady). */
+  static viewerKey(s) {
+    return String(s.u.id);
   }
 
   /**
-   * A screen has loaded the track the room is waiting on (see holdForReady).
+   * A screen has loaded the track the room is waiting on (see holdForReady). `start` is the start
+   * time the screen was told for it: a report for an earlier start of the same track (a restarted
+   * song) doesn't count for this wait. A screen that sends none (an older page) counts by link.
    * @param {Object} ws - The screen's WebSocket.
-   * @param {{link: string}} data
+   * @param {{link: string, start?: number}} data
    */
   trackReady(ws, data) {
     const player = this.videoPlayers[ws.i];
     const gate = player && player.readyGate;
-    if (!gate || !data || data.link !== gate.link) return;
-    gate.waiting.delete(ws);
+    if (!gate || !data || data.link !== gate.link || !App.isScreenSocket(ws)) return;
+    if (data.start != null && Number(data.start) !== gate.start) return;
+    // From a space page, only for the world's video player, which reports there.
+    if (ws.type === 'space' && data.native !== true) return;
+    gate.waiting.delete(App.viewerKey(ws));
     this.releaseIfReady(ws.i);
   }
 
@@ -941,17 +1052,20 @@ class App {
     if (!gate) return;
     const now = new Date().getTime() / 1000;
     const track = player.playlist[player.currentTrack];
-    if (!track || track.link !== gate.link || player.paused || player.lastStartTime !== gate.start || now >= gate.start) {
+    if (!track || track.link !== gate.link || player.paused || player.lastStartTime !== gate.start || now >= gate.deadline) {
       player.readyGate = null;
       return;
     }
     if (gate.waiting.size) return;
     player.readyGate = null;
-    const start = now + READY_LEAD_S;
+    // Karaoke counts down in full from here (gate.lead), once everyone has the song: ready at 2 s
+    // starts at 5 s, at 6 s starts at 9 s. Readiness counts until the wait's end (gate.deadline),
+    // which is gate.lead before the start, so this is never later than the start it replaces.
+    const start = now + (gate.lead > 0 ? gate.lead : READY_LEAD_S);
     if (start >= player.lastStartTime) return;
     player.lastStartTime = start;
     player.currentTime = now - start;
-    console.log(`[READY] Every screen loaded "${track.title || track.link}" in ${(now - gate.since).toFixed(1)}s; starting it for ${instanceId}.`);
+    console.log(`[READY] Every screen loaded "${track.title || track.link}" in ${(now - gate.since).toFixed(1)}s; starting it in ${(start - now).toFixed(1)}s for ${instanceId}.`);
     player.sockets.forEach(socket => {
       this.send(socket, Commands.READY_START, {
         link: track.link, newLastStartTime: player.lastStartTime, newCurrentTime: player.currentTime
@@ -1034,10 +1148,11 @@ class App {
    * Transmits `SEARCH_RESULTS` back to the requesting WebSocket client.
    *
    * The SEARCH message's data is either a plain string (a YouTube search or a link) or
-   * `{ term: string, source: 'youtube' | 'archive' | 'tubi' | 'nasa' | 'eso' | 'esodome' | 'screen', searchId?: string|number }`;
+   * `{ term: string, source: 'youtube' | 'archive' | 'tubi' | 'nasa' | 'eso' | 'esodome' | 'shoutcast' | 'radiobrowser' | 'somafm' | 'internetradio' | 'screen', searchId?: string|number }`;
    * 'screen' takes a screen.sdq.st room code (or its link) and gives that room's screen share.
    * 'archive' searches the Internet Archive's public-domain movies and TV, 'tubi' the titles in Tubi's
-   * categories, 'nasa' NASA+ (see server/streaming.js), and 'eso' ESO's videos and 'esodome' its fulldome ones (server/eso.js). A pasted link is looked up whichever source
+   * categories, 'nasa' NASA+ (see server/streaming.js), 'eso' ESO's videos and 'esodome' its fulldome ones (server/eso.js),
+   * and 'shoutcast', 'radiobrowser', 'somafm' and 'internetradio' radio stations in Shoutcast's, Radio Browser's and internet-radio.com's directories and SomaFM's channels (server/radio.js). A pasted link is looked up whichever source
    * is picked. A `searchId` comes back on the SEARCH_RESULTS reply (and on the search's ERROR), so
    * a client can tell which of its searches a reply answers. Every search gets one SEARCH_RESULTS.
    *
@@ -1047,8 +1162,9 @@ class App {
    */
   async search(data, ws) {
     const isObject = data && typeof data === 'object';
-    let term = String((isObject ? data.term : data) || '').trim().slice(0, 500);
-    const source = isObject && ['archive', 'tubi', 'nasa', 'eso', 'esodome', 'screen'].includes(data.source) ? data.source : 'youtube';
+    const raw = String((isObject ? data.term : data) || '').trim();
+    let term = raw.slice(0, 500);
+    const source = isObject && ['archive', 'tubi', 'nasa', 'eso', 'esodome', 'shoutcast', 'radiobrowser', 'somafm', 'internetradio', 'screen'].includes(data.source) ? data.source : 'youtube';
     // A screen share's room code is its watch link; a pasted link (watch or publish) is used as it is.
     if (source === 'screen' && term && !/^(https?:\/\/|www\.)/i.test(term)) {
       term = `https://screen.sdq.st:8443/?room=${encodeURIComponent(term.slice(0, 100))}`;
@@ -1056,7 +1172,13 @@ class App {
     const rawId = isObject ? data.searchId : undefined;
     const tag = (typeof rawId === 'number' && Number.isFinite(rawId)) || (typeof rawId === 'string' && rawId.length <= 64)
       ? { searchId: rawId } : undefined;
-    const results = videos => this.send(ws, Commands.SEARCH_RESULTS, videos, tag);
+    // Titles for adults (Tubi's R and TV-MA, the Archive's adult films) are left out where the
+    // world doesn't allow them (see media.filterMature).
+    // `hidden` says how many were left out, for the panel's note under the results.
+    const results = videos => {
+      const { items, skipped } = media.filterMature(ws, videos);
+      this.send(ws, Commands.SEARCH_RESULTS, items, Object.assign({}, tag, skipped ? { hidden: skipped } : {}));
+    };
     const fail = message => {
       results([]);
       this.send(ws, Commands.ERROR, { message }, tag);
@@ -1065,6 +1187,8 @@ class App {
       results([]);
       return;
     }
+    // A link is never cut short: one longer than a search can be isn't looked up.
+    if (/^(https?:\/\/|www\.)/i.test(raw) && raw.length > 500) { fail('That link is too long.'); return; }
     // Twitch, Vimeo, Internet Archive and direct video/stream links become results, as a YouTube
     // link does. An Archive link lists each video in its item.
     const detected = media.detect(term);
@@ -1074,7 +1198,13 @@ class App {
         return;
       }
       try {
-        results(await media.resolveMediaLinks(term));
+        // One that needs a rating and came without one (an Archive file whose item couldn't be
+        // read) counts as for adults here; whether it plays is checked on its own (media.js).
+        const found = (await media.resolveMediaLinks(term)).map(v => (v && typeof v.mature !== 'boolean'
+          && MediaSources.needsRating(media.detect(v.link || '')) ? { ...v, mature: true } : v));
+        // A link to a title for adults says why it has no results (the reply still counts what was hidden).
+        results(found);
+        if (found.length && !media.filterMature(ws, found).items.length) this.send(ws, Commands.ERROR, { message: media.matureMessage(term) }, tag);
       } catch (error) {
         fail(error.message);
       }
@@ -1100,7 +1230,14 @@ class App {
     // If it starts with http://, https://, or www., we should return an error
     // or empty results, rather than searching YouTube for the URL string.
     if (/^(https?:\/\/|www\.)/i.test(term)) {
-      fail("I can't play that link. Try YouTube, Twitch, Vimeo, Internet Archive, Library of Congress, or a direct video link (.mp4, .m3u8, .mpd, VRCDN .live.ts).");
+      // A radio station's playlist or stream, found by what the link sends.
+      const station = /^https?:\/\//i.test(term) ? await media.sniffRadio(term) : null;
+      if (station) {
+        if (media.allowedFor(ws, station.link)) results([station]);
+        else fail(media.UNTRUSTED_MESSAGE);
+        return;
+      }
+      fail("I can't play that link. Try YouTube, Twitch, Vimeo, Internet Archive, Library of Congress, a radio station (.pls, .m3u, Shoutcast), or a direct video link (.mp4, .m3u8, .mpd, VRCDN .live.ts).");
       return;
     }
 
@@ -1111,6 +1248,20 @@ class App {
         const videos = source === 'tubi' ? await streaming.searchTubi(term) : await streaming.searchNasa(term);
         console.log(`[SEARCH] ${source} ${JSON.stringify(term)}: ${videos.length} results in ${Date.now() - started}ms (socket type: ${ws.type || 'N/A'}).`);
         results(videos);
+      } catch (error) {
+        console.error(`Error searching ${name} for ${JSON.stringify(term)}:`, error.message);
+        fail(`${name} search failed. Try again in a moment.`);
+      }
+      return;
+    }
+    const radioSearches = { shoutcast: ['Shoutcast', radio.searchShoutcast], radiobrowser: ['Radio Browser', radio.searchRadioBrowser], somafm: ['SomaFM', radio.searchSomaFM],
+      internetradio: ['internet-radio.com', radio.searchInternetRadio] };
+    if (radioSearches[source]) {
+      const [name, searchFn] = radioSearches[source];
+      try {
+        const stations = await searchFn(term);
+        console.log(`[SEARCH] ${source} ${JSON.stringify(term)}: ${stations.length} results in ${Date.now() - started}ms (socket type: ${ws.type || 'N/A'}).`);
+        results(stations);
       } catch (error) {
         console.error(`Error searching ${name} for ${JSON.stringify(term)}:`, error.message);
         fail(`${name} search failed. Try again in a moment.`);
@@ -1171,8 +1322,9 @@ class App {
           console.error(`[ERROR] Action by ${App.who(ws.u)} in ${ws.i} failed:`, err);
           try { this.send(ws, Commands.ERROR, { message: "That didn't work. Try again." }); } catch (e) { /* socket gone */ }
         };
+        // The action's promise, for a caller that waits for it (nothing when it isn't allowed).
         try {
-          Promise.resolve(callback()).catch(failed);
+          return Promise.resolve(callback()).catch(failed);
         } catch (err) {
           failed(err);
         }

@@ -26,17 +26,28 @@ const CATALOG_TTL_MS = 6 * 60 * 60 * 1000;
 const CATALOG_RETRY_MS = 5 * 60 * 1000;
 const NASA_TTL_MS = 60 * 60 * 1000;
 /** Most episodes a Tubi series gives, and results a search gives. */
-const MAX_EPISODES = 200;
+const MAX_EPISODES = 300;
+/** Episode pages read at a time, for a series' seasons after the first. */
+const EPISODES_AT_ONCE = 4;
+/**
+ * The longest a series' episode pages are read for (the panel waits LIST_REPLY_MS, 120 s, for the
+ * list): episodes not read by then are listed by link, with their season and number for a title.
+ * A list like that, or with an episode that wouldn't load, is kept only PARTIAL_TTL_MS.
+ */
+const SERIES_DEADLINE_MS = 60000;
+const PARTIAL_TTL_MS = 60 * 1000;
 const MAX_RESULTS = 40;
 /** Categories that depend on who's watching, or repeat others, aren't searched. */
 const SKIP_CATEGORIES = new Set(['recommended_for_you', 'continue_watching', 'queue', 'weekly_watchlist']);
 
 const cache = new TtlCache({ maxEntries: 400 });
+/** Episodes read from their own pages (a long series has hundreds), kept apart from the pages. */
+const episodeCache = new TtlCache({ maxEntries: 3000 });
 
 const clean = (s, max = 200) => String(s || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
 const decodeEntities = s => String(s || '')
-  .replace(/&#(\d+);/g, (m, n) => String.fromCodePoint(Number(n)))
-  .replace(/&#x([0-9a-f]+);/gi, (m, n) => String.fromCodePoint(parseInt(n, 16)))
+  .replace(/&#(\d+);/g, (m, n) => (Number(n) > 0 && Number(n) <= 0x10ffff ? String.fromCodePoint(Number(n)) : m))
+  .replace(/&#x([0-9a-f]+);/gi, (m, n) => (parseInt(n, 16) > 0 && parseInt(n, 16) <= 0x10ffff ? String.fromCodePoint(parseInt(n, 16)) : m))
   .replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
 const https = url => (String(url || '').startsWith('//') ? `https:${url}` : String(url || ''));
 
@@ -57,6 +68,27 @@ function parseTubiData(html) {
   const body = html.slice(start + 'window.__data='.length, end).trim().replace(/;\s*$/, '')
     .replace(/:undefined(?=[,}\]])/g, ':null');
   return JSON.parse(body);
+}
+
+/**
+ * Every season of a Tubi series page, from the page's query state (window.__REACT_QUERY_STATE__):
+ * [{number, episodes: [{id, num}]}], or null. The site data has the details of the first season's
+ * episodes only (and at most 20 of them); this lists every season's episodes, by id.
+ */
+function parseTubiSeasons(html) {
+  const start = html.indexOf('window.__REACT_QUERY_STATE__=');
+  if (start < 0) return null;
+  const end = html.indexOf('</script>', start);
+  try {
+    // Its `undefined`s are in lists too ("[undefined]"), not only after a name.
+    const body = html.slice(start + 'window.__REACT_QUERY_STATE__='.length, end).trim().replace(/;\s*$/, '')
+      .replace(/([:[,])undefined(?=[,}\]])/g, '$1null');
+    const query = (JSON.parse(body).queries || []).find(q => q && Array.isArray(q.queryKey) && q.queryKey[0] === 'seriesPaginationInfo');
+    const seasons = query && query.state && query.state.data && query.state.data.seasons;
+    return Array.isArray(seasons) ? seasons : null;
+  } catch (e) {
+    return null;
+  }
 }
 
 /** A Tubi page's data (path like "movies/123" or "category/westerns"), not cached. */
@@ -80,7 +112,9 @@ async function fetchTubiPage(path) {
     }
     throw new Error("Tubi sent this server a different page than usual, so its titles can't be read. It may not serve this server.");
   }
-  return parseTubiData(html);
+  const data = parseTubiData(html);
+  if (/^series\//.test(path)) data.fvpSeasons = parseTubiSeasons(html);
+  return data;
 }
 
 /**
@@ -96,6 +130,31 @@ function tubiPicture(c) {
   return https(list[0] || '');
 }
 
+/** Tubi's picture server, and the biggest picture sent on from it. */
+const TUBI_PICTURES = /^https:\/\/canvas-lb\.tubitv\.com\/[A-Za-z0-9_=\/.-]{1,400}$/;
+const MAX_PICTURE_BYTES = 3 * 1024 * 1024;
+const pictureCache = new TtlCache({ maxEntries: 400 });
+
+/**
+ * A Tubi picture as a JPEG (or PNG), for the world's panel (/api/tubi-picture). Tubi's picture
+ * server sends WebP to anything that doesn't ask for something else, and Unity can't show WebP,
+ * so the panel's thumbnails come through here, asking for a JPEG.
+ * @returns {Promise<{type: string, body: Buffer}>}
+ */
+function tubiPictureFile(url) {
+  url = String(url || '');
+  if (!TUBI_PICTURES.test(url)) return Promise.reject(new Error("That isn't a Tubi picture."));
+  return pictureCache.remember(url, PAGE_TTL_MS, async () => {
+    const res = await fetch(url, { headers: { 'user-agent': UA, accept: 'image/jpeg,image/png;q=0.9' }, signal: AbortSignal.timeout(TIMEOUT_MS) });
+    const type = String(res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    if (!res.ok) throw new Error(`Tubi answered ${res.status}.`);
+    if (type !== 'image/jpeg' && type !== 'image/png') throw new Error(`Tubi sent ${type || 'something else'}.`);
+    const body = Buffer.from(await res.arrayBuffer());
+    if (body.length > MAX_PICTURE_BYTES) throw new Error('That picture is too big.');
+    return { type, body };
+  });
+}
+
 /** A Tubi movie or episode (content type 'v') or series ('s') as a playlist item or search result. */
 function tubiItem(c, kind) {
   const isSeries = kind === 'series' || c.type === 's';
@@ -109,7 +168,9 @@ function tubiItem(c, kind) {
     link: `https://tubitv.com/${path}/${c.id}`,
     channel: { name: year ? `Tubi, ${year}` : 'Tubi', link: '' },
     description: clean(c.description, 300),
-    source: 'tubi'
+    source: 'tubi',
+    // R, TV-MA, not rated (see MediaSources.tubiMature): only where the world allows them.
+    mature: MediaSources.tubiMature(c.ratings)
   };
 }
 
@@ -131,24 +192,121 @@ async function tubiStream(kind, id) {
     if (c.needs_login) throw new Error('Tubi only plays this one for signed-in viewers.');
     throw new Error("Tubi only offers this one with copy protection, which can't play here.");
   }
-  return { url: pick.manifest.url, live: false };
+  return { url: pick.manifest.url, live: false, mature: MediaSources.tubiMature(c.ratings) };
 }
 
-/** Every episode of a Tubi series, in order. */
-async function tubiSeries(id) {
+/**
+ * An episode's playlist item from its own page, for the ones a series page has no details of
+ * (every season after the first). Only the item is kept, not the page.
+ */
+function tubiEpisode(id) {
+  return episodeCache.remember(`tubi:episode:${id}`, PAGE_TTL_MS, async () => {
+    const data = await fetchTubiPage(`tv-shows/${id}`);
+    const c = data.video && data.video.byId && data.video.byId[id];
+    if (!c) throw new Error("That Tubi episode isn't available.");
+    return tubiItem(c, 'episode');
+  });
+}
+
+/**
+ * A Tubi series' episodes, season 1 first and each season in order, or one season's
+ * (`season`: its number, or 'first' for the lowest). Tubi's series page has the details of the
+ * first season's episodes only; every season's episodes are listed by id (see parseTubiSeasons),
+ * and the rest are read from their own pages, a few at a time. An episode's title says its season
+ * and number ("S01:E03 - Name").
+ */
+async function tubiSeries(id, season, limit) {
+  // Season 0 (specials) is a season, not "every season".
+  const key = `tubi:series:${id}:${season != null && season !== '' ? season : 'all'}${limit ? `:${limit}` : ''}`;
+  const list = await cache.remember(key, PAGE_TTL_MS, () => readTubiSeries(id, season, limit));
+  // Missing some episodes' details: asked for again soon (the ones read are kept on their own).
+  if (list.partial && !list.shortened) { list.shortened = true; cache.set(key, list, PARTIAL_TTL_MS); }
+  return list;
+}
+
+/** readTubiSeries: `limit`, when given, is the most episodes listed (and read), from the first. */
+async function readTubiSeries(id, season, limit) {
   const data = await tubiPage(`series/${id}`);
   const byId = (data.video && data.video.byId) || {};
   const series = byId[`0${id}`] || byId[id];
   if (!series) throw new Error("That Tubi series isn't available.");
-  const items = [];
-  for (const season of series.seasons || []) {
-    for (const ep of season.episodes || []) {
-      if (items.length >= MAX_EPISODES) break;
-      const c = byId[ep.id] || ep;
-      if (c && c.id) items.push(tubiItem(c, 'episode'));
+  // A series for adults has every episode for adults, whatever an episode's own rating.
+  const seriesMature = MediaSources.tubiMature(series.ratings);
+  // A missing number (null, which Number() makes 0) takes the fallback.
+  const num = (v, fallback) => (v != null && Number.isFinite(Number(v)) && String(v).trim() !== '' ? Number(v) : fallback);
+  // [{n, eps: [{id, num}]}]: the full list where the page has it, else the site data's, which has
+  // the first season only (and 20 of its episodes at most). That list counts as partial, and the
+  // page is read again next time.
+  const fallback = !(data.fvpSeasons && data.fvpSeasons.length);
+  if (fallback) cache.delete(`tubi:series/${id}`);
+  const listed = (fallback ? series.seasons || [] : data.fvpSeasons).map((s, i) => ({
+    n: num(s.number, 1000 + i),
+    eps: (s.episodes || []).map((ep, k) => ({ id: String(ep.id || ''), num: num(ep.num != null ? ep.num : ep.episode_number != null ? ep.episode_number : (byId[ep.id] || {}).episode_number, 1000 + k) }))
+      .filter(ep => /^\d{1,12}$/.test(ep.id))
+  })).sort((a, b) => a.n - b.n);
+  let seasons = listed;
+  const one = season != null && season !== ''; // one season asked for (0 is the specials)
+  if (season === 'first') seasons = listed.slice(0, 1);
+  else if (one) seasons = listed.filter(s => s.n === Number(season));
+  if (one && !seasons.length) throw new Error(`That Tubi series has no season ${season} here.`);
+  const wanted = [];
+  for (const s of seasons) {
+    for (const ep of s.eps.slice().sort((a, b) => a.num - b.num)) {
+      if (wanted.length < Math.min(MAX_EPISODES, limit || MAX_EPISODES)) wanted.push({ season: s.n, ep });
     }
   }
-  return { title: clean(series.title, 120) || 'Tubi series', items };
+  const items = new Array(wanted.length);
+  let partial = fallback;
+  // An episode with its season and number in its title. Without details (not read in time, or
+  // its page wouldn't load) it's still listed, so it can be played: its title and picture come
+  // when it's looked up.
+  const entry = (k, item) => {
+    const { season: n, ep } = wanted[k];
+    item = Object.assign({}, item || { title: '', thumbnail: '', duration: 0, link: `https://tubitv.com/tv-shows/${ep.id}` });
+    // A series for adults marks every episode. Otherwise an episode keeps its own rating, and one
+    // without its details has none, so it's checked on its own when it's listed or added where the
+    // world doesn't allow titles for adults (see media.screenMature).
+    if (seriesMature) item.mature = true;
+    else if (typeof item.mature !== 'boolean') delete item.mature;
+    // Most titles already say "S01:E03 - ..."; one that doesn't gets it.
+    if (!/^S\d+\s*:?\s*E\d+/i.test(item.title) && n < 1000 && ep.num < 1000) {
+      item.title = clean(`S${String(n).padStart(2, '0')}:E${String(ep.num).padStart(2, '0')}${item.title ? ` - ${item.title}` : ''}`);
+    }
+    if (!item.title) item.title = 'Tubi episode';
+    return item;
+  };
+  let next = 0;
+  let late = false;
+  const worker = async () => {
+    while (next < wanted.length && !late) {
+      const k = next++;
+      const { ep } = wanted[k];
+      let item = null;
+      if (byId[ep.id]) item = tubiItem(byId[ep.id], 'episode');
+      else {
+        try { item = await tubiEpisode(ep.id); } catch (e) { partial = true; }
+      }
+      if (!late) items[k] = entry(k, item);
+    }
+  };
+  let timer;
+  await Promise.race([
+    Promise.all(Array.from({ length: EPISODES_AT_ONCE }, worker)),
+    new Promise(resolve => { timer = setTimeout(resolve, SERIES_DEADLINE_MS); })
+  ]);
+  clearTimeout(timer);
+  late = true;
+  for (let k = 0; k < items.length; k++) {
+    if (items[k]) continue;
+    // Not reached in time: the series page's own details of it, where it has them.
+    const known = byId[wanted[k].ep.id];
+    items[k] = entry(k, known ? tubiItem(known, 'episode') : null);
+    if (!known) partial = true;
+  }
+  if (fallback) console.warn(`[TUBI] series/${id}: the page had no list of every season, so only the first season's episodes are listed.`);
+  else if (partial) console.warn(`[TUBI] series/${id}: some episodes are listed without their details.`);
+  const title = clean(series.title, 120) || 'Tubi series';
+  return { title: one && season !== 'first' ? clean(`${title}, Season ${season}`, 120) : title, items, partial, mature: seriesMature };
 }
 
 /** The titles in a Tubi category (up to 50, as its page shows). Only these are cached, not the page. */
@@ -321,7 +479,8 @@ async function resolveLink(link) {
   if (!media) return null;
   if (media.type === 'tubi') {
     if (media.kind === 'series') {
-      const { items } = await tubiSeries(media.id);
+      // Only the first episode is read, not the rest of its season.
+      const { items } = await tubiSeries(media.id, media.season != null ? media.season : 'first', 1);
       if (!items.length) throw new Error('That Tubi series has no episodes here.');
       return strip(items[0]);
     }
@@ -334,14 +493,38 @@ async function resolveLink(link) {
 /** Like resolveLink, but a Tubi series gives every episode. */
 async function resolveLinks(link) {
   const media = MediaSources.detect(link);
-  if (media && media.type === 'tubi' && media.kind === 'series') return (await tubiSeries(media.id)).items.map(strip);
+  if (media && media.type === 'tubi' && media.kind === 'series') return (await tubiSeries(media.id, media.season)).items.map(strip);
   const one = await resolveLink(link);
   return one ? [one] : [];
 }
 
-/** A playlist item has a title, picture, length and link (search results carry more). */
+/**
+ * A playlist item has a title, picture, length and link (search results carry more), and whether
+ * it's for adults, which is taken off before it goes in the playlist (see media.screenMature).
+ */
 function strip(item) {
-  return { title: item.title, thumbnail: item.thumbnail, duration: item.duration, link: item.link };
+  const kept = { title: item.title, thumbnail: item.thumbnail, duration: item.duration, link: item.link };
+  if (typeof item.mature === 'boolean') kept.mature = item.mature;
+  return kept;
+}
+
+/**
+ * Whether a Tubi link's title is for adults (see MediaSources.tubiMature): a movie or episode by
+ * its own rating, a series by its own.
+ * @param {string} link
+ * @returns {Promise<boolean>}
+ */
+async function isMature(link) {
+  const media = MediaSources.detect(link);
+  if (!media || media.type !== 'tubi') throw new Error("That isn't a Tubi link.");
+  if (media.kind === 'series') {
+    const data = await tubiPage(`series/${media.id}`);
+    const byId = (data.video && data.video.byId) || {};
+    const series = byId[`0${media.id}`] || byId[media.id];
+    if (!series) throw new Error("That Tubi series isn't available.");
+    return MediaSources.tubiMature(series.ratings);
+  }
+  return MediaSources.tubiMature((await tubiContent(media.kind, media.id)).ratings);
 }
 
 /**
@@ -365,7 +548,11 @@ function listSource(u) {
   const host = u.hostname.toLowerCase().replace(/^www\./, '');
   const parts = u.pathname.split('/').filter(Boolean);
   if (host === 'tubitv.com' && parts[0] === 'category' && /^[a-z0-9_-]{1,80}$/.test(parts[1] || '')) return { kind: 'streaming', site: 'tubi-category', id: parts[1], name: 'Tubi category' };
-  if (host === 'tubitv.com' && parts[0] === 'series' && /^\d{1,12}$/.test(parts[1] || '')) return { kind: 'streaming', site: 'tubi-series', id: parts[1], name: 'Tubi series' };
+  if (host === 'tubitv.com' && parts[0] === 'series' && /^\d{1,12}$/.test(parts[1] || '')) {
+    // A season's page (series/<id>/<name>/season-2) is that season alone.
+    const season = MediaSources.detect(u.href);
+    return { kind: 'streaming', site: 'tubi-series', id: parts[1], season: season && season.season, name: 'Tubi series' };
+  }
   if (host === 'plus.nasa.gov' && parts[0] === 'video_series' && /^[a-z0-9-]{1,200}$/.test(parts[1] || '')) return { kind: 'streaming', site: 'nasa-series', id: parts[1], name: 'NASA+ series' };
   return null;
 }
@@ -373,15 +560,16 @@ function listSource(u) {
 /** Loads a list from listSource: {title, items}. */
 async function loadList(source) {
   const list = source.site === 'tubi-category' ? await tubiCategory(source.id)
-    : source.site === 'tubi-series' ? await tubiSeries(source.id)
+    : source.site === 'tubi-series' ? await tubiSeries(source.id, source.season)
       : await nasaSeries(source.id);
   // A list's videos go into the playlist as they are, and a series isn't one video (its link in a
   // search result is looked up when added, which picks its first episode).
   const videos = list.items.filter(item => !/^https:\/\/tubitv\.com\/series\//.test(item.link));
-  return { title: list.title, items: videos.map(strip) };
+  // partial: some of a series' episodes are listed without their details (see readTubiSeries).
+  return { title: list.title, items: videos.map(strip), partial: !!list.partial };
 }
 
 module.exports = {
-  resolveLink, resolveLinks, streamFor, listSource, loadList,
-  searchTubi, searchNasa, tubiCategories, parseTubiData
+  resolveLink, resolveLinks, streamFor, listSource, loadList, isMature,
+  searchTubi, searchNasa, tubiCategories, parseTubiData, tubiPictureFile
 };

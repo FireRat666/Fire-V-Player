@@ -37,6 +37,8 @@ var Commands = {
   SAVE_LIST: 'save-list', // a UI -> server: { link } adds a list to the room's shared Lists (host, or anyone while unlocked)
   REMOVE_LIST: 'remove-list', // a UI -> server: { id } removes one of the room's shared Lists (same rule)
   LISTS_UPDATED: 'lists-updated', // server -> everyone in the room: { lists } after a save or remove
+  RADIO_CHECK: 'radio-check', // a UI -> server: { link } whether a radio station can play here (Browse's offer)
+  RADIO_CHECK_RESULT: 'radio-check-result', // server -> that UI: { link, ok } or { link, ok: false, error }
   CLEAR_PLAYLIST: 'clear-playlist',
   USER_VIDEO_PLAYER: 'user-video-player',
   ADD_TO_PLAYERS: 'add-to-players',
@@ -47,6 +49,8 @@ var Commands = {
   MUTE: 'mute',
   CAPTIONS: 'captions', // in-world script -> its own player page: show or hide closed captions
   PREVIEW_VIDEO: 'preview-video', // in-world script -> its own player page: play a preview video (or null to go back to the room's track)
+  TUBI_STREAM: 'tubi-stream', // player page -> its in-world script: { n, link }, look a Tubi stream up from this device (tubi-native.js)
+  TUBI_STREAM_RESULT: 'tubi-stream-result', // in-world script -> its player page: { n, ok: true, url, mature } or { n, ok: false, reason }
   AUTO_SYNC: 'auto-sync',
   SKIP_BACK: 'skip-back',
   SKIP_FORWARD: 'skip-forward',

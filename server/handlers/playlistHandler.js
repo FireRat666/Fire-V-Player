@@ -9,6 +9,7 @@ const Commands = require('../../public/commands.js');
 const { videoById } = require('../youtube/search.js');
 const media = require('../media.js');
 const lists = require('../lists.js');
+const radio = require('../radio.js');
 // The most videos a YouTube playlist import adds. The whole playlist goes to everyone on each
 // change, so this keeps that message a sensible size.
 const MAX_PLAYLIST_IMPORT = 500;
@@ -28,12 +29,37 @@ const MAX_WAITING = 30;
  * @throws {Error} If video resolution fails or link is untrusted/invalid.
  */
 async function resolveVideoData(app, ws, v) {
+  // What the device that looked a Tubi title up said of its rating counts only when the server
+  // can't look it up itself (see media.screenMature).
+  const said = v && typeof v === 'object' && typeof v.mature === 'boolean' ? v.mature : undefined;
+  if (v && typeof v === 'object') {
+    v = { ...v };
+    delete v.mature;
+  }
+  return media.screenMature(ws, await resolveVideoLink(app, ws, v), said);
+}
+
+/** resolveVideoData, before the item is checked against the world's mature-links setting. */
+async function resolveVideoLink(app, ws, v) {
   if (typeof v === 'string') {
     const videoId = app.getYoutubeId(v);
     if (!videoId) {
       if (media.detect(v) && !media.allowedFor(ws, v)) throw new Error(media.UNTRUSTED_MESSAGE);
+      // A live stream at a sound file's address on plain http plays as a station (see
+      // radio.soundStation); anything else there (a recording) stays a file.
+      const live = await radio.soundStation(v.trim());
+      if (live) {
+        if (!media.allowedFor(ws, live.link)) throw new Error(media.UNTRUSTED_MESSAGE);
+        return live;
+      }
       const other = await media.resolveMediaLink(v); // Twitch, Vimeo, a file or stream
       if (other) return other;
+      // A link that turns out to be a radio station (a radio .m3u, or a stream's own address).
+      const station = /^https?:\/\//i.test(v.trim()) ? await media.sniffRadio(v) : null;
+      if (station) {
+        if (!media.allowedFor(ws, station.link)) throw new Error(media.UNTRUSTED_MESSAGE);
+        return station;
+      }
       throw new Error("Invalid YouTube URL or ID");
     }
     const resolved = await videoById(videoId);
@@ -85,15 +111,39 @@ async function resolveVideoData(app, ws, v) {
  * @param {boolean} [isYoutubeWebsite] - Whether the request originated from the web search.
  * @returns {Promise<void>}
  */
-async function addToPlaylist(app, ws, v, skipUpdate, isYoutubeWebsite) {
-  const player = app.videoPlayers[ws.i];
+/**
+ * Runs `job` after this client's earlier ones, so videos it adds one after another (a list's
+ * episodes) go into the playlist in the order it sent them, however long each lookup takes.
+ */
+function inOrder(ws, job) {
+  const run = (ws.addTail || Promise.resolve()).then(job);
+  ws.addTail = run.catch(() => {});
+  return run;
+}
+
+function addToPlaylist(app, ws, v, skipUpdate, isYoutubeWebsite) {
+  // The room it was asked in: a socket that has moved to another room since doesn't add there.
+  const room = ws.i;
+  // And the playlist it was asked for: one cleared or replaced since (+ All's queued episodes
+  // included) doesn't get it.
+  const asked = app.videoPlayers[room];
+  const gen = asked && asked.gen;
+  return inOrder(ws, () => (ws.i === room && app.videoPlayers[room] === asked && (!asked || asked.gen === gen)
+    ? addNow(app, ws, v, skipUpdate, isYoutubeWebsite, room) : undefined));
+}
+
+async function addNow(app, ws, v, skipUpdate, isYoutubeWebsite, room = ws.i) {
+  const player = app.videoPlayers[room];
   if (player) {
     // Locked, in playlist mode: someone else's video waits for the host to approve it.
     if (player.locked && !player.isKaraoke && ws.u && ws.u.id && player.host && player.host.id !== ws.u.id) {
-      await suggestVideo(app, ws, v, isYoutubeWebsite);
+      await suggestVideo(app, ws, v, isYoutubeWebsite, room);
       return;
     }
-    app.onlyIfHost(ws, async () => {
+    await app.onlyIfHost(ws, async () => {
+      // The mode and playlist it was allowed for, checked again after the lookup.
+      const karaoke = !!player.isKaraoke;
+      const gen = player.gen;
       let resolvedV;
       try {
         resolvedV = await resolveVideoData(app, ws, v);
@@ -106,14 +156,25 @@ async function addToPlaylist(app, ws, v, skipUpdate, isYoutubeWebsite) {
         app.send(ws, Commands.ERROR, { message: "This video is already in the playlist." });
         return;
       }
+      // The socket moved to another room during the lookup: not added anywhere.
+      if (ws.i !== room || app.videoPlayers[room] !== player || player.gen !== gen) return;
+      if (!!player.isKaraoke !== karaoke) {
+        app.send(ws, Commands.ERROR, { message: 'The player switched mode meanwhile. Add the video again.' });
+        return;
+      }
+      // The same limit as a list added to the end.
+      if (player.playlist.length >= MAX_PLAYLIST_IMPORT) {
+        app.send(ws, Commands.ERROR, { message: `The playlist is full (${MAX_PLAYLIST_IMPORT}).` });
+        return;
+      }
       // Checked again: the host may have locked the player during the lookup.
       if (player.locked && !(player.host && player.host.id === ws.u.id)) {
         app.send(ws, Commands.ERROR, { message: "The player was locked meanwhile. Add the video again to ask the host." });
         return;
       }
-      appendVideo(app, ws.i, app._createVideoObject(resolvedV, ws.u, 'scraper', isYoutubeWebsite), skipUpdate);
-      dropWaiting(app, ws.i, resolvedV.link);
-      await app.savePlayerState(ws.i);
+      appendVideo(app, room, app._createVideoObject(resolvedV, ws.u, 'scraper', isYoutubeWebsite), skipUpdate);
+      dropWaiting(app, room, resolvedV.link);
+      await app.savePlayerState(room);
     }, player.locked);
   }
 }
@@ -185,8 +246,8 @@ function broadcastWaiting(app, instanceId) {
  * @param {boolean} [isYoutubeWebsite] - Whether it came from the web search.
  * @returns {Promise<void>}
  */
-async function suggestVideo(app, ws, v, isYoutubeWebsite) {
-  const player = app.videoPlayers[ws.i];
+async function suggestVideo(app, ws, v, isYoutubeWebsite, room = ws.i) {
+  const player = app.videoPlayers[room];
   if (!player) return;
   if (!Array.isArray(player.waiting)) player.waiting = [];
   // Checked before the lookup, and again after it, as several adds can be looked up at once.
@@ -202,6 +263,7 @@ async function suggestVideo(app, ws, v, isYoutubeWebsite) {
     return false;
   };
   if (full()) return;
+  const gen = player.gen; // the playlist it was asked for (see addToPlaylist)
   let resolvedV;
   try {
     resolvedV = await resolveVideoData(app, ws, v);
@@ -209,6 +271,8 @@ async function suggestVideo(app, ws, v, isYoutubeWebsite) {
     app.send(ws, Commands.ERROR, { message: `Failed to resolve video: ${err.message}` });
     return;
   }
+  // Moved to another room during the lookup, or the room's player was made again: not added.
+  if (ws.i !== room || app.videoPlayers[room] !== player || player.gen !== gen) return;
   if (app._isDuplicateVideo(player, resolvedV.link)) {
     app.send(ws, Commands.ERROR, { message: "This video is already in the playlist." });
     return;
@@ -225,8 +289,12 @@ async function suggestVideo(app, ws, v, isYoutubeWebsite) {
     return;
   }
   if (!player.locked || (player.host && player.host.id === ws.u.id)) {
-    appendVideo(app, ws.i, app._createVideoObject(resolvedV, ws.u, 'scraper', isYoutubeWebsite));
-    await app.savePlayerState(ws.i);
+    if (player.playlist.length >= MAX_PLAYLIST_IMPORT) {
+      app.send(ws, Commands.ERROR, { message: `The playlist is full (${MAX_PLAYLIST_IMPORT}).` });
+      return;
+    }
+    appendVideo(app, room, app._createVideoObject(resolvedV, ws.u, 'scraper', isYoutubeWebsite));
+    await app.savePlayerState(room);
     return;
   }
   if (full()) return;
@@ -234,10 +302,10 @@ async function suggestVideo(app, ws, v, isYoutubeWebsite) {
   // A title that isn't text (a client can send anything) is no title, here and in what follows.
   const title = typeof resolvedV.title === 'string' ? resolvedV.title : '';
   player.waiting.push({ video: app._createVideoObject({ ...resolvedV, title }, user, 'scraper', isYoutubeWebsite), user, timestamp: Date.now() });
-  console.log(`${ws.u.name} asked to add "${title}" in ${ws.i}; it waits for the host.`);
-  broadcastWaiting(app, ws.i);
+  console.log(`${ws.u.name} asked to add "${title}" in ${room}; it waits for the host.`);
+  broadcastWaiting(app, room);
   app.send(ws, Commands.ERROR, { message: `"${title || 'The video'}" waits for the host to approve it.` });
-  await app.savePlayerState(ws.i);
+  await app.savePlayerState(room);
 }
 
 /**
@@ -375,8 +443,33 @@ async function removePlaylistItem(app, ws, index) {
  */
 async function loadPlaylistSource(ws, id) {
   const list = await lists.loadAny(id, MAX_PLAYLIST_IMPORT);
-  const items = list.items.filter(item => !media.detect(item.link) || media.allowedFor(ws, item.link));
-  return { title: list.title, items, skipped: list.items.length - items.length + (list.dropped || 0), truncated: !!list.truncated };
+  const links = list.items.filter(item => !media.detect(item.link) || media.allowedFor(ws, item.link));
+  // A Tubi or Archive item that came without a rating is checked as one being added is
+  // (media.screenMature), a few at a time; one that is for adults, or can't be checked, is left out.
+  const allowed = media.allowsMature(ws) ? links : (await screenUnrated(ws, links)).filter(Boolean);
+  // Titles for adults are left out where the world doesn't allow them (see media.filterMature).
+  const { items } = media.filterMature(ws, allowed);
+  return { title: list.title, items, skipped: list.items.length - items.length + (list.dropped || 0), truncated: !!list.truncated, partial: !!list.partial };
+}
+
+/** A list's items, each unrated Tubi or Archive one checked (null where it's left out). */
+async function screenUnrated(ws, items) {
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const k = next++;
+      const item = items[k];
+      if (!item || typeof item.mature === 'boolean' || !media.needsRating(item.link)) { out[k] = item; continue; }
+      try {
+        out[k] = await media.screenMature(ws, item);
+      } catch (e) {
+        out[k] = null;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: 4 }, worker));
+  return out;
 }
 
 /** A short note about the links of a list that were left out, or ''. */
@@ -526,7 +619,7 @@ async function previewList(app, ws, data) {
   ws.listPreviews++;
   try {
     const list = await loadPlaylistSource(ws, id);
-    reply({ title: list.title, items: list.items, skipped: list.skipped, truncated: list.truncated });
+    reply({ title: list.title, items: list.items, skipped: list.skipped, truncated: list.truncated, partial: list.partial });
   } catch (error) {
     console.error(`Error previewing playlist ${id}:`, error.message);
     reply({ error: lists.errorMessage(error) });

@@ -1,7 +1,7 @@
 /**
  * @fileoverview Unified media player abstraction and multi-source switch.
  * Adapts non-YouTube media sources (HTML5 video, HLS streams, Twitch streams/VODs/clips,
- * Vimeo, and VDO.Ninja) to expose the same interface as the YouTube iframe API,
+ * Vimeo, VDO.Ninja and Bilibili) to expose the same interface as the YouTube iframe API,
  * allowing synchronized playback, seek, volume, and state management.
  * @module public/media-players
  */
@@ -150,6 +150,77 @@ class BaseMediaSource {
 }
 
 /**
+ * What a radio station shows on the screen while its sound plays: its name, the site it's from,
+ * and bars that move while it's playing (still while paused or loading).
+ * @class RadioCard
+ */
+class RadioCard {
+  /**
+   * @param {Object} opts - The source's options (container, title, thumbnail, link).
+   * @param {Object} media - What MediaSources.detect found for the link.
+   * @param {HTMLMediaElement} el - The element playing the sound.
+   */
+  constructor(opts, media, el) {
+    const sites = { shoutcast: 'Shoutcast', radiobrowser: 'Radio Browser', somafm: 'SomaFM', internetradio: 'internet-radio.com' };
+    let site = sites[media.site] || '';
+    if (!site) { try { site = new URL(opts.link).hostname.replace(/^www\./, ''); } catch (e) {} }
+    const name = String(opts.title || '').replace(/\s*\(radio\)\s*$/i, '').trim()
+      || (window.MediaSources ? MediaSources.nameFromLink(opts.link) : '') || 'Radio station';
+    if (!document.getElementById('fvp-radio-style')) {
+      const style = document.createElement('style');
+      style.id = 'fvp-radio-style';
+      style.textContent = '@keyframes fvpRadioBar{0%,100%{transform:scaleY(0.25)}50%{transform:scaleY(1)}}'
+        + '.fvp-radio-bars span{display:inline-block;width:2.2vw;height:9vw;margin:0 0.6vw;border-radius:1vw;background:#4fc3f7;transform-origin:50% 100%;transform:scaleY(0.25)}'
+        + '.fvp-radio-bars.on span{animation:fvpRadioBar 1s ease-in-out infinite}';
+      document.head.appendChild(style);
+    }
+    const card = this.el = document.createElement('div');
+    Object.assign(card.style, { position: 'absolute', inset: '0', zIndex: '1', display: 'flex', flexDirection: 'column',
+      alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '0 8%', boxSizing: 'border-box',
+      color: '#fff', font: '3vw sans-serif', background: 'radial-gradient(circle at 50% 40%, #1a237e 0%, #0d1033 55%, #000 100%)' });
+    if (/^https:\/\//.test(opts.thumbnail || '')) {
+      const img = document.createElement('img');
+      img.src = opts.thumbnail;
+      img.referrerPolicy = 'no-referrer';
+      Object.assign(img.style, { maxWidth: '18vw', maxHeight: '18vw', borderRadius: '2vw', marginBottom: '3vw', objectFit: 'contain' });
+      img.onerror = () => img.remove();
+      card.appendChild(img);
+    }
+    const bars = this.bars = document.createElement('div');
+    bars.className = 'fvp-radio-bars';
+    bars.style.marginBottom = '3vw';
+    for (let i = 0; i < 5; i++) {
+      const b = document.createElement('span');
+      b.style.animationDelay = `${(i * 0.17) % 0.8}s`;
+      bars.appendChild(b);
+    }
+    card.appendChild(bars);
+    const title = document.createElement('div');
+    title.textContent = name;
+    Object.assign(title.style, { font: 'bold 5.5vw sans-serif', lineHeight: '1.15', maxHeight: '13vw', overflow: 'hidden', wordBreak: 'break-word' });
+    card.appendChild(title);
+    const sub = this.sub = document.createElement('div');
+    Object.assign(sub.style, { marginTop: '2vw', color: '#b3e5fc' });
+    card.appendChild(sub);
+    this.site = site;
+    opts.container.appendChild(card);
+    // Playing only with sound to come (HAVE_FUTURE_DATA, as VideoElementSource.state() has it), not while it waits for more.
+    const update = () => this.show(!el.paused && el.readyState >= 3, el.paused && el.readyState >= 2);
+    ['playing', 'pause', 'waiting', 'stalled', 'canplay', 'loadstart', 'emptied'].forEach(n => el.addEventListener(n, update));
+    el.addEventListener('error', () => this.show(false, false, true));
+    this.show(false, false);
+  }
+
+  show(playing, paused, failed) {
+    this.bars.classList.toggle('on', playing);
+    const state = failed ? "Couldn't play this station" : playing ? 'Live radio' : paused ? 'Paused' : 'Tuning in...';
+    this.sub.textContent = this.site ? `${state}  ·  ${this.site}` : state;
+  }
+
+  destroy() { this.el.remove(); }
+}
+
+/**
  * Player adapter for direct HTML5 video/audio files (.mp4, .webm, etc.), HLS streams (.m3u8),
  * DASH streams (.mpd) and MPEG-TS streams (VRCDN's .live.ts).
  * @class VideoElementSource
@@ -162,8 +233,10 @@ class VideoElementSource extends BaseMediaSource {
    */
   constructor(opts, media) {
     super(opts);
-    // A Tubi or NASA+ page: its HLS stream comes from the server first (see loadStream).
-    const hls = media.type === 'hls' || !!media.stream;
+    // A Tubi or NASA+ page: its HLS stream comes from the server first (see loadStream). A radio
+    // station's stream comes from there too, but is sound, played as a file.
+    const hls = media.type === 'hls' || (!!media.stream && media.type !== 'radio');
+    if (media.type === 'radio') this.live = true;
     // A live MPEG-TS stream has no length or position to seek to, as with a live .m3u8.
     if (media.type === 'mpegts' && media.live) this.live = true;
     const el = this.el = document.createElement('video');
@@ -174,6 +247,12 @@ class VideoElementSource extends BaseMediaSource {
     opts.container.appendChild(el);
     this.setVolume(opts.volume);
     this.setMuted(opts.muted);
+    // A station is only sound: the screen shows what's on instead of a black picture. Its own
+    // picture, if its stream has one, is never shown (the element is hidden, not just covered).
+    if (media.type === 'radio') {
+      el.style.visibility = 'hidden';
+      this.radioCard = new RadioCard(opts, media, el);
+    }
 
     el.addEventListener('loadedmetadata', () => {
       this.ready = true;
@@ -196,11 +275,69 @@ class VideoElementSource extends BaseMediaSource {
       this.loadStream(opts, el);
       return;
     }
+    // An Internet Archive file is checked first where this viewer's world doesn't allow titles
+    // for adults (see MediaSources.needsRating): the server looks its item's rating up.
+    if (media.type === 'file' && media.archive && !(opts.allowMature && opts.allowMature())) {
+      this.checkRating(opts, () => this.load(opts, media, el, opts.link));
+      return;
+    }
     this.load(opts, media, el, opts.link);
   }
 
-  /** Asks the server for a Tubi or NASA+ page's stream, then plays it as an HLS stream. */
+  /** Asks the server whether this link is for adults (/api/rating), and plays it (`then`) if not. */
+  checkRating(opts, then) {
+    fetch(`/api/rating?link=${encodeURIComponent(opts.link)}`)
+      .then(res => res.json().catch(() => ({})).then(body => {
+        if (!res.ok || typeof body.mature !== 'boolean') throw new Error(body.error || "Couldn't check this video's rating, so it doesn't play here.");
+        return body.mature;
+      }))
+      .then(mature => {
+        if (this.destroyed) return;
+        if (mature) this.refuseMature(opts);
+        else then();
+      })
+      .catch(err => { if (!this.destroyed) opts.onError(err.message); });
+  }
+
+  /** This title is for adults, and this viewer's world doesn't allow them: it says so instead. */
+  refuseMature(opts) {
+    if (this.notice) return;
+    const d = this.notice = document.createElement('div');
+    d.textContent = MediaSources.MATURE_MESSAGE;
+    Object.assign(d.style, { position: 'absolute', inset: '0', display: 'flex', alignItems: 'center', justifyContent: 'center',
+      textAlign: 'center', padding: '0 10%', boxSizing: 'border-box', color: '#ddd', background: '#000', font: '4vw sans-serif' });
+    opts.container.appendChild(d);
+    opts.onError(MediaSources.MATURE_MESSAGE);
+  }
+
+  /**
+   * Asks the server for a Tubi or NASA+ page's stream, then plays it as an HLS stream, or for a
+   * radio station's stream (`audio`), played as a file that never ends.
+   */
   loadStream(opts, el) {
+    // A Tubi stream is looked up from this viewer's own device first (Tubi serves only some
+    // countries, and the server may be in another), then by the server.
+    const media = MediaSources.detect(opts.link);
+    if (media && media.type === 'tubi' && typeof opts.deviceStream === 'function') {
+      Promise.resolve(opts.deviceStream(opts.link)).catch(() => null).then(found => {
+        if (this.destroyed) return;
+        if (found && found.url && found.mature && !this.matureAllowed(opts)) this.refuseMature(opts);
+        else if (found && found.url) this.load(opts, { type: 'hls' }, el, found.url);
+        else this.loadServerStream(opts, el);
+      });
+      return;
+    }
+    this.loadServerStream(opts, el);
+  }
+
+  /** Whether this viewer's world allows titles for adults (the snippet's mature-links). */
+  matureAllowed(opts) {
+    return !!(opts.allowMature && opts.allowMature());
+  }
+
+  /** The server's lookup of a stream (/api/stream). */
+  loadServerStream(opts, el) {
+    const media = MediaSources.detect(opts.link);
     fetch(`/api/stream?link=${encodeURIComponent(opts.link)}`)
       .then(res => res.json().catch(() => ({})).then(body => {
         if (!res.ok || !body.url) throw new Error(body.error || "Couldn't find this video's stream.");
@@ -208,10 +345,22 @@ class VideoElementSource extends BaseMediaSource {
       }))
       .then(body => {
         if (this.destroyed) return;
+        // A Tubi title for adults, where this viewer's world doesn't allow them.
+        if (media && media.type === 'tubi' && body.mature !== false && !this.matureAllowed(opts)) {
+          this.refuseMature(opts);
+          return;
+        }
         if (body.live) this.live = true;
-        this.load(opts, { type: 'hls', noReferrer: !!body.noReferrer }, el, body.url);
+        // A radio station's MPEG-TS stream goes through mpegts.js; its other sound plays as a file.
+        const type = body.type === 'mpegts' ? 'mpegts' : body.audio ? 'file' : 'hls';
+        this.load(opts, { type, live: !!body.live, noReferrer: !!body.noReferrer }, el, body.url);
       })
-      .catch(err => { if (!this.destroyed) opts.onError(err.message); });
+      .catch(err => {
+        if (this.destroyed) return;
+        // A station whose stream couldn't be found says so on its card, not "Tuning in...".
+        if (this.radioCard) this.radioCard.show(false, false, true);
+        opts.onError(err.message);
+      });
   }
 
   /** Starts loading `url` into the video element, as the media's type needs. */
@@ -219,15 +368,22 @@ class VideoElementSource extends BaseMediaSource {
     const hls = media.type === 'hls';
     if (media.type === 'mpegts') {
       // Browsers can't play MPEG-TS themselves; mpegts.js feeds it to the video element.
+      // A station's card says so too, not "Tuning in...".
+      const fail = message => {
+        if (this.radioCard) this.radioCard.show(false, false, true);
+        opts.onError(message);
+      };
       loadMediaScript('mpegts').then(() => {
         if (this.destroyed) return;
-        if (!window.mpegts || !mpegts.isSupported()) { opts.onError("This browser can't play this stream."); return; }
+        if (!window.mpegts || !mpegts.isSupported()) { fail("This browser can't play this stream."); return; }
         const m = this.mpegts = mpegts.createPlayer({ type: 'mpegts', isLive: !!media.live, url: media.url || url },
-          { liveBufferLatencyChasing: !!media.live, lazyLoad: !media.live });
-        m.on(mpegts.Events.ERROR, () => opts.onError("Couldn't play this stream. It may be offline, or the site may not allow it here."));
+          // Live, it starts on the first data rather than waiting to gather some (the stash), so
+          // a VRCDN stream starts in a second or two instead of many.
+          media.live ? { liveBufferLatencyChasing: true, lazyLoad: false, enableStashBuffer: false } : { lazyLoad: true });
+        m.on(mpegts.Events.ERROR, () => fail("Couldn't play this stream. It may be offline, or the site may not allow it here."));
         m.attachMediaElement(el);
         m.load();
-      }).catch(err => opts.onError(err.message));
+      }).catch(err => { if (!this.destroyed) fail(err.message); });
     } else if (media.type === 'dash') {
       loadMediaScript('dash').then(() => {
         if (this.destroyed) return;
@@ -246,7 +402,7 @@ class VideoElementSource extends BaseMediaSource {
             : "Couldn't play this stream. It may be offline, or the site may not allow it here.");
         });
         d.initialize(el, url, true);
-      }).catch(err => opts.onError(err.message));
+      }).catch(err => { if (!this.destroyed) opts.onError(err.message); });
     } else if (!hls) {
       el.src = url;
     } else {
@@ -365,6 +521,8 @@ class VideoElementSource extends BaseMediaSource {
   setVolume(v) { this.el.volume = Math.max(0, Math.min(1, Number(v) / 100)); }
   setMuted(m) { this.wantMuted = !!m; if (!this.autoMuted) this.el.muted = !!m; }
   destroy() {
+    if (this.radioCard) { this.radioCard.destroy(); this.radioCard = null; }
+    if (this.notice) { this.notice.remove(); this.notice = null; }
     this.destroyed = true;
     if (this.unmuteOnClick) {
       document.removeEventListener('pointerdown', this.unmuteOnClick, true);
@@ -581,7 +739,8 @@ class TwitchSource extends BaseMediaSource {
     if (T.ENDED) p.addEventListener(T.ENDED, () => { const s = owner(); if (s) { s.setPlaying(false); s.ended = true; } });
     if (T.OFFLINE) p.addEventListener(T.OFFLINE, () => {
       const s = owner();
-      if (s && s.live) { s.offline = true; s.opts.onError(`${s.channel} isn't live on Twitch right now.`); }
+      // A notice: Twitch's own player says so too, and plays it if the channel comes back (ONLINE).
+      if (s && s.live) { s.offline = true; s.opts.onError(`${s.channel} isn't live on Twitch right now.`, true); }
     });
     if (T.ONLINE) p.addEventListener(T.ONLINE, () => { const s = owner(); if (s) s.offline = false; });
   }
@@ -812,7 +971,7 @@ class TwitchClipSource extends BaseMediaSource {
     this.muted = !!m;
     if (!this.toldMute) {
       this.toldMute = true;
-      this.opts.onError("Twitch clips can't be muted or turned down here.");
+      this.opts.onError("Twitch clips can't be muted or turned down here.", true); // a notice: it plays on
     }
   }
   destroy() {
@@ -1114,6 +1273,122 @@ class SdqSource extends BaseMediaSource {
 }
 
 /**
+ * Player adapter for a Bilibili video, in Bilibili's own embed player (player.bilibili.com), in a
+ * frame on this page: on the 2D page, and in a world when Bilibili's page couldn't be the screen
+ * itself (in a world it normally is, run by a script on it: see native-video.js PageVideo). In a
+ * frame, the player takes no commands from the page around it, only where to start (t=) and whether to start
+ * muted, in its address. So this keeps the video's time itself: pausing takes the embed away and
+ * shows the video's picture, and playing, seeking and muting load it again at the time it should
+ * be at. Its sound can't be turned down, only muted (volume 0 mutes it). A cover over it keeps a
+ * click from pausing the video on one screen only.
+ * @class BilibiliSource
+ * @extends {BaseMediaSource}
+ */
+class BilibiliSource extends BaseMediaSource {
+  /**
+   * @param {Object} opts - Source configuration options.
+   * @param {Object} media - The detected video: its BV (or av) id and part.
+   */
+  constructor(opts, media) {
+    super(opts);
+    this.media = media;
+    this.muted = !!opts.muted;
+    this.volume = Number(opts.volume);
+    this.t = Math.max(0, Number(opts.start) || 0);
+    this.tAt = performance.now();
+    this.running = false; // whether the time moves: the embed is there and playing
+    const box = this.box = document.createElement('div');
+    Object.assign(box.style, { position: 'relative', width: '100%', height: '100%', background: '#000', overflow: 'hidden' });
+    if (opts.thumbnail) {
+      // Bilibili's picture server refuses pictures asked for from other sites' pages.
+      const img = this.picture = document.createElement('img');
+      img.referrerPolicy = 'no-referrer';
+      img.src = opts.thumbnail.replace(/@\d+w_\d+h\.jpg$/, '');
+      Object.assign(img.style, { position: 'absolute', inset: '0', width: '100%', height: '100%', objectFit: 'contain' });
+      box.appendChild(img);
+    }
+    // A phone gets Bilibili's mobile player, which waits for a tap to start (and from the start):
+    // that's left to the viewer there, so the cover is left off.
+    const ua = navigator.userAgent || '';
+    const cover = this.cover = document.createElement('div');
+    if (!(/AppleWebKit.*Mobile/.test(ua) && !/Domono/.test(ua))) {
+      Object.assign(cover.style, { position: 'absolute', inset: '0', zIndex: '2' });
+      box.appendChild(cover);
+    }
+    opts.container.appendChild(box);
+    this.ready = true;
+    this.load(this.t);
+  }
+
+  /** The embed player's address, starting at `at` seconds. */
+  embedLink(at) {
+    const id = this.media.id;
+    const key = /^av/i.test(id) ? `aid=${id.slice(2)}` : `bvid=${encodeURIComponent(id)}`;
+    const muted = this.muted || this.volume <= 0;
+    return `https://player.bilibili.com/player.html?${key}&p=${this.media.part || 1}&t=${Math.max(0, at).toFixed(1)}`
+      + `&autoplay=1&danmaku=0&high_quality=1&muted=${muted ? 1 : 0}`;
+  }
+
+  /** (Re)loads the embed, playing from `at`. */
+  load(at) {
+    this.unload();
+    const f = this.frame = document.createElement('iframe');
+    f.src = this.embedLink(at);
+    // No fullscreen: on an in-world screen it leaves the player blank until the space is rejoined.
+    f.allow = 'autoplay';
+    f.allowFullscreen = false;
+    Object.assign(f.style, { position: 'absolute', inset: '0', width: '100%', height: '100%', border: '0', zIndex: '1' });
+    this.box.insertBefore(f, this.cover.parentNode ? this.cover : null);
+    this.t = Math.max(0, at);
+    this.tAt = performance.now();
+    this.running = true;
+  }
+
+  unload() {
+    if (this.frame) { this.frame.remove(); this.frame = null; }
+  }
+
+  play() {
+    this.wantPaused = false;
+    if (!this.frame) this.load(this.t);
+  }
+  pause() {
+    this.wantPaused = true;
+    if (!this.frame) return;
+    this.t = this.time();
+    this.running = false;
+    this.unload();
+  }
+  seek(t) {
+    t = Math.max(0, Number(t) || 0);
+    // Paused, a seek only moves where it will start, so even a small one (karaoke's 0.25 s nudge) counts.
+    if (!this.frame) { this.t = t; this.tAt = performance.now(); return; }
+    // Playing, each seek reloads the embed, so one to about where it is already is left alone.
+    if (Math.abs(t - this.time()) < 1.5) return;
+    if (this.frame) this.load(t);
+    else { this.t = t; this.tAt = performance.now(); }
+  }
+  time() { return this.running ? this.t + (performance.now() - this.tAt) / 1000 : this.t; }
+  state() { return this.frame ? MEDIA_STATE.PLAYING : MEDIA_STATE.PAUSED; }
+  setVolume(v) {
+    const was = this.muted || this.volume <= 0;
+    this.volume = Number(v);
+    if (this.frame && was !== (this.muted || this.volume <= 0)) this.load(this.time());
+  }
+  setMuted(m) {
+    if (!!m === this.muted) return;
+    const was = this.muted || this.volume <= 0;
+    this.muted = !!m;
+    if (this.frame && was !== (this.muted || this.volume <= 0)) this.load(this.time());
+  }
+  destroy() {
+    this.destroyed = true;
+    this.unload();
+    this.box.remove();
+  }
+}
+
+/**
  * Player adapter for Vimeo videos using the Vimeo SDK.
  * @class VimeoSource
  * @extends {BaseMediaSource}
@@ -1239,6 +1514,9 @@ class MediaSwitch {
    * @param {function(string, number): void} opts.onDuration - Duration reporting callback.
    * @param {function(string): void} opts.onError - Error handling callback.
    * @param {function(): boolean} [opts.allowUntrusted] - Permission check for untrusted sources.
+   * @param {function(): boolean} [opts.allowMature] - Whether titles for adults (Tubi, the Internet Archive) may play.
+   * @param {function(string): Promise<{url: string, mature: boolean}|null>} [opts.deviceStream] - A Tubi stream looked up
+   *   from this viewer's own device, and whether its title is for adults, or null (the server's lookup is used then).
    * @param {function(): void} [opts.requestClick] - Requests synthetic gesture/click for sound.
    */
   constructor(yt, opts) {
@@ -1262,8 +1540,9 @@ class MediaSwitch {
    * Loads and initiates playback for a media URL with the appropriate player adapter.
    * @param {string} link - Canonical playback URL.
    * @param {number} start - Start playback offset in seconds.
+   * @param {Object} [item] - The playlist item (its title and picture, shown for a radio station).
    */
-  loadMedia(link, start) {
+  loadMedia(link, start, item) {
     const media = window.MediaSources ? MediaSources.detect(link) : null;
     if (!media || media.type === 'youtube') {
       this.loadVideoById(this.opts.getId(link), start);
@@ -1275,27 +1554,40 @@ class MediaSwitch {
     // Files and streams from any site only play where this viewer's world allows them.
     if (!MediaSources.isTrusted(media) && !(this.opts.allowUntrusted && this.opts.allowUntrusted())) {
       this.source = new NoticeSource({ container: this.container }, MediaSources.UNTRUSTED_MESSAGE);
-      this.opts.onError(MediaSources.UNTRUSTED_MESSAGE);
+      this.opts.onError(MediaSources.UNTRUSTED_MESSAGE, false, link);
       return;
     }
     const opts = {
       container: this.container, link, start: Number(start) || 0, volume: this.volume, muted: this.muted,
       captions: this.captions,
+      title: String((item && item.title) || ''), thumbnail: String((item && item.thumbnail) || ''),
       onDuration: seconds => this.opts.onDuration(link, seconds),
-      onError: message => this.opts.onError(message),
-      requestClick: () => { if (this.opts.requestClick) this.opts.requestClick(); }
+      // Only while it's still the source: one replaced or stopped since says nothing (see stopSource).
+      onError: (message, notice) => { if (!opts.stale) this.opts.onError(message, notice, link); },
+      requestClick: () => { if (this.opts.requestClick) this.opts.requestClick(); },
+      deviceStream: this.opts.deviceStream,
+      allowMature: this.opts.allowMature
     };
     if (media.type === 'twitch') this.source = new TwitchSource(opts, media);
     else if (media.type === 'twitchclip') this.source = new TwitchClipSource(opts, media);
     else if (media.type === 'vimeo') this.source = new VimeoSource(opts, media);
     else if (media.type === 'vdoninja') this.source = new VdoNinjaSource(opts, media);
     else if (media.type === 'sdq') this.source = new SdqSource(opts, media);
+    else if (media.type === 'bilibili') {
+      // Bilibili's videos have no rating, so they only play where the world allows titles for adults.
+      if (this.opts.allowMature && this.opts.allowMature()) this.source = new BilibiliSource(opts, media);
+      else {
+        this.source = new NoticeSource({ container: this.container }, MediaSources.matureMessage(media));
+        this.opts.onError(MediaSources.matureMessage(media), false, link);
+      }
+    }
     else this.source = new VideoElementSource(opts, media);
   }
 
   /** Destroys the active non-YouTube player source instance. */
   stopSource() {
-    if (this.source) { this.source.destroy(); this.source = null; }
+    // Its opts are marked stale, so anything it says from now on (a late error) is dropped.
+    if (this.source) { if (this.source.opts) this.source.opts.stale = true; this.source.destroy(); this.source = null; }
   }
 
   /** Toggles visibility between YouTube iframe and alternative media container. */

@@ -10,6 +10,8 @@ const archive = require('./archive.js');
 const loc = require('./loc.js');
 const eso = require('./eso.js');
 const streaming = require('./streaming.js');
+const radio = require('./radio.js');
+const bilibili = require('./bilibili.js');
 
 const FETCH_TIMEOUT_MS = 5000;
 
@@ -139,6 +141,16 @@ async function resolveMediaLink(link) {
   // Tubi and NASA+ pages keep their page link; the player asks for the stream (/api/stream).
   if (media.type === 'tubi' || media.type === 'nasa') return streaming.resolveLink(link);
 
+  // A Bilibili video plays in Bilibili's own embed player; its page gives its title and length.
+  if (media.type === 'bilibili') return bilibili.resolveLink(link);
+  // A biliplayer.91vrchat.com or btv.rspark.cn link plays the video's .mp4 it redirects to; the
+  // Bilibili page gives its title and length. It keeps the service's link, as the .mp4's address expires.
+  if (media.type === 'file' && media.bilibili) return { ...(await bilibili.resolveLink(media.bilibili)), link: media.url };
+
+  // A radio station (Shoutcast, or a .pls or .xspf file) keeps its link too: the player asks for
+  // its stream (/api/stream), as a station's stream address can change.
+  if (media.type === 'radio') return radio.resolveLink(link);
+
   if (media.type === 'vdoninja') {
     return { title: `VDO.Ninja: ${media.name}`, thumbnail: '', duration: 0, link };
   }
@@ -187,4 +199,104 @@ function allowedFor(ws, link) {
   return MediaSources.isTrusted(m) || !!(ws && ws.allowUntrusted);
 }
 
-module.exports = { resolveMediaLink, resolveMediaLinks, detect: MediaSources.detect, allowedFor, UNTRUSTED_MESSAGE: MediaSources.UNTRUSTED_MESSAGE };
+/**
+ * Whether a Tubi or Internet Archive link is for adults (see MediaSources.tubiMature and
+ * archive.isMatureMeta). A Bilibili video has no rating, so it is. Other links aren't rated,
+ * and give false.
+ * @param {string} link
+ * @returns {Promise<boolean>} Rejects when the rating couldn't be looked up.
+ */
+async function isMature(link) {
+  const m = MediaSources.detect(link);
+  if (!MediaSources.needsRating(m)) return false;
+  if (m.type === 'bilibili' || m.bilibili) return true;
+  return m.type === 'tubi' ? streaming.isMature(link) : archive.isMature(link);
+}
+
+/** After a Tubi rating lookup fails, the server doesn't try another for this long. */
+const TUBI_RETRY_MS = 60 * 1000;
+const UNRATED_MESSAGE = "Couldn't check whether this title is for adults, which this world doesn't allow. Try again in a moment.";
+let tubiDownUntil = 0;
+
+/** Whether this client's world allows titles for adults (the snippet's mature-links). */
+function allowsMature(ws) {
+  return !!(ws && ws.allowMature);
+}
+
+/**
+ * Checks a playlist item about to be added against the world's mature-links setting, and gives
+ * it back without its `mature` mark. An item for adults is refused where the world doesn't allow
+ * them. A Tubi or Archive item that came without a rating (one this device looked up, say) is
+ * looked up here; if the server can't (Tubi may not serve its country), what the device said is
+ * used, and failing that it isn't added (UNRATED_MESSAGE).
+ *
+ * @param {Object} ws - The client adding it.
+ * @param {Object} item - The playlist item.
+ * @param {boolean} [said] - Whether the device that looked it up said it's for adults.
+ * @returns {Promise<Object>} The item, without `mature`.
+ * @throws {Error} MATURE_MESSAGE, for an item for adults where the world doesn't allow them, or
+ *   UNRATED_MESSAGE when its rating couldn't be found there.
+ */
+async function screenMature(ws, item, said) {
+  if (!item || typeof item !== 'object') return item;
+  const { mature, ...rest } = item;
+  if (allowsMature(ws) || !MediaSources.needsRating(MediaSources.detect(rest.link || ''))) return rest;
+  let adult = typeof mature === 'boolean' ? mature : null;
+  const tubi = MediaSources.detect(rest.link).type === 'tubi';
+  if (adult === null && !(tubi && Date.now() < tubiDownUntil)) {
+    try {
+      adult = await isMature(rest.link);
+    } catch (e) {
+      // Tubi may not serve this server's country: it isn't asked again for a while, so adding a
+      // series' episodes one by one doesn't wait on a failed lookup each.
+      if (tubi) tubiDownUntil = Date.now() + TUBI_RETRY_MS;
+    }
+  }
+  // What the device said counts for Tubi only, whose servers may not serve this server's country.
+  if (adult === null && tubi) adult = typeof said === 'boolean' ? said : null;
+  // Its rating couldn't be found: not added, where the world doesn't allow titles for adults.
+  if (adult === null) throw new Error(UNRATED_MESSAGE);
+  if (adult) throw new Error(MediaSources.matureMessage(rest.link));
+  return rest;
+}
+
+/**
+ * The items of a list or search that this client's world allows, by their `mature` marks (a
+ * title for adults is left out where the world doesn't allow them), without the marks.
+ * @param {Object} ws
+ * @param {Object[]} items
+ * @returns {{items: Object[], skipped: number}}
+ */
+function filterMature(ws, items) {
+  const allow = allowsMature(ws);
+  const kept = [];
+  for (const item of items || []) {
+    if (!item || typeof item !== 'object') continue;
+    const { mature, ...rest } = item;
+    if (mature === true && !allow) continue;
+    kept.push(rest);
+  }
+  return { items: kept, skipped: (items || []).length - kept.length };
+}
+
+/**
+ * A link the player doesn't know (detect gives null) that is a radio station after all, found by
+ * what it sends (a radio .m3u, or the stream itself), as a playlist item whose link is marked
+ * #radio, or null. Such a link isn't trusted: check allowedFor on the item's link.
+ * @param {string} link
+ * @returns {Promise<PlaylistItem|null>}
+ */
+function sniffRadio(link) {
+  return radio.sniff(String(link || '').trim());
+}
+
+/** Whether a link is one whose rating is checked (Tubi, or the Internet Archive). */
+function needsRating(link) {
+  return MediaSources.needsRating(MediaSources.detect(String(link || '')));
+}
+
+module.exports = {
+  resolveMediaLink, resolveMediaLinks, sniffRadio, detect: MediaSources.detect, allowedFor,
+  isMature, allowsMature, screenMature, filterMature, needsRating, matureMessage: MediaSources.matureMessage,
+  UNTRUSTED_MESSAGE: MediaSources.UNTRUSTED_MESSAGE, MATURE_MESSAGE: MediaSources.MATURE_MESSAGE
+};

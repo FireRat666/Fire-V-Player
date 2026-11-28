@@ -69,6 +69,8 @@ function clockSeconds(t) {
  */
 function parseVideoRenderer(r) {
   if (!r || typeof r.videoId !== 'string') return null;
+  // Shorts are kept: the world's video player won't take a vertical video, so it plays in the
+  // browser (YouTube's own player) instead (see native-video.js).
   const id = r.videoId;
   const durationRaw = text(r.lengthText);
   const seconds = clockSeconds(durationRaw);

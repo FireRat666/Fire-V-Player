@@ -19,6 +19,8 @@ const { Readable } = require('stream');
 const MediaSources = require('../public/media-sources.js');
 const media = require('./media.js');
 const streaming = require('./streaming.js');
+const archive = require('./archive.js');
+const radio = require('./radio.js');
 const loc = require('./loc.js');
 const eso = require('./eso.js');
 const { getInnertube } = require('./youtube/youtubeiService.js');
@@ -33,6 +35,8 @@ const MAX_LIST_BYTES = 256 * 1024;
 const CONCURRENCY = 4;
 /** How long a loaded list is kept: short, so an edited file shows on the next load. */
 const LIST_TTL = 5 * 60 * 1000;
+/** A Tubi series listed with some episodes' details missing is kept only this long (see streaming.js). */
+const PARTIAL_LIST_TTL = 60 * 1000;
 /** How long a YouTube video's title and length are kept. */
 const VIDEO_TTL = 6 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 10000;
@@ -53,6 +57,14 @@ class TtlCache {
     value.catch(() => { if (this.map.get(key) && this.map.get(key).value === value) this.map.delete(key); });
     if (this.map.size > this.max) this.map.delete(this.map.keys().next().value);
     return value;
+  }
+  /**
+   * Keeps `key` for at most `ttl` from now (a list loaded with some of it missing), while it's still
+   * `value` (the load that was partial), not one that has replaced it since.
+   */
+  shorten(key, ttl, value) {
+    const hit = this.map.get(key);
+    if (hit && (value === undefined || hit.value === value)) hit.expires = Math.min(hit.expires, Date.now() + ttl);
   }
 }
 const listCache = new TtlCache(100);
@@ -98,8 +110,8 @@ function parseLinkList(text) {
 
 function decodeEntities(text) {
   return String(text || '')
-    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/&#(\d+);/g, (m, n) => (Number(n) > 0 && Number(n) <= 0x10ffff ? String.fromCodePoint(Number(n)) : m))
+    .replace(/&#x([0-9a-f]+);/gi, (m, n) => (parseInt(n, 16) > 0 && parseInt(n, 16) <= 0x10ffff ? String.fromCodePoint(parseInt(n, 16)) : m))
     .replace(/&quot;/g, '"')
     .replace(/&#39;|&apos;/g, "'")
     .replace(/&lt;/g, '<')
@@ -296,7 +308,7 @@ function publicLookup(hostname, options, callback) {
 }
 
 /** One request through publicLookup, as a fetch Response (redirects not followed). */
-function requestPublic(url, signal) {
+function requestPublic(url, signal, extraHeaders) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const lib = u.protocol === 'https:' ? https : http;
@@ -304,7 +316,7 @@ function requestPublic(url, signal) {
       method: 'GET',
       lookup: publicLookup,
       signal,
-      headers: { 'User-Agent': USER_AGENT, 'Accept': 'text/plain, */*;q=0.8', 'Accept-Encoding': 'gzip, deflate, br' }
+      headers: { 'User-Agent': USER_AGENT, 'Accept': 'text/plain, */*;q=0.8', 'Accept-Encoding': 'gzip, deflate, br', ...(extraHeaders || {}) }
     }, res => {
       const headers = new Headers();
       for (const [name, value] of Object.entries(res.headers)) {
@@ -329,12 +341,18 @@ function requestPublic(url, signal) {
   });
 }
 
-/** Fetches a public link, following up to 5 redirects and checking each one. */
-async function fetchPublic(url) {
-  const signal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+/**
+ * Fetches a public link, following up to 5 redirects and checking each one. `opts.signal` replaces
+ * the 10-second limit on the whole request (a radio stream, which never ends, brings its own), and
+ * `opts.headers` adds request headers.
+ */
+async function fetchPublic(url, opts = {}) {
+  const signal = opts.signal || AbortSignal.timeout(FETCH_TIMEOUT_MS);
   for (let hop = 0; hop < 6; hop++) {
     assertPublicUrl(url);
-    const res = await requestPublic(url, signal);
+    // opts.httpsOnly: every address on the way must be https (a redirect to http is refused).
+    if (opts.httpsOnly && !/^https:/i.test(url)) throw new ListError('That link redirects away from https.');
+    const res = await requestPublic(url, signal, opts.headers);
     if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
       try { await res.body?.cancel(); } catch (e) {}
       url = new URL(res.headers.get('location'), url).href;
@@ -353,6 +371,14 @@ function dispositionName(res) {
   if (star) { try { name = decodeURIComponent(star[1]); } catch (e) {} }
   if (!name) name = ((/filename\s*=\s*"([^"]*)"/.exec(cd) || /filename\s*=\s*([^;]+)/.exec(cd) || [])[1] || '').trim();
   return stripExtension(name);
+}
+
+/** Whether bytes are binary (sound, video), not text: control bytes other than tabs and line ends. */
+function looksBinary(bytes) {
+  if (!bytes.length) return false;
+  let odd = 0;
+  for (const b of bytes) if (b === 0 || (b < 32 && b !== 9 && b !== 10 && b !== 13 && b !== 12)) odd++;
+  return odd / bytes.length > 0.02;
 }
 
 /** A list file's text, refusing media, web pages and anything over MAX_LIST_BYTES. */
@@ -378,6 +404,10 @@ async function fetchListText(url) {
   const reader = res.body.getReader();
   const chunks = [];
   let total = 0;
+  // A generic binary type is sent for text files (Google Drive's downloads) and for streams with
+  // no file name (a radio station): its first bytes say which. A stream isn't read on as a list,
+  // so loadList can take it for a station (its "media file" error).
+  let checked = !/^application\/octet-stream/.test(type);
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -387,10 +417,18 @@ async function fetchListText(url) {
       throw new ListError('That list file is too big (256 KB at most).');
     }
     chunks.push(value);
+    if (!checked && total >= 512) {
+      checked = true;
+      if (looksBinary(Buffer.concat(chunks).subarray(0, 512))) {
+        try { await reader.cancel(); } catch (e) {}
+        throw new ListError('That link is a media file, not a list of links.');
+      }
+    }
   }
+  if (!checked && looksBinary(Buffer.concat(chunks))) throw new ListError('That link is a media file, not a list of links.');
   const text = Buffer.concat(chunks).toString('utf8');
   if (/^\s*<(!doctype|html)/i.test(text)) throw new ListError('That link opens a web page, not a text file of links. Share it publicly, or use its direct or download link.');
-  return { text, name: dispositionName(res) };
+  return { text, name: dispositionName(res), type };
 }
 
 async function fetchJson(url) {
@@ -510,12 +548,16 @@ function archiveItem(id, max) {
     const chosen = [...byVideo.values()].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
     if (!chosen.length) throw new ListError('That archive.org item has no video or audio files.');
     const itemTitle = clean((meta.metadata && [].concat(meta.metadata.title)[0]) || id);
+    // An item for adults (see archive.isMatureMeta) is left out where the world doesn't allow them.
+    const mature = archive.isMatureMeta(meta.metadata);
     const items = chosen.slice(0, max).map(f => ({
       title: clean(chosen.length === 1 ? itemTitle : (f.title || stripExtension(f.name.split('/').pop()))) || itemTitle,
       thumbnail: `https://archive.org/services/img/${encodeURIComponent(id)}`,
       // Seconds ("370.3"), or sometimes "m:ss" / "h:mm:ss".
       duration: Math.round(String(f.length || '').split(':').reduce((acc, n) => acc * 60 + Number(n), 0) * 1000) || 0,
       link: `https://archive.org/download/${encodeURIComponent(id)}/${f.name.split('/').map(encodeURIComponent).join('/')}`
+    ,
+      mature
     }));
     return { title: itemTitle, items, truncated: chosen.length > max };
   });
@@ -542,7 +584,7 @@ async function driveFolder(id, max) {
 }
 
 /** One line of a list file as zero or more playlist items. Lines that can't play are dropped. */
-async function resolveEntry(entry, limit) {
+async function resolveEntry(entry, limit, state = {}) {
   const input = entry.input;
   if (!input || input.length > 2048) return [];
   const titled = (item) => (entry.title ? { ...item, title: clean(entry.title) || item.title } : item);
@@ -557,26 +599,37 @@ async function resolveEntry(entry, limit) {
     }
   }
   const source = listSource(input);
-  if (source && source.kind === 'streaming') return (await streaming.loadList(source)).items.slice(0, limit);
+  if (source && source.kind === 'streaming') {
+    const list = await streaming.loadList(source);
+    // A series with episodes not read in time makes the whole list partial (kept only briefly).
+    if (list.partial) state.partial = true;
+    return list.items.slice(0, limit);
+  }
   if (source && source.kind === 'loc') return (await loc.loadList(source)).items.slice(0, limit);
   if (source && source.kind === 'eso') return (await eso.loadList(source)).items.slice(0, limit);
   if (source && source.kind === 'archive') {
     const item = await archiveItem(source.id, limit);
     return item.items.length === 1 ? [titled(item.items[0])] : item.items;
   }
+  // A radio station's stream (an address the player doesn't know, or a sound file on plain http,
+  // which a page on https can't play as a file): a station, named as the list names it.
+  const station = !MediaSources.detect(input) ? await media.sniffRadio(input) : await radio.soundStation(input);
+  if (station) return [entry.title ? { ...station, title: `${clean(entry.title, 190)} (radio)` } : station];
   if (!MediaSources.detect(input)) return []; // a list inside a list, a web page, or nonsense
   const item = await media.resolveMediaLink(input);
-  return item ? [titled({ title: clean(item.title), thumbnail: item.thumbnail || '', duration: Number(item.duration) || 0, link: item.link })] : [];
+  return item ? [titled({ title: clean(item.title), thumbnail: item.thumbnail || '', duration: Number(item.duration) || 0, link: item.link,
+    ...(typeof item.mature === 'boolean' ? { mature: item.mature } : {}) })] : [];
 }
 
 async function resolveEntries(entries, limit) {
   const results = new Array(entries.length);
+  const state = { partial: false };
   let next = 0;
   const worker = async () => {
     while (next < entries.length) {
       const i = next++;
       try {
-        results[i] = await resolveEntry(entries[i], limit);
+        results[i] = await resolveEntry(entries[i], limit, state);
       } catch (e) {
         results[i] = [];
       }
@@ -592,7 +645,7 @@ async function resolveEntries(entries, limit) {
     seen.add(key);
     items.push(item);
   }
-  return { items: items.slice(0, limit), truncated: items.length > limit, dropped: entries.length - results.filter(r => r && r.length).length };
+  return { items: items.slice(0, limit), truncated: items.length > limit, dropped: entries.length - results.filter(r => r && r.length).length, partial: state.partial };
 }
 
 /**
@@ -606,22 +659,41 @@ function loadList(src, limit = MAX_ITEMS) {
   const source = listSource(src);
   if (!source) return Promise.reject(new ListError('That link is not a playlist, a list file of links, a Google Doc, a Drive folder or an archive.org item.'));
   limit = Math.max(1, Math.min(MAX_ITEMS, limit));
-  return listCache.remember(`list:${limit}:${src}`, LIST_TTL, async () => {
+  const key = `list:${limit}:${src}`;
+  const loaded = listCache.remember(key, LIST_TTL, async () => {
     if (source.kind === 'drivefolder') return { dropped: 0, ...(await driveFolder(source.id, limit)) };
     if (source.kind === 'archive') return { dropped: 0, ...(await archiveItem(source.id, limit)) };
     if (source.kind === 'streaming' || source.kind === 'loc' || source.kind === 'eso') {
       const list = source.kind === 'loc' ? await loc.loadList(source) : source.kind === 'eso' ? await eso.loadList(source) : await streaming.loadList(source);
       if (!list.items.length) throw new ListError('That list has nothing in it that can play here.');
-      return { title: list.title, items: list.items.slice(0, limit), truncated: list.items.length > limit, dropped: 0 };
+      return { title: list.title, items: list.items.slice(0, limit), truncated: list.items.length > limit, dropped: 0, partial: !!list.partial };
     }
-    const { text, name } = await fetchListText(source.url);
+    let fetched;
+    try {
+      fetched = await fetchListText(source.url);
+    } catch (e) {
+      // The address of a radio stream itself: that station, as one item.
+      const station = /media file/.test(e.message) ? await media.sniffRadio(src) : null;
+      if (station) return { title: clean(station.title, 120), items: [station], truncated: false, dropped: 0 };
+      throw e;
+    }
+    const { text, name, type } = fetched;
+    // A radio station's .m3u (its streams have no file name the player knows): the station, as one
+    // item marked #radio (see server/radio.js).
+    if (radio.looksLikeRadio(text, type)) {
+      const station = await media.sniffRadio(src);
+      if (station) return { title: clean(station.title, 120), items: [station], truncated: false, dropped: 0 };
+    }
     const parsed = parseLinkList(text);
     const entries = parsed.entries.slice(0, MAX_ITEMS);
     if (!entries.length) throw new ListError('That file has no links in it.');
-    const { items, truncated, dropped } = await resolveEntries(entries, limit);
+    const { items, truncated, dropped, partial } = await resolveEntries(entries, limit);
     if (!items.length) throw new ListError('None of the links in that file can be played.');
-    return { title: clean(parsed.title || name || source.name, 120) || 'Playlist', items, truncated: truncated || parsed.entries.length > MAX_ITEMS, dropped };
+    return { title: clean(parsed.title || name || source.name, 120) || 'Playlist', items, truncated: truncated || parsed.entries.length > MAX_ITEMS, dropped, partial };
   });
+  // A list with some of it missing is loaded again soon, not kept for LIST_TTL.
+  loaded.then(list => { if (list && list.partial) listCache.shorten(key, PARTIAL_LIST_TTL, loaded); }, () => {});
+  return loaded;
 }
 
 /**
@@ -682,5 +754,6 @@ module.exports = {
   errorMessage,
   isPrivateAddress,
   ListError,
+  fetchPublic,
   MAX_ITEMS
 };

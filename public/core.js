@@ -71,6 +71,8 @@ var SECOND_SCREEN_TEXTURE = 'fire-v-player';
 // The player's pictures (button icons, labels, the loading picture) come from the static host,
 // not the player's server, to save its bandwidth. public/assets keeps copies for older links.
 var ASSETS_URL = 'https://firer.at/files/fvp';
+// The longest tubi-native.js may take to load (it's small) before Tubi lookups go to the server.
+var TUBI_SCRIPT_MS = 20000;
 
 var Core = class {
     constructor() {
@@ -179,7 +181,7 @@ var Core = class {
       document.body.appendChild(iframe);
 
       const proto = this.getProtocol();
-      const playlistUrl = `${proto}://${this.hostUrl}/playlist/?instance=${encodeURIComponent(this.params.instance)}&legacy-instance=${encodeURIComponent(this.params['legacy-instance'] || '')}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}`;
+      const playlistUrl = `${proto}://${this.hostUrl}/playlist/?instance=${encodeURIComponent(this.params.instance)}&legacy-instance=${encodeURIComponent(this.params['legacy-instance'] || '')}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}&mature-links=${this.allowMature === true}`;
       this.showToast(`Player is in 2D mode. See console for playlist URL.`, 5000);
       console.log(`Player is in 2D mode. Open the playlist controls here: ${playlistUrl}`);
       return;
@@ -356,10 +358,22 @@ var Core = class {
   // a time: the other is destroyed, so it isn't running in the background.
   wantsNativeScreen(link) {
     if (!link || !window.isBanter || typeof FireNativeScreen === 'undefined' || !window.MediaSources) return false;
-    if (!this.inWorld() || !(BS.VideoPlayer || BS.BanterVideoPlayer)) return false;
-    // Files come from anywhere, so only where the world's owner allows them (as in the browser).
+    if (!this.inWorld()) return false;
     const media = MediaSources.detect(link);
+    // A Bilibili video plays as the screen's own page (Bilibili's embed page, run by a script on
+    // it: see native-video.js PageVideo), so its volume, pause and seek work. Only where the world
+    // allows titles for adults (Bilibili has no ratings); elsewhere the player page says why not.
+    if (media && media.type === 'bilibili') {
+      return this.allowMature === true && (typeof BS.Browser === 'function' || typeof BS.BanterBrowser === 'function')
+        && !(this.browserFiles && this.browserFiles.has(link));
+    }
+    if (!(BS.VideoPlayer || BS.BanterVideoPlayer)) return false;
+    if (media && media.type === 'youtube') return this.wantsNativeYouTube(link);
+    // Files come from anywhere, so only where the world's owner allows them (as in the browser).
     if (!media || media.type !== 'file' || this.allowUntrusted !== true) return false;
+    // An Archive file plays in the browser where the world doesn't allow titles for adults, as
+    // that's where its rating is checked (see VideoElementSource in media-players.js).
+    if (media.archive && this.allowMature !== true) return false;
     // Audio files play in the browser: Unity's player on Quest doesn't play audio without video,
     // and can't play Ogg or Opus anywhere.
     const u = MediaSources.parseUrl(media.url || link);
@@ -372,12 +386,137 @@ var Core = class {
   }
   // The world's video player couldn't start this file (native-video.js gives up on it), so it plays
   // in the browser for this viewer from now on, as the browser plays more formats (VP9, AV1...).
-  playFileInBrowser(link) {
+  // A YouTube video it couldn't play goes back to YouTube's own player in the browser the same way.
+  playFileInBrowser(link, why) {
     if (!link) return;
-    (this.browserFiles = this.browserFiles || new Set()).add(link);
-    console.log(`[Core] The world's video player couldn't start ${link}, so it plays in the browser.`);
-    this.showToast("The world's video player can't play this file, so it plays in the browser instead.", 6000);
+    // Why, too: Reload Screen tries the world's player again after a passing failure (see reloadScreen).
+    (this.browserFiles = this.browserFiles || new Map()).set(link, why || '');
+    const youtube = !!(window.MediaSources && MediaSources.youtubeId(link));
+    const bilibili = !!(window.MediaSources && MediaSources.detect(link) && MediaSources.detect(link).type === 'bilibili');
+    console.log(`[Core] The world's video player couldn't start ${link}${why ? ` (${why})` : ''}, so it plays in the browser.`);
+    if (bilibili) {
+      this.showToast("Bilibili's player didn't load as the screen, so it plays inside the player page instead, where its volume can't be turned down.", 7000);
+    } else if (youtube) {
+      // Live streams and Shorts always go this way, so they get no toast.
+      if (why !== 'live' && why !== 'shorts') this.showToast("This video can't play on the world's video player, so it plays in the browser instead.", 6000);
+    } else {
+      this.showToast("The world's video player can't play this file, so it plays in the browser instead.", 6000);
+    }
     if (this.currentLink() === link) this.updateScreen();
+  }
+
+  // ------------------------------------------------------------- YouTube on the world's player
+  // YouTube links play on the world's video player too (youtube-native.js), where the client has
+  // a BS Browser to look them up with. The `youtube-native` setting turns it on or off: on by
+  // default in snippets, off by default on the old script tag.
+  wantsNativeYouTube(link) {
+    if (String(this.params['youtube-native']).toLowerCase() !== 'true') return false;
+    if (typeof FireYouTubeResolver === 'undefined' || !MediaSources.youtubeId(link)) return false;
+    // A Shorts link is a vertical video, which the world's player won't take: straight to the browser.
+    const u = MediaSources.parseUrl(link);
+    if (u && /^\/shorts\//i.test(u.pathname)) return false;
+    if (typeof BS.Browser !== 'function' && typeof BS.BanterBrowser !== 'function') return false;
+    // The lookup page never started here (see youtube-native.js): YouTube's own player for the visit.
+    if (this.ytResolver && this.ytResolver.failed && !this.ytResolver.isReady) return false;
+    // Once it couldn't play for this viewer, it stays on YouTube's own player for them.
+    return !(this.browserFiles && this.browserFiles.has(link));
+  }
+  // The hidden browser that looks YouTube videos up, made the first time one is wanted.
+  youtubeResolver() {
+    if (!this.ytResolver) this.ytResolver = new FireYouTubeResolver(this);
+    return this.ytResolver;
+  }
+  // The hidden browser that looks Tubi up from this viewer's device (tubi-native.js), made the
+  // first time it's wanted: search, streams and series, with the server as the fallback. Null
+  // where the client has no BS Browser, or after it couldn't start.
+  async tubiResolver() {
+    if (this.destroyed || !window.isBanter) return null;
+    if (typeof FireTubiResolver === 'undefined') {
+      if (!this.tubiScript) {
+        // Shared by lookups at the same time; one that ends without the resolver (the script
+        // failed) is forgotten, so a later lookup tries again.
+        const attempt = this.tubiScript = Promise.resolve(this.setupScript(null, 'tubi-native'));
+        const forget = () => { if (this.tubiScript === attempt && typeof FireTubiResolver === 'undefined') this.tubiScript = null; };
+        attempt.then(forget, forget);
+      }
+      // A script that neither loads nor fails (a stalled connection) would leave every Tubi lookup
+      // waiting for good, and the server never asked: past TUBI_SCRIPT_MS this gives up.
+      // The wait that timed out forgets its attempt too (if it's still the current one), so a later
+      // lookup loads the script again.
+      const current = this.tubiScript;
+      let timer;
+      const late = await Promise.race([current.then(() => false, () => false), new Promise(resolve => { timer = setTimeout(() => resolve(true), TUBI_SCRIPT_MS); })]);
+      clearTimeout(timer);
+      if (late && this.tubiScript === current && typeof FireTubiResolver === 'undefined') this.tubiScript = null;
+      if (this.destroyed || typeof FireTubiResolver === 'undefined' || !FireTubiResolver.possible()) return null;
+    }
+    if (!FireTubiResolver.possible()) return null;
+    if (!this.tubiLookup) this.tubiLookup = new FireTubiResolver(this);
+    if (this.tubiLookup.failed && !this.tubiLookup.isReady) return null;
+    return this.tubiLookup;
+  }
+  // The player page asks for a Tubi stream looked up from this device; it falls back to the
+  // server's /api/stream when this says it couldn't.
+  async answerTubiStream(data) {
+    const n = data && data.n;
+    const link = String((data && data.link) || '').slice(0, 300);
+    // The page that asked: a page made since (another track, a rejoin) didn't ask, so isn't told,
+    // whether in a new browser or loaded in the same one.
+    const asker = this.browser;
+    const navigation = asker && asker.navigation;
+    let answer = { ok: false, reason: 'No Tubi lookup on this device.' };
+    try {
+      const tubi = await this.tubiResolver();
+      if (tubi) {
+        const found = await tubi.stream(link);
+        answer = found.ok ? { ok: true, url: found.url, mature: found.mature !== false } : found;
+      }
+    } catch (e) {
+      answer = { ok: false, reason: String(e && e.message || e) };
+    }
+    if (this.destroyed || !asker || asker !== this.browser || asker.removed || asker.navigation !== navigation) return;
+    // The page doesn't answer this one, so nothing waits for an answer.
+    Promise.resolve(this.sendBrowserMessage({ path: Commands.TUBI_STREAM_RESULT, data: Object.assign({ n }, answer) }, true)).catch(() => {});
+  }
+  // The sharpest YouTube quality for this viewer, from the screen's resolution (the snippet's, or
+  // theirs from the panel): the quality nearest its width, so 1600 and up is 1080p, 1280 is 720p.
+  // Lower after it kept stalling for them (see dropYouTubeQuality).
+  youtubeMaxHeight() {
+    const w = this.screenResolution();
+    const fromWidth = w >= 1600 ? 1080 : w >= 1100 ? 720 : w >= 740 ? 480 : w >= 520 ? 360 : 240;
+    return Math.min(fromWidth, this.youtubeQualityCap || Infinity);
+  }
+  // The video kept stalling on the world's player at `height`: this viewer gets the next quality
+  // down from now on (not below 360p), and the screen starts again at it, where the world is.
+  dropYouTubeQuality(height) {
+    const ladder = [1080, 720, 480, 360];
+    const next = ladder.find(q => q < (Number(height) || this.youtubeMaxHeight()));
+    if (!next) return false;
+    this.youtubeQualityCap = next;
+    console.log(`[Core] YouTube kept stalling at ${height}p, so it drops to ${next}p for this viewer.`);
+    this.showToast(`The video kept stalling, so it drops to ${next}p.`, 4000);
+    this.rebuildNativeScreen();
+    return true;
+  }
+  // The world's video player made again for the same link (a new quality), where the world is.
+  // A viewer who skipped away from the room (Auto Sync off) keeps that offset: the new one goes to
+  // the room's time plus it, not to the room's time.
+  rebuildNativeScreen() {
+    if (!this.nativeScreen || !this.screenReady) return;
+    const old = this.nativeScreen;
+    const link = old.link;
+    const p = this.player;
+    let offset = null;
+    if (old.autoSync === false && old.prepared && p && (p.paused || Number.isFinite(Number(p.lastStartTime)))) {
+      // Paused, the room is at its currentTime; playing, at the time since its start.
+      offset = old.localTime() - (p.paused ? Number(p.currentTime) : Date.now() / 1000 - Number(p.lastStartTime));
+      if (!Number.isFinite(offset)) offset = null;
+    }
+    old.destroy();
+    this.nativeScreen = new FireNativeScreen(this, link);
+    if (offset != null) this.nativeScreen.localOffset = offset;
+    this.audioBusyUntil = Date.now() + 20000;
+    this.syncSecondScreens();
   }
   // Twitch won't start until someone clicks its player, and the space-page screen can't be clicked
   // (it's a picture of a page nobody can reach), so Twitch gets a BS Browser screen, as on clients
@@ -403,6 +542,10 @@ var Core = class {
     if (!this.nativeScreen && this.browser && this.browser === hadBrowser) {
       Promise.resolve(this.sendBrowserMessage({ path: Commands.PREVIEW_VIDEO, data: video })).catch(() => {});
     } else if (sameNative) {
+      this.nativeScreen.previewed = true;
+      // Out of the room's countdown: a preview plays at once with its sound, and isn't taken back
+      // to the start by the countdown's warming (see native-video.js warmUp).
+      this.nativeScreen.clearHold();
       this.nativeScreen.wantPaused = false;
       this.nativeScreen.seek(0);
       this.nativeScreen.applyPaused();
@@ -434,14 +577,21 @@ var Core = class {
     const link = this.currentLink();
     const path = json && json.path;
     if (this.wantsNativeScreen(link)) {
-      if (this.nativeScreen && this.nativeScreen.link === link) {
+      const same = this.nativeScreen && this.nativeScreen.link === link;
+      // Back on the room's track from a preview of it, or counting down to a start again after it
+      // has played: made anew, as Unity's player on Quest plays the sound over a black picture
+      // when it's taken back to its start and held there (see native-video.js hasPlayed).
+      const countingDown = (Number(this.countdownUntil) || 0) > performance.now();
+      const fresh = same && !this.previewVideo && (this.nativeScreen.previewed || (countingDown && this.nativeScreen.hasPlayed()));
+      if (same && !fresh) {
         // The same file again (a restart, a one-song playlist), or the host moved it.
         if (path === Commands.TRACK_CHANGED || path === Commands.HOST_SEEK || path === Commands.READY_START) this.nativeScreen.resync();
         return;
       }
+      if (fresh) console.log('[Core] The world\'s video player starts this track again from scratch.');
       this.removeBrowser();
       if (this.nativeScreen) this.nativeScreen.destroy();
-      console.log('[Core] A file is playing, so the world\'s video player takes the browser\'s place.');
+      console.log('[Core] This track plays on the world\'s video player, so it takes the browser\'s place.');
       this.nativeScreen = new FireNativeScreen(this, link);
       this.audioBusyUntil = Date.now() + 20000; // its speakers appear as it starts (see applyAudio)
       this.syncSecondScreens();
@@ -472,6 +622,15 @@ var Core = class {
     if (this.lastScreenReload && now - this.lastScreenReload < 3000) return; // a double click
     this.lastScreenReload = now;
     console.log('[Core] Reloading this viewer\'s screen.');
+    // A link that went to the browser only because it was slow or its setup failed gets the
+    // world's player again; one it can't play (a Short, a live stream, a format) stays in the browser.
+    const link = this.currentLink();
+    if (this.browserFiles && ['not loaded in time', 'setup failed'].includes(this.browserFiles.get(link))) this.browserFiles.delete(link);
+    // A YouTube lookup page that never started gets another go (it's made again when wanted).
+    if (this.ytResolver && this.ytResolver.failed && !this.ytResolver.isReady) {
+      this.ytResolver.destroy();
+      this.ytResolver = null;
+    }
     if (this.nativeScreen) {
       this.nativeScreen.destroy();
       this.nativeScreen = null;
@@ -588,6 +747,8 @@ var Core = class {
   setBrowserUrl(url) {
     const browser = this.browser;
     if (!browser) return;
+    // A new page in the same browser: answers meant for the page before don't go to it (see answerTubiStream).
+    browser.navigation = (browser.navigation || 0) + 1;
     browser.url = url;
     if (browser.iframe) {
       browser.loaded = false;
@@ -1020,6 +1181,11 @@ var Core = class {
   }
   // Resizes the page and rescales the screen, so it stays the same size in the world.
   applyScreenResolution() {
+    // A YouTube video on the world's player starts again at the quality the new size wants.
+    const native = this.nativeScreen;
+    if (native && native.youtubeId && native.maxHeight && native.maxHeight !== this.youtubeMaxHeight()) this.rebuildNativeScreen();
+    // A Bilibili page on the screen takes the new size itself (see native-video.js).
+    if (native && native.bilibili) native.applyResolution();
     const browser = this.browser;
     if (browser && browser.surface) {
       // The space page is the page: it's resized, and the screen keeps its size in metres.
@@ -1172,6 +1338,7 @@ var Core = class {
       this.params.volume = 0;
     }
     this.sendVolume();
+    if (this.playlistPanel) this.playlistPanel.renderSoon();
   }
   setVolumeIncrement(amount) {
     if (this.blocked) return;
@@ -1182,6 +1349,7 @@ var Core = class {
       this.params.volume = 0;
     }
     this.sendVolume();
+    if (this.playlistPanel) this.playlistPanel.renderSoon();
   }
   /**
    * Sets up karaoke's 3D in-world Singers button and optional trigger volume box.
@@ -1418,7 +1586,7 @@ var Core = class {
     const proto = this.getProtocol();
     // The room's old code too, so the old room is copied even when this page joins first.
     const legacy = this.params['legacy-instance'] ? `&legacy-instance=${encodeURIComponent(this.params['legacy-instance'])}` : '';
-    return `${proto}://${this.hostUrl}/${mode}/?instance=${encodeURIComponent(this.params.instance)}${legacy}${playlistParam}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}&mode=${mode}`;
+    return `${proto}://${this.hostUrl}/${mode}/?instance=${encodeURIComponent(this.params.instance)}${legacy}${playlistParam}&user=${window.user.id}-_-${encodeURIComponent(window.user.name)}&mode=${mode}&mature-links=${this.allowMature === true}`;
   }
 
   // Opens the 2D playlist page in the client's menu browser.
@@ -1814,6 +1982,8 @@ var Core = class {
       this.updateScreenButtons();
     }
     this.sendVolume();
+    // The panel shows the volume, and the buttons under the screen change it too.
+    if (this.playlistPanel) this.playlistPanel.renderSoon();
   }
   
   mute() {
@@ -1821,6 +1991,7 @@ var Core = class {
     this.params.mute = this.params.mute == 'true' ? 'false' : 'true';
     this.sendBrowserMessage({path: Commands.MUTE, data: this.params.mute});
     this.updateScreenButtons();
+    if (this.playlistPanel) this.playlistPanel.renderSoon();
   }
   async setupMuteButton(playlistContainer) {
     this.muteButton = await this.setupSwapButton(playlistContainer, 'ButtonMute', new BS.Vector3(this.screenButtonLayout().Mute, 0, 0),
@@ -2539,9 +2710,12 @@ var Core = class {
     this.setOrDefault("space-screen", 'auto');
     // The world video player's size for files (native-video.js); empty matches the browser.
     this.setOrDefault("native-screen-size", '');
+    // YouTube on the world's video player (youtube-native.js) instead of the browser: on by default
+    // in snippets (snippet.js), off by default on the old script tag.
+    this.setOrDefault("youtube-native", this.currentScript && this.currentScript.snippet ? 'true' : 'false');
     this.setOrDefault("one-for-each-instance", "false");
     // The longest a new playlist track waits for every screen to load it, in seconds (0: no wait).
-    this.setOrDefault("ready-delay", '5');
+    this.setOrDefault("ready-delay", '8');
     // The room. Pages the player opens get the finished room in their address (?instance=). Only
     // those pages (on the player's own server) take it from there: a space's own address can have
     // ?instance= too (a private copy of the space), and that's already part of the room.
@@ -2559,6 +2733,7 @@ var Core = class {
     // Shows the screen page's size, zoom and pixel ratio on the screen, for checking its fit.
     this.setOrDefault("screen-debug", 'false');
     this.setOrDefault("untrusted-links", 'false');
+    this.setOrDefault("mature-links", 'false');
     this.setOrDefault("is3d", 'false');
     this.setOrDefault("announce", 'true');
     this.setOrDefault("announce-four-twenty", 'false');
@@ -2621,6 +2796,10 @@ var Core = class {
     // Links from any site (video files, streams) besides YouTube, Twitch and Vimeo. Off unless the
     // world's owner turns it on, as those links aren't moderated.
     this.allowUntrusted = String(this.params["untrusted-links"]).toLowerCase() === 'true';
+    // Titles for adults from Tubi (R, TV-MA, not rated) and the Internet Archive (its adult films).
+    // Off unless the world's owner turns it on, as neither site asks for a viewer's age. Links from
+    // any site turn it on too: a file from anywhere has no rating to check, so they'd get round it.
+    this.allowMature = String(this.params["mature-links"]).toLowerCase() === 'true' || this.allowUntrusted === true;
     if(this.params["one-for-each-instance"] === "true" && window.user && window.user.instance) {
         this.params.instance += window.user.instance;
         // The old room had the same ending (it was the code and this), so the server can match it.
@@ -2702,11 +2881,14 @@ var Core = class {
   recieveBrowserMessage(msg) {
     if(msg.id && this.browserAcks && this.browserAcks[msg.id]) {
       this.browserAcks[msg.id]();
-      this.browserAcks[msg.id] = null;
+      delete this.browserAcks[msg.id];
     }else{
       switch(msg.path) {
         case Commands.ERROR:
           if (msg.data && msg.data.preview) this.notifyListeners(msg);
+          break;
+        case Commands.TUBI_STREAM:
+          this.answerTubiStream(msg.data);
           break;
       }
     }
@@ -2727,7 +2909,8 @@ var Core = class {
     Promise.resolve(this.sendBrowserMessage({ path: Commands.CAPTIONS, data: this.captions })).catch(() => {});
     this.showToast(this.captions ? 'Captions on' : 'Captions off');
   }
-  sendBrowserMessage(msg){
+  // noAck: for a message the page doesn't send back, so no answer is waited for.
+  sendBrowserMessage(msg, noAck){
     if(!window.isBanter) {
       return;
     }
@@ -2744,7 +2927,8 @@ var Core = class {
     }
     return new Promise((resolve, reject) => {
       if(this.browser) {
-        this.browserAcks[msg.id] = resolve;
+        if (noAck) resolve();
+        else this.browserAcks[msg.id] = resolve;
         this.runBrowserActions([{actionType: "postmessage", strParam1: JSON.stringify(msg)}]);
       }else{
         reject(new Error("Browser element not initialized. Cannot send message."));
@@ -2753,6 +2937,9 @@ var Core = class {
   }
   makeAndAddElement(type, style, parent) {
     const element = document.createElement(type);
+    // Pictures (thumbnails) are asked for without saying which page wants them: Bilibili's picture
+    // server refuses ones asked for from other sites.
+    if (type === 'img') element.referrerPolicy = 'no-referrer';
     Object.assign(element.style, style || {});
     (parent ? parent : document.body).appendChild(element);
     return element;
@@ -2881,6 +3068,13 @@ var Core = class {
         json.volume = this.tempVolume;
         this.sendBrowserMessage(json);
         break;
+      // The viewer's own skips and Auto Sync from their menu page, sent here while the world's
+      // video player has the browser page's place (see the server's userScreens).
+      case Commands.SKIP_FORWARD:
+      case Commands.SKIP_BACK:
+      case Commands.AUTO_SYNC:
+        if (this.nativeScreen) this.nativeScreen.handle(json);
+        break;
       case Commands.SET_BROWSER_URL:
         if(window.isBanter && this.browser) {
           // console.log("SET_BROWSER_URL", {"url": json.data.link});
@@ -2983,7 +3177,8 @@ var Core = class {
         }
         break;
       case Commands.READY_START:
-        // Every screen has loaded the new track, so it starts sooner than its wait said.
+        // Every screen has loaded the new track, so it starts at a new time: sooner than its wait
+        // said, or for karaoke, a full countdown from now (see the server's releaseIfReady).
         if (this.player && json.data) {
           const track = this.player.playlist && this.player.playlist[this.player.currentTrack];
           if (track && track.link === json.data.link && !this.player.paused) {
@@ -3130,7 +3325,7 @@ var Core = class {
     if (single && single.type !== 'archive') {
       const names = { youtube: 'YouTube video', twitch: single.channel ? `Twitch: ${single.channel}` : 'Twitch video', twitchclip: 'Twitch clip',
         vimeo: 'Vimeo video', vdoninja: 'VDO.Ninja stream', sdq: `Screen share: ${single.room}`, hls: 'Stream', mpegts: single.live ? 'Live stream' : 'Video', file: 'Video file',
-        tubi: single.kind === 'series' ? 'Tubi series' : 'Tubi video', nasa: 'NASA+ video', eso: 'ESO video' };
+        tubi: single.kind === 'series' ? 'Tubi series' : 'Tubi video', nasa: 'NASA+ video', eso: 'ESO video', radio: 'Radio station', bilibili: 'Bilibili video' };
       return names[single.type] || 'Video';
     }
     try {
@@ -3274,6 +3469,14 @@ var Core = class {
     if (this.nativeScreen) {
       this.nativeScreen.destroy();
       this.nativeScreen = null;
+    }
+    if (this.tubiLookup) {
+      this.tubiLookup.destroy();
+      this.tubiLookup = null;
+    }
+    if (this.ytResolver) {
+      this.ytResolver.destroy();
+      this.ytResolver = null;
     }
     this.screenReady = false;
 

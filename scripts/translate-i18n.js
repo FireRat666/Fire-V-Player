@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Makes public/i18n/<code>.js, the playlist panel's translations, with LibreTranslate.
 //
-//   node scripts/translate-i18n.js                 # ja, fr, de, es and pt, from http://127.0.0.1:5000
+//   node scripts/translate-i18n.js                 # ja, zh, fr, de, es and pt, from http://127.0.0.1:5000
 //   node scripts/translate-i18n.js --lang ja       # one language
 //   node scripts/translate-i18n.js --force         # translate everything again
 //   node scripts/translate-i18n.js --list          # just print the strings it found
@@ -29,7 +29,9 @@ const FILES = ['public/playlist-panel.js'];
 const OUT_DIR = path.join(ROOT, 'public', 'i18n');
 const URL_BASE = (process.env.LIBRETRANSLATE_URL || 'http://127.0.0.1:5000').replace(/\/$/, '');
 const API_KEY = process.env.LIBRETRANSLATE_KEY || '';
-const LANGS = ['ja', 'fr', 'de', 'es', 'pt'];
+const LANGS = ['ja', 'zh', 'fr', 'de', 'es', 'pt'];
+// LibreTranslate's own codes where they differ from the panel's: zh is Simplified Chinese.
+const LT_CODES = { zh: 'zh-Hans' };
 const BATCH = 40;
 const FIXES_FILE = path.join(__dirname, 'i18n-fixes.json');
 
@@ -49,9 +51,9 @@ function doubt(en, out) {
 }
 
 // Strings that are names, not words to translate.
-const KEEP = new Set(['Fire-V-Player', 'Fire-V-Player Karaoke', 'YouTube', 'Archive Films', 'Tubi', 'NASA+', 'ESO', 'ESO Fulldome',
-  'Screen Share', 'Go Live', 'LIVE', 'CC', 'FireRat', 'English', 'Français', 'Deutsch', 'Español', 'Português', '日本語',
-  'Dropbox', 'Twitch', 'Vimeo', 'VDO.Ninja', 'Google Drive',
+const KEEP = new Set(['Fire-V-Player', 'Fire-V-Player Karaoke', 'YouTube', 'Archive Films', 'Tubi', 'NASA+', 'ESO', 'ESO Fulldome', 'Shoutcast', 'Radio Browser', 'SomaFM', 'internet-radio.com',
+  'Screen Share', 'Go Live', 'LIVE', 'CC', 'FireRat', 'English', 'Français', 'Deutsch', 'Español', 'Português', '日本語', '简体中文',
+  'Dropbox', 'Twitch', 'Vimeo', 'VDO.Ninja', 'Google Drive', 'Bilibili',
   // Not shown in the panel: log lines, timeout names, words added to a search, a key name.
   'Panel destroyed during build', 'Loading the panel language', 'This app has no UI Kit', 'Using the UI Kit', 'No UI Kit in this app, using the plain look',
   '(scrolling list)', 'zoom karaoke', 'Enter']);
@@ -204,7 +206,7 @@ function restore(text, vars) {
 const DOCKER_PY = 'import sys,urllib.request;r=urllib.request.Request("http://127.0.0.1:5000/translate",data=sys.stdin.buffer.read(),headers={"Content-Type":"application/json"});sys.stdout.buffer.write(urllib.request.urlopen(r,timeout=600).read())';
 
 async function translate(texts, target) {
-  const body = { q: texts, source: 'en', target, format: 'text' };
+  const body = { q: texts, source: 'en', target: LT_CODES[target] || target, format: 'text' };
   if (API_KEY) body.api_key = API_KEY;
   if (process.env.LIBRETRANSLATE_DOCKER) {
     const { execFileSync } = require('child_process');

@@ -88,6 +88,64 @@ function parseSeconds(value) {
   return 0;
 }
 
+/**
+ * The Archive's own marks for adult items: it puts them in these "collections", which hide their
+ * pictures and keep them out of its listings.
+ */
+const ADULT_MARKS = new Set(['no-preview', 'deemphasize']);
+
+/**
+ * Words that mark an adult film wherever they are, its description included. Even the curated
+ * collections have stag films, many without the Archive's own marks.
+ */
+const ADULT_WORDS = /\b(stag ?(films?|reels?|movies?|loops?)|vintage stag|porn|porno|pornography|pornographic|xxx|erotic[as]?|erotica|erotikon|sexploitation|nudie|nudist|nudism|nudes?|nudity|topless|strip-?tease|strippers?|fetish|peep ?shows?|roughies?|x-rated|hentai|sex scenes?|adult (films?|movies?|stars?|actress(es)?|entertainment|content)|adults only)\b/i;
+
+/**
+ * Words that mark one only in its title or subjects: a plot description uses them for other things
+ * ("a penthouse apartment", "an aimless playboy"). They catch some classics too ("Lady of
+ * Burlesque"); those play where mature-links is on.
+ */
+const ADULT_TITLE_WORDS = /\b(naked|burlesque|bondage|spank(ing|ed)?|pin-?ups?|sexy|sex|sexuality|lingerie|cheesecake|stags?|bares?|playgirls?|strips|strip-?off)\b/i;
+
+/** A subject that is just one of these words. */
+const ADULT_SUBJECTS = /^\s*(adult|adults|mature|erotic|18\+|nsfw)\s*$/i;
+
+/**
+ * Whether an Archive item is for adults, from its metadata: anything outside the curated
+ * collections (where anyone can upload anything), anything the Archive marks as adult, and
+ * anything whose title, subjects or description use an adult film's words.
+ *
+ * @param {Object} meta - The item's metadata (or a search result's fields): collection, subject, title, description.
+ * @returns {boolean}
+ */
+function isMatureMeta(meta) {
+  if (!meta) return true;
+  const collections = [].concat(meta.collection || []).map(String);
+  if (!collections.some(c => COLLECTIONS.includes(c))) return true;
+  if (collections.some(c => ADULT_MARKS.has(c.toLowerCase()))) return true;
+  const list = value => [].concat(value || []).map(String);
+  // Entities decoded first (as the description's are below), so "stag&nbsp;film" reads as "stag film".
+  const subjects = list(meta.subject).map(decodeEntities).flatMap(s => s.split(/[;,]/));
+  if (subjects.some(s => ADULT_SUBJECTS.test(s))) return true;
+  // Runs of spaces count as one, so "stag  film" reads as "stag film".
+  const named = list(meta.title).map(decodeEntities).concat(subjects).join(' ').replace(/\s+/g, ' ');
+  if (ADULT_TITLE_WORDS.test(named)) return true;
+  // Its HTML's entities decoded (&nbsp; between "stag" and "film" included), so its words match.
+  const description = decodeEntities(list(meta.description).join(' ').replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ');
+  const all = `${named} ${description}`;
+  return ADULT_WORDS.test(all);
+}
+
+/** HTML entities as text: named ones (spaces, quotes, ...) and numeric ones. */
+const NAMED_ENTITIES = { nbsp: ' ', ensp: ' ', emsp: ' ', thinsp: ' ', amp: '&', quot: '"', apos: "'", lt: '<', gt: '>', ndash: '-', mdash: '-' };
+function decodeEntities(s) {
+  const code = n => (n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : ' ');
+  return String(s || '')
+    .replace(/&#(\d{1,7});/g, (m, n) => code(Number(n)))
+    .replace(/&#x([0-9a-f]{1,6});/gi, (m, n) => code(parseInt(n, 16)))
+    .replace(/&([a-z]+);/gi, (m, n) => (Object.prototype.hasOwnProperty.call(NAMED_ENTITIES, n.toLowerCase()) ? NAMED_ENTITIES[n.toLowerCase()] : m));
+}
+
 function thumbnailFor(id) {
   return `https://archive.org/services/img/${encodeURIComponent(id)}`;
 }
@@ -103,7 +161,7 @@ function queryWords(term) {
 
 async function advancedSearch(query) {
   const params = new URLSearchParams({ q: query, rows: String(SEARCH_ROWS), output: 'json' });
-  for (const f of ['identifier', 'title', 'runtime', 'year']) params.append('fl[]', f);
+  for (const f of ['identifier', 'title', 'runtime', 'year', 'collection', 'subject', 'description']) params.append('fl[]', f);
   params.append('sort[]', 'downloads desc');
   const json = await fetchJson(`https://archive.org/advancedsearch.php?${params}`);
   return (json && json.response && json.response.docs) || [];
@@ -137,7 +195,8 @@ async function search(term) {
         link: `https://archive.org/details/${d.identifier}`,
         channel: { name: year ? `Internet Archive, ${year}` : 'Internet Archive', link: '' },
         description: '',
-        source: 'archive'
+        source: 'archive',
+        mature: isMatureMeta(d)
       };
     });
   });
@@ -197,6 +256,7 @@ async function getItem(id) {
     return {
       id,
       title: cleanText(meta.title) || id,
+      mature: isMatureMeta(meta),
       // The best copy of each video (each group above picked its own best).
       files: files.slice(0, MAX_ITEM_FILES).map(describe),
       // Every copy, for a link straight to one of them.
@@ -213,7 +273,8 @@ function toVideo(item, file, many) {
     duration: file.duration,
     link: downloadLink(item.id, file.name),
     channel: { name: 'Internet Archive', link: '' },
-    source: 'archive'
+    source: 'archive',
+    mature: item.mature
   };
 }
 
@@ -275,4 +336,16 @@ async function resolveLink(link) {
   return (await resolveLinkAll(link))[0];
 }
 
-module.exports = { search, getItem, resolveLink, resolveLinkAll, parseSeconds, COLLECTIONS };
+/**
+ * Whether an Archive or publicdomainmovie.net link (a page, an item or one of its files) is for
+ * adults (see isMatureMeta).
+ * @param {string} link
+ * @returns {Promise<boolean>}
+ */
+async function isMature(link) {
+  const { id } = await identify(link);
+  if (!id) throw new Error("That isn't an Internet Archive link.");
+  return (await getItem(id)).mature;
+}
+
+module.exports = { search, getItem, resolveLink, resolveLinkAll, parseSeconds, isMatureMeta, isMature, COLLECTIONS };

@@ -64,8 +64,9 @@ var Playlist = class {
     await this.core.setupWebsocket("playlist", d => this.parseMessage(d), () => {
       // The in-world player sets the room's mode (it can change in world), so this page doesn't.
       // The room's old code as well, as the player page sends: this page can join first.
+      // Whether the world allows titles for adults (mature-links, from this page's URL).
       this.core.sendMessage({path: "instance", data: this.core.params.instance, u: window.user,
-        legacy: this.core.params['legacy-instance'] || undefined});
+        mature: this.core.allowMature === true, legacy: this.core.params['legacy-instance'] || undefined});
     }, ()=>{
         this.core.showToast("Reconnecting...");
     });
@@ -244,7 +245,7 @@ var Playlist = class {
         }
         break;
       case Commands.READY_START:
-        // Every screen has loaded the new track, so it starts sooner than its wait said.
+        // Every screen has loaded the new track, so it starts at a new time (see the server's releaseIfReady).
         if (this.core.player && json.data && !this.core.player.paused) {
           const track = this.core.player.playlist && this.core.player.playlist[this.core.player.currentTrack];
           if (track && track.link === json.data.link) {
@@ -414,7 +415,7 @@ var Playlist = class {
     const source = document.querySelector('#search-source');
     this.searchId = (this.searchId || 0) + 1;
     const data = { term, searchId: this.searchId };
-    if (source && ['archive', 'tubi', 'nasa', 'eso', 'esodome'].includes(source.value)) data.source = source.value;
+    if (source && ['archive', 'tubi', 'nasa', 'eso', 'esodome', 'shoutcast', 'radiobrowser', 'somafm', 'internetradio'].includes(source.value)) data.source = source.value;
     this.core.sendMessage({path: Commands.SEARCH, data });
   }
   updatePlaylist(player) {

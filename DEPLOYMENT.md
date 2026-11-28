@@ -173,3 +173,9 @@ YouTube can sometimes block requests from servers, which may cause video search 
 3.  Go to the "Network" tab, refresh the YouTube page, and click on the first request to `www.youtube.com`.
 4.  In the "Headers" section, find the `cookie` request header and copy its entire value.
 5.  Set this value for the `YOUTUBE_COOKIE_STRING` environment variable in Render.
+#### Internet radio relay
+
+Most radio stations (Shoutcast's among them) stream over plain `http://`, which the player page, served over `https://`, can't load. The server checks whether a station also answers over `https://` and plays that when it does. A station that only streams over http says it can't play, unless you turn on the relay, which sends such a station's sound through the server (`/api/radio`). It is **off unless you set it**, as each listener of a relayed station uses the station's bitrate of the server's data transfer (128 kbps is about 58 MB an hour per listener). It's a server setting only: nothing in a world's snippet or the panel can turn it on. It goes by the type a station's answer declares, not by what's in it: it only passes on audio types, and the MPEG-TS and generic binary types some stations send sound as (which aren't checked for having no picture), and refuses any other declared type. It only relays stations in a room's playlist. A station that streams only over http as HLS (an `application/vnd.apple.mpegurl` playlist) still can't play with the relay on, as the relay doesn't pass playlists on.
+
+-   `RADIO_RELAY=on` turns the relay on. The hourly `[TRAFFIC]` log line shows what it sent, under `/api/radio`. Each report counts the data streams sent since the last one, including streams still playing. A stream is counted as a request only when it ends (the listener leaves, or 8 hours pass), so one still playing shows its data but not yet its request.
+-   `RADIO_RELAY_MAX` is the most relayed streams at once (40 by default). Each address can have 3 at once.

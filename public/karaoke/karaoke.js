@@ -61,7 +61,8 @@ var Karaoke = class {
     this.setupSearchOverlay();
     await this.core.init();
     await this.core.setupWebsocket("playlist", d => this.parseMessage(d), () => {
-      this.core.sendMessage({path: "instance", data: this.core.params.instance, u: window.user});
+      // Whether the world allows titles for adults (mature-links, from this page's URL).
+      this.core.sendMessage({path: "instance", data: this.core.params.instance, u: window.user, mature: this.core.allowMature === true});
     }, () => {
         this.core.showToast("Reconnecting...");
     });
@@ -303,6 +304,17 @@ var Karaoke = class {
           this.updatePlaylist(this.core.player);
         }
         break;
+      case Commands.READY_START: {
+        // Everyone has the song: it starts at a new time (see the server's releaseIfReady).
+        const p = this.core.player;
+        const track = p && Array.isArray(p.playlist) ? p.playlist[p.currentTrack] : null;
+        if (track && json.data && track.link === json.data.link) {
+          p.lastStartTime = json.data.newLastStartTime;
+          p.currentTime = json.data.newCurrentTime;
+          this.startUiUpdater();
+        }
+        break;
+      }
       case Commands.AUTO_SYNC_STATE_CHANGED:
         this.autoSyncEnabled = json.data.enabled;
         this.autoSync.innerText = this.autoSyncEnabled ? "Auto Sync: On" : "Auto Sync: Off";

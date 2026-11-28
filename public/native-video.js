@@ -74,11 +74,12 @@ var FireNativeScreen = (() => {
    * Warming (see warmUp): a video that has loaded while a countdown holds it plays muted through
    * the countdown instead of waiting paused at its first frame, as Unity's player sometimes then
    * plays its sound over a black picture. WARM_REWIND_MS before the countdown ends it jumps back to
-   * its start (still muted), which is about what a jump takes to play again here, so it's playing
-   * from the start as the countdown ends and its sound comes on. With less than WARM_MIN_MS of the
-   * countdown left once it has loaded, it waits paused as before.
+   * its start (still muted): such a jump took about 1.3 s to play again on PC, so it's playing from
+   * the start as the countdown ends and its sound comes on. The server starts a track 2 s after
+   * every screen has loaded it (READY_LEAD_S), which leaves room for that. With less than
+   * WARM_MIN_MS of the countdown left once it has loaded, it waits paused as before.
    */
-  const WARM_REWIND_MS = 1000, WARM_MIN_MS = 1500;
+  const WARM_REWIND_MS = 1500, WARM_MIN_MS = 2000;
 
   /**
    * Put on Bilibili's embed page (player.bilibili.com/player.html) when it's the screen's page (see

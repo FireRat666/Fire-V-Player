@@ -41,8 +41,12 @@ const SkipJumpTimeKaraoke = 0.25;
 const READY_DELAY_DEFAULT_S = 8;
 /** The most ready-delay can be. */
 const READY_DELAY_MAX_S = 15;
-/** How far ahead a track starts once every screen has loaded it, so the message reaches them first. */
-const READY_LEAD_S = 0.3;
+/**
+ * How far ahead a track starts once every screen has loaded it: the message reaches them first,
+ * and the world's video player has time to go back to the start it has been playing muted from
+ * (about 1.3 s there) before the sound comes on (see native-video.js WARM_REWIND_MS).
+ */
+const READY_LEAD_S = 2;
 // How many times YouTube is asked whether a reported live video is live, and how far apart.
 const LIVE_CHECK_TRIES = 3;
 /** The shortest length a screen may report for a track (see setMediaDuration). */

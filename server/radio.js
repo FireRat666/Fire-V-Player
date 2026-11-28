@@ -141,6 +141,9 @@ function looksLikeRadio(text, type) {
   const parsed = parsePlaylist(text);
   if (!parsed.streams.length) return false;
   if (parsed.format !== 'm3u') return true;
+  // Each address with a name of its own (#EXTINF) is a list of stations, each its own item; one
+  // station's .m3u lists its addresses under one name, or none.
+  if (new Set(parsed.streams.map(s => s.title.toLowerCase()).filter(Boolean)).size > 1) return false;
   // Links the player knows (videos, and sound files too: an .m3u of songs is a playlist, as a file
   // name alone doesn't show a stream is live) make it a list, not a station.
   if (parsed.streams.some(s => MediaSources.detect(s.url) && MediaSources.detect(s.url).type !== 'radio')) return false;
@@ -238,6 +241,8 @@ function station(link) {
       if (media.site === 'radiobrowser') return await radioBrowserStation(media.id);
       if (media.site === 'internetradio' && media.listed) return await readStation(media.id);
       if (media.site === 'internetradio') return await internetRadioStation(media.id);
+      // A sound file's address marked as a station (see soundStation) is the stream itself.
+      if (!media.site && AUDIO_FILE.test(new URL(link).pathname)) return { title: '', streams: [fetchAddress(link, media)] };
       if (media.site === 'somafm') {
         const s = await readStation(`https://api.somafm.com/${media.id}.pls`);
         // "SomaFM: Groove Salad (#1): A nicely chilled plate of..." is each stream's title.
@@ -282,6 +287,19 @@ function isStationStream(url) {
   return m.type === 'file' && !!p && AUDIO_FILE.test(p.pathname);
 }
 
+/**
+ * A sound file on plain http (a live .mp3 stream, like Q101's on StreamTheWorld) as a station, or
+ * null: a page on https can't play it as a file, but as a station it plays from its https address,
+ * or through the relay. Its link gets a #radio mark.
+ */
+async function soundStation(link) {
+  const m = MediaSources.detect(link);
+  const u = MediaSources.parseUrl(link);
+  if (!m || m.type !== 'file' || m.url || !u || u.protocol !== 'http:' || !AUDIO_FILE.test(u.pathname)) return null;
+  u.hash = 'radio';
+  try { return await resolveLink(u.href); } catch (e) { return null; }
+}
+
 async function sniff(link) {
   const u = MediaSources.parseUrl(link);
   if (!u || MediaSources.detect(link)) return null;
@@ -305,13 +323,14 @@ async function sniff(link) {
  * address: a station's may have no .m3u8). A PLS, XSPF or plain .m3u list isn't either. It throws
  * when the station can't be reached at all, which isn't kept.
  */
-async function answersWithSound(url, ua = UA, httpsOnly = /^https:/i.test(url)) {
+async function answersWithSound(url, ua = UA, httpsOnly = /^https:/i.test(url), info = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5000);
   try {
     // The https probe (for playing it directly) must stay on https: one redirected to http
     // couldn't play there either. The relay's may go where the relay would (see relayType).
     const res = await lists().fetchPublic(url, { signal: controller.signal, httpsOnly, headers: { 'User-Agent': ua, 'Accept': '*/*', 'Accept-Encoding': 'identity' } });
+    info.status = res.status;
     const type = String(res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
     // An .m3u8 address is read as one whatever its type (some servers send text/plain).
     // So is a generic binary type, which an HLS playlist with no .m3u8 may be sent as too.
@@ -356,15 +375,21 @@ async function httpsVersion(url, onUnreachable) {
       const tries = [u.href];
       if (u.pathname === '/' && !u.search) tries.push(`${u.origin}/;`);
       let unreachable = null;
+      let refused = null;
       for (const t of tries) {
         try {
-          const type = await answersWithSound(t);
+          const info = {};
+          const type = await answersWithSound(t, UA, undefined, info);
           if (type) return { url: t, type };
+          if (!refused && [401, 403, 451].includes(info.status)) refused = t;
         } catch (e) {
           unreachable = e;
         }
       }
       if (unreachable) throw unreachable; // not kept (see TtlCache.remember)
+      // It refused this server (many stations only stream to their own country), but it's there
+      // over https: the viewer's own device may be let in (see streamFor).
+      if (refused) return { url: refused, type: '', refused: true };
       return null;
     });
   } catch (e) {
@@ -383,13 +408,19 @@ async function httpsVersion(url, onUnreachable) {
 async function streamFor(link) {
   const s = await station(link);
   let unsure = false; // some stream's https check couldn't be finished
+  let refused = null; // an https address that refused this server
   for (const url of s.streams.slice(0, 3)) {
     // A station that streams HLS (some on Radio Browser) plays as an HLS stream, over https only:
     // one on http plays from its https address when it has one there, and not at all otherwise
     // (the relay passes on sound, not a playlist and its pieces).
     // An https one is checked first: it has to answer there, and not by sending the player to http.
     const m3u8 = /\.m3u8($|\?)/i.test(url);
-    const https = await httpsVersion(url, () => { unsure = true; });
+    // A station on a port of its own (http://host:8000/) never speaks https there, so a failed
+    // check of that port says "no https", not "try again".
+    const ownPort = /^http:/i.test(url) && !!new URL(url).port;
+    const https = await httpsVersion(url, () => { if (!ownPort) unsure = true; });
+    // Refused to this server: tried last, by the viewer's own device.
+    if (https && https.refused) { refused = refused || https.url; continue; }
     if (m3u8 && /^https:/i.test(url)) {
       if (https) return { url: https.url, live: true };
       continue;
@@ -398,6 +429,7 @@ async function streamFor(link) {
     if (m3u8) continue;
     if (https) return /^video\/mp2t$/i.test(https.type) ? { url: https.url, live: true, type: 'mpegts' } : { url: https.url, live: true, audio: true };
   }
+  if (refused) return /\.m3u8($|\?)/i.test(refused) ? { url: refused, live: true } : { url: refused, live: true, audio: true };
   if (!relayOn() && unsure) throw new Error("Couldn't reach that station over https just now. Try again in a moment.");
   if (!relayOn()) throw new Error("This station only streams over http, which can't play here (only https streams can). Try another station.");
   // The relay sends the stream as the station does: an MPEG-TS one is played by mpegts.js. The
@@ -842,6 +874,6 @@ function searchInternetRadio(term) {
 }
 
 module.exports = {
-  parsePlaylist, looksLikeRadio, resolveLink, sniff, streamFor, relay, stationLink,
+  parsePlaylist, looksLikeRadio, resolveLink, sniff, soundStation, streamFor, relay, stationLink,
   searchShoutcast, searchRadioBrowser, searchSomaFM, searchInternetRadio
 };

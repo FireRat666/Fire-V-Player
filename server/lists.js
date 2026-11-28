@@ -611,6 +611,10 @@ async function resolveEntry(entry, limit, state = {}) {
     const item = await archiveItem(source.id, limit);
     return item.items.length === 1 ? [titled(item.items[0])] : item.items;
   }
+  // A radio station's stream (an address the player doesn't know, or a sound file on plain http,
+  // which a page on https can't play as a file): a station, named as the list names it.
+  const station = !MediaSources.detect(input) ? await media.sniffRadio(input) : await radio.soundStation(input);
+  if (station) return [entry.title ? { ...station, title: `${clean(entry.title, 190)} (radio)` } : station];
   if (!MediaSources.detect(input)) return []; // a list inside a list, a web page, or nonsense
   const item = await media.resolveMediaLink(input);
   return item ? [titled({ title: clean(item.title), thumbnail: item.thumbnail || '', duration: Number(item.duration) || 0, link: item.link,

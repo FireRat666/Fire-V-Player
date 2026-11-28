@@ -65,6 +65,18 @@ var FireNativeScreen = (() => {
   const OVERLAY_W = 1600, OVERLAY_TICK_MS = 200, COUNTDOWN_NUMBERS_S = 3;
   /** How long after a countdown its video must be moving, and how often it's nudged if not (see watchStart). */
   const START_CHECK_MS = 3000, START_KICKS = 2;
+  /**
+   * How long after a track's player is made, and after a countdown lets it go, every step of its
+   * start is logged (see trace): what the page asked of Unity and what Unity said back.
+   */
+  const TRACE_MS = 20000;
+  /**
+   * The prime as a held video is let go (see primeStart): it plays muted for about a frame, goes
+   * back to its start, and its sound comes back once it's there. Unity's player sometimes shows
+   * no picture (sound over black) when it starts from the first frame it was held at, and a seek
+   * once it has played brings the picture back.
+   */
+  const PRIME_PLAY_MS = 60, PRIME_UNMUTE_MS = 120;
 
   /**
    * Put on Bilibili's embed page (player.bilibili.com/player.html) when it's the screen's page (see
@@ -285,6 +297,8 @@ var FireNativeScreen = (() => {
       // Played as a viewer's preview: back on the room's track it's made again (see core.js updateScreen).
       this.previewed = this.isPreview();
       this.startedAt = performance.now(); // a YouTube video's deadline counts its lookup too (see create)
+      this.traceFrom = performance.now();
+      this.traceUntil = this.traceFrom + TRACE_MS;
       this.holdFromCore();
       this.ready = this.create().catch(e => {
         console.error('[NativeScreen] Could not set up the video player.', e);
@@ -307,6 +321,16 @@ var FireNativeScreen = (() => {
       if (this.bilibili) return [SCREEN_WIDTH_M, SCREEN_WIDTH_M * 9 / 16];
       const parts = String(this.core.params['native-screen-size'] || '').trim().split(/\s+/).map(Number);
       return parts.length === 2 && parts.every(n => n > 0) ? parts : DEFAULT_SIZE;
+    }
+
+    /**
+     * Logs a step of the track's start, while TRACE_MS lasts (from the player's making, or from a
+     * countdown letting it go): seconds since the player was made, then what happened.
+     * @param {string} what
+     */
+    trace(what) {
+      if (performance.now() > this.traceUntil) return;
+      console.log(`[NativeScreen] +${((performance.now() - this.traceFrom) / 1000).toFixed(2)}s ${what}`);
     }
 
     /**
@@ -377,6 +401,7 @@ var FireNativeScreen = (() => {
         'BanterVideoPlayer', [settings.url, settings.volume, settings.loop, settings.playOnAwake, settings.skipOnDrop, settings.waitForFirstFrame]));
       if (this.destroyed) return;
       this.vp = vp;
+      this.trace(`made the player: playOnAwake ${settings.playOnAwake}, volume ${settings.volume}, held ${this.held()}, wantPaused ${this.wantPaused}`);
       // time only reaches the page when watched. The other read-only values (isPrepared,
       // isPlaying, duration) keep their first value unless asked for with GetProperty, which
       // poll() does (see readState).
@@ -491,6 +516,8 @@ var FireNativeScreen = (() => {
       }
       const values = await Promise.all(names.map(get));
       if (this.destroyed || vp !== this.vp) return;
+      const said = names.map((n, i) => `${n} ${values[i]}`).join(', ');
+      if (said !== this.lastSaid) { this.lastSaid = said; this.trace(`Unity says ${said} (time ${vp.time})`); }
       names.forEach((n, i) => {
         const v = values[i];
         if (v === undefined || v === null) return;
@@ -525,6 +552,7 @@ var FireNativeScreen = (() => {
       const now = performance.now();
       // Unity sends the time once a second, as each second starts, so it is exact when it arrives.
       if (vp.time !== this.lastRaw) {
+        this.trace(`Unity's time ${this.lastRaw} -> ${vp.time}`);
         this.lastRaw = vp.time;
         this.baseTime = Number(vp.time) || 0;
         this.baseAt = now;
@@ -533,6 +561,7 @@ var FireNativeScreen = (() => {
       // Loaded once Unity says so, or once the time starts moving (in case it never does).
       if (!this.prepared && (this.state.isPrepared || this.state.duration > 0 || Number(vp.time) > 0)) {
         this.prepared = true;
+        this.trace(`prepared (isPrepared ${this.state.isPrepared}, duration ${this.state.duration}, time ${vp.time})`);
         this.core.syncSecondScreens(); // its picture is a texture they can show now (see textureId)
         this.reportDuration();
         this.requestSync(true); // start where everyone else is
@@ -865,9 +894,15 @@ var FireNativeScreen = (() => {
       this.holdUntil = performance.now() + seconds * 1000;
       clearTimeout(this.countdownTimer);
       this.countdownTimer = setTimeout(() => {
+        this.traceUntil = performance.now() + TRACE_MS;
+        this.trace('countdown over');
         this.clearHold();
         this.lastToggleAt = -Infinity;
+        // Muted before it plays, for the prime (see primeStart).
+        const prime = this.canPrime();
+        if (prime) { this.priming = true; this.applyVolume(); }
         this.applyPaused();
+        if (prime) this.primeStart();
         console.log(`[NativeScreen] Countdown over, playing (Unity says ${this.state && this.state.isPlaying ? 'playing' : 'not playing'}, at ${this.localTime().toFixed(2)}s).`);
         this.watchStart(performance.now(), 0);
         // Once it has had a moment to start. Not a forced jump, which would be heard on every
@@ -908,6 +943,37 @@ var FireNativeScreen = (() => {
       }, START_CHECK_MS);
     }
 
+    /**
+     * Whether a video let go from its hold gets the prime (see primeStart): one on the world's own
+     * video player (not a page's), still at its first frame, that this let go and isn't at its end.
+     */
+    canPrime() {
+      return !!this.vp && typeof this.vp.read !== 'function' && this.prepared && !this.wantPaused
+        && !this.isPreview() && this.endedAt == null && (Number(this.vp.time) || 0) < 0.5;
+    }
+
+    /**
+     * As a held video starts (muted by the caller): after PRIME_PLAY_MS of playing it goes back to
+     * its start, and its sound comes back PRIME_UNMUTE_MS later, so nothing of the first frame is
+     * heard. Every step is logged (trace), with Unity's time, so its effect can be seen.
+     */
+    primeStart() {
+      const vp = this.vp;
+      clearTimeout(this.primeTimer);
+      this.trace(`prime: playing muted (Unity's volume ${vp.volume}, time ${vp.time})`);
+      this.primeTimer = setTimeout(() => {
+        if (this.destroyed || vp !== this.vp) return;
+        this.trace(`prime: back to the start (Unity's time ${vp.time})`);
+        if (!this.wantPaused) this.seek(0);
+        this.primeTimer = setTimeout(() => {
+          this.priming = false;
+          if (this.destroyed || vp !== this.vp) return;
+          this.applyVolume();
+          this.trace(`prime: sound back (volume ${vp.volume}, Unity's time ${vp.time})`);
+        }, PRIME_UNMUTE_MS);
+      }, PRIME_PLAY_MS);
+    }
+
     /** Ends a hold, so the next applyPaused may play. @returns {boolean} whether there was one. */
     clearHold() {
       const was = this.holding();
@@ -919,7 +985,7 @@ var FireNativeScreen = (() => {
 
     /** Computes Unity normalized volume (0.0 to 1.0). @returns {number} */
     unityVolume() {
-      return this.muted ? 0 : Math.max(0, Math.min(1, Number(this.volume) / 100 || 0));
+      return this.muted || this.priming ? 0 : Math.max(0, Math.min(1, Number(this.volume) / 100 || 0));
     }
 
     /** Applies volume to Unity video player component. */
@@ -945,6 +1011,7 @@ var FireNativeScreen = (() => {
       if (!paused && (this.endedAt != null || (d && this.localTime() >= d - 0.5))) return;
       this.lastToggleAt = now;
       this.seenPlaying = false; // wait for Unity to say it's playing again
+      this.trace(`PlayToggle to ${paused ? 'pause' : 'play'} (we had Unity as ${this.state.isPlaying ? 'playing' : 'not playing'}, time ${vp.time})`);
       vp.PlayToggle();
       this.state.isPlaying = !this.state.isPlaying; // until the next readState confirms it
     }
@@ -963,6 +1030,7 @@ var FireNativeScreen = (() => {
         this.endedAt = null;
         this.seenPlaying = false; // still stopped until it's started again
       }
+      this.trace(`seek to ${t.toFixed(2)} (Unity's time ${this.vp.time})`);
       this.vp.time = t;
       // A jump while the start is being checked (a sync's, a host seek): only playing from where it
       // landed counts, and it gets the whole wait to do that in.
@@ -1148,6 +1216,7 @@ var FireNativeScreen = (() => {
       clearTimeout(this.readyTimer);
       clearInterval(this.overlayTimer);
       clearTimeout(this.startTimer);
+      clearTimeout(this.primeTimer);
       if (this.vp && typeof this.vp.destroy === 'function') this.vp.destroy();
       // Destroying the object destroys the video player (or a page's browser) with it.
       if (this.go) this.core.destroyObject(this.go);

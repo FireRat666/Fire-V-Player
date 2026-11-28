@@ -964,7 +964,7 @@ class TwitchClipSource extends BaseMediaSource {
     this.muted = !!m;
     if (!this.toldMute) {
       this.toldMute = true;
-      this.opts.onError("Twitch clips can't be muted or turned down here.");
+      this.opts.onError("Twitch clips can't be muted or turned down here.", true); // a notice: it plays on
     }
   }
   destroy() {
@@ -1553,7 +1553,7 @@ class MediaSwitch {
       captions: this.captions,
       title: String((item && item.title) || ''), thumbnail: String((item && item.thumbnail) || ''),
       onDuration: seconds => this.opts.onDuration(link, seconds),
-      onError: message => this.opts.onError(message),
+      onError: (message, notice) => this.opts.onError(message, notice),
       requestClick: () => { if (this.opts.requestClick) this.opts.requestClick(); },
       deviceStream: this.opts.deviceStream,
       allowMature: this.opts.allowMature

@@ -118,7 +118,8 @@ var FireNativeScreen = (() => {
     var p = player(), v = video();
     var dur = 0, t = 0;
     try { dur = Number(p && p.getDuration()) || 0; t = Number(p && p.getCurrentTime()) || 0; } catch (e) {}
-    send({ type: 'state', ready: !!(p && v && (v.readyState >= 2 || dur > 0)), t: t, dur: dur,
+    /* Ready once it has a frame to show (HAVE_CURRENT_DATA), not just its length. */
+    send({ type: 'state', ready: !!(p && v && v.readyState >= 2), t: t, dur: dur,
       paused: !p || !v || paused(p, v), ended: !!(v && v.ended), blocked: blocked });
   }
   function dress() {
@@ -580,7 +581,9 @@ var FireNativeScreen = (() => {
         this.lastMovedAt = now;
       }
       // Loaded once Unity says so, or once the time starts moving (in case it never does).
-      if (!this.prepared && (this.state.isPrepared || this.state.duration > 0 || Number(vp.time) > 0)) {
+      // A page's video only once it says it has a frame: its length can come first.
+      const page = typeof vp.read === 'function';
+      if (!this.prepared && (this.state.isPrepared || (!page && this.state.duration > 0) || Number(vp.time) > 0)) {
         this.prepared = true;
         this.trace(`prepared (isPrepared ${this.state.isPrepared}, duration ${this.state.duration}, time ${vp.time})`);
         this.core.syncSecondScreens(); // its picture is a texture they can show now (see textureId)

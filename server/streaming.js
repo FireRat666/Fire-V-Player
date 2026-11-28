@@ -231,7 +231,8 @@ async function readTubiSeries(id, season, limit) {
   if (!series) throw new Error("That Tubi series isn't available.");
   // A series for adults has every episode for adults, whatever an episode's own rating.
   const seriesMature = MediaSources.tubiMature(series.ratings);
-  const num = (v, fallback) => (Number.isFinite(Number(v)) && String(v).trim() !== '' ? Number(v) : fallback);
+  // A missing number (null, which Number() makes 0) takes the fallback.
+  const num = (v, fallback) => (v != null && Number.isFinite(Number(v)) && String(v).trim() !== '' ? Number(v) : fallback);
   // [{n, eps: [{id, num}]}]: the full list where the page has it, else the site data's.
   const listed = (data.fvpSeasons && data.fvpSeasons.length ? data.fvpSeasons : series.seasons || []).map((s, i) => ({
     n: num(s.number, 1000 + i),

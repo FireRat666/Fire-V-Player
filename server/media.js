@@ -252,7 +252,8 @@ async function screenMature(ws, item, said) {
       if (tubi) tubiDownUntil = Date.now() + TUBI_RETRY_MS;
     }
   }
-  if (adult === null) adult = typeof said === 'boolean' ? said : null;
+  // What the device said counts for Tubi only, whose servers may not serve this server's country.
+  if (adult === null && tubi) adult = typeof said === 'boolean' ? said : null;
   // Its rating couldn't be found: not added, where the world doesn't allow titles for adults.
   if (adult === null) throw new Error(UNRATED_MESSAGE);
   if (adult) throw new Error(MediaSources.matureMessage(rest.link));

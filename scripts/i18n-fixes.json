@@ -20,7 +20,8 @@
     "Pick Episodes": "Episoden auswählen",
     "Clear Results": "Ergebnisse leeren",
     "Then search here for that name, or paste this link with {name} changed to the same name:": "Suche dann hier nach diesem Namen, oder füge diesen Link ein, mit {name} durch denselben Namen ersetzt:",
-    "To share your PC's screen, open this page on the PC, with {name} changed to a name of your own (it can be anything):": "Um den Bildschirm deines PCs zu teilen, öffne diese Seite auf dem PC und ersetze {name} durch einen eigenen Namen (er kann beliebig sein):"
+    "To share your PC's screen, open this page on the PC, with {name} changed to a name of your own (it can be anything):": "Um den Bildschirm deines PCs zu teilen, öffne diese Seite auf dem PC und ersetze {name} durch einen eigenen Namen (er kann beliebig sein):",
+    "Season {n}": "Staffel {n}"
   },
   "fr": {
     "Save for Me": "Enregistrer pour moi",
@@ -31,7 +32,8 @@
     "Go back from live (everyone):": "Reculer par rapport au direct (tout le monde) :",
     "Search YouTube, Internet Archive, Tubi, NASA+ or ESO: pick the source from the drop-down beside the box. Or paste a link.": "Recherchez sur YouTube, Internet Archive, Tubi, NASA+ ou ESO : choisissez la source dans le menu déroulant à côté du champ. Ou collez un lien.",
     "Search YouTube, Internet Archive, Tubi, NASA+, ESO or a screen share by its room code: pick the source from the drop-down beside the box. Or paste a link.": "Recherchez sur YouTube, Internet Archive, Tubi, NASA+, ESO ou un partage d’écran par son code de salle : choisissez la source dans le menu déroulant à côté du champ. Ou collez un lien.",
-    "Pick Shoutcast, internet-radio.com or Tubi in the drop-down to browse its site.": "Choisissez Shoutcast, internet-radio.com ou Tubi dans la liste déroulante pour parcourir son site."
+    "Pick Shoutcast, internet-radio.com or Tubi in the drop-down to browse its site.": "Choisissez Shoutcast, internet-radio.com ou Tubi dans la liste déroulante pour parcourir son site.",
+    "Looking up \"{title}\"...": "Recherche de \"{title}\"..."
   },
   "ja": {
     "\"{title}\" can't play here.": "「{title}」はここでは再生できません。",
@@ -430,7 +432,8 @@
     "Pick Episodes": "Elegir episodios",
     "Pick Shoutcast, internet-radio.com or Tubi in the drop-down to browse its site.": "Elige Shoutcast, internet-radio.com o Tubi en el desplegable para navegar por su sitio.",
     "Clear Results": "Borrar resultados",
-    "Then search here for that name, or paste this link with {name} changed to the same name:": "Después busca aquí ese nombre, o pega este enlace con {name} cambiado por el mismo nombre:"
+    "Then search here for that name, or paste this link with {name} changed to the same name:": "Después busca aquí ese nombre, o pega este enlace con {name} cambiado por el mismo nombre:",
+    "Looking up \"{title}\"...": "Buscando \"{title}\"..."
   },
   "pt": {
     "Accent": "Cor de destaque",

@@ -185,7 +185,7 @@ FVP_STRINGS["de"] = {
   "Searching internet-radio.com's radio stations.": "Suche nach Internet-Radio.com Radiosender.",
   "Searching screen.sdq.st: type a room code, or paste its link.": "Suche screen.sdq.st: Geben Sie einen Raumcode ein oder fügen Sie dessen Link ein.",
   "Searching...": "Suche...",
-  "Season {n}": "Saison {n}",
+  "Season {n}": "Staffel {n}",
   "Share": "Anteil",
   "Shoutcast is open beside the panel. Press Play on a station there to add it.": "Shoutcast ist neben dem Panel offen. Drücken Sie Play auf einer Station dort, um es hinzuzufügen.",
   "Shows a code. Send a link from your phone into your search, no typing in VR.": "Zeigt einen Code an. Senden Sie einen Link von Ihrem Telefon in Ihre Suche, keine Eingabe in VR.",

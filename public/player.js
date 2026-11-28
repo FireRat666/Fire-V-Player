@@ -355,8 +355,17 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       this.player = window.MediaSwitch ? new MediaSwitch(this.yt, {
         getId: link => this.core.getId(link),
         onDuration: (link, seconds) => this.reportMediaDuration(link, seconds),
-        onError: message => {
-          this.core.showToast(message, 6000);
+        onError: (message, notice) => {
+          // A notice (a Twitch clip that can't be turned down) plays on: a toast says so.
+          // Otherwise this load won't play (copy protection, a title for adults here, a link this
+          // world doesn't allow...), and the screen says why in place of "Loading..." until
+          // something else is loaded (see updateLoading), so everyone watching can see it.
+          const failed = this.previewVideo || this.currentVideo;
+          if (notice || !(failed && failed.link)) this.core.showToast(message, 6000);
+          else {
+            this.failure = { link: failed.link, message: String(message || "This can't play here.") };
+            this.updateLoading();
+          }
           if (this.previewVideo) {
             this.sendBrowserMessage({ path: Commands.ERROR, data: { message, preview: true } });
           }
@@ -1609,6 +1618,8 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       const pd = this.playerData;
       const roomTrack = pd && Array.isArray(pd.playlist) ? pd.playlist[pd.currentTrack] : null;
       const active = !!(video && video.link) && (this.previewVideo ? true : !!(roomTrack && roomTrack.link === video.link));
+      // Why it can't play, while that's still what's loaded (see MediaSwitch's onError).
+      const failure = active && this.failure && this.failure.link === video.link && this.loadedLink !== video.link ? this.failure : null;
       let want = active && video.link !== this.unplayableLink && !this.countdownEl && !(pd && pd.paused && !this.previewVideo);
       if (want && this.player) {
         try {
@@ -1621,6 +1632,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       // something else is wrong, which the player itself may say.
       if (want && window.MediaSources && /^twitch/.test((MediaSources.detect(video.link) || {}).type || '')) want = false;
       if (want && (Date.now() - this.loadingSince < LOADING_SHOW_MS || Date.now() - this.loadingSince > LOADING_MAX_MS)) want = false;
+      if (failure) want = true; // from the moment it fails, for as long as it's the track
       let el = this.loadingEl;
       if (!want) {
         if (el) { el.remove(); this.loadingEl = null; }
@@ -1632,10 +1644,18 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
           position: 'fixed', inset: '0', zIndex: '99990', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
           background: 'rgba(0, 0, 0, 0.72)', color: '#fff', fontFamily: "'Roboto', sans-serif", pointerEvents: 'none', textAlign: 'center'
         });
-        el.innerHTML = '<div style="font-size: 9vh; font-weight: 700; letter-spacing: 0.04em">Loading...</div>'
+        el.innerHTML = '<div class="head" style="font-size: 9vh; font-weight: 700; letter-spacing: 0.04em">Loading...</div>'
+          + '<div class="why" style="display: none; font-size: 5vh; margin-top: 2vh; max-width: 85vw; line-height: 1.3"></div>'
           + '<div class="what" style="font-size: 4vh; margin-top: 2vh; opacity: 0.85; max-width: 85vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis"></div>';
         document.body.appendChild(el);
       }
+      // "Can't play this here", and why, in place of "Loading..." once it has failed.
+      const head = el.querySelector('.head'), why = el.querySelector('.why');
+      const headText = failure ? "Can't play this here" : 'Loading...';
+      if (head.textContent !== headText) head.textContent = headText;
+      const whyText = failure ? failure.message : '';
+      if (why.textContent !== whyText) why.textContent = whyText;
+      why.style.display = failure ? '' : 'none';
       const what = el.querySelector('.what');
       const title = video.title || '';
       if (what.textContent !== title) what.textContent = title;
@@ -1705,6 +1725,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         this.readyToPlay = true;
         clearTimeout(this.syncTimeout);
         try { this.player.setPlaybackRate(1.0); } catch (e) {}
+        this.failure = null; // a new load: its own failure, if any, says so
         if (this.player.loadMedia) this.player.loadMedia(video.link, 0, video);
         else this.player.loadVideoById(this.core.getId(video.link), 0);
         this.player.playVideo();
@@ -1760,6 +1781,7 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
         if(this.lastUrl !== video.link || force) {
           const start = this.startAt(video, currentTime);
           this.liveJumped = null; // see onYouTubeState
+          this.failure = null; // a new load: its own failure, if any, says so
           if (this.player.loadMedia) this.player.loadMedia(video.link, start, video);
           else this.player.loadVideoById(this.core.getId(video.link), start);
           this.restartLoading();

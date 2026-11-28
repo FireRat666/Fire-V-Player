@@ -412,6 +412,9 @@ var Core = class {
   wantsNativeYouTube(link) {
     if (String(this.params['youtube-native']).toLowerCase() !== 'true') return false;
     if (typeof FireYouTubeResolver === 'undefined' || !MediaSources.youtubeId(link)) return false;
+    // A Shorts link is a vertical video, which the world's player won't take: straight to the browser.
+    const u = MediaSources.parseUrl(link);
+    if (u && /^\/shorts\//i.test(u.pathname)) return false;
     if (typeof BS.Browser !== 'function' && typeof BS.BanterBrowser !== 'function') return false;
     // The lookup page never started here (see youtube-native.js): YouTube's own player for the visit.
     if (this.ytResolver && this.ytResolver.failed && !this.ytResolver.isReady) return false;
@@ -518,6 +521,9 @@ var Core = class {
       Promise.resolve(this.sendBrowserMessage({ path: Commands.PREVIEW_VIDEO, data: video })).catch(() => {});
     } else if (sameNative) {
       this.nativeScreen.previewed = true;
+      // Out of the room's countdown: a preview plays at once with its sound, and isn't taken back
+      // to the start by the countdown's warming (see native-video.js warmUp).
+      this.nativeScreen.clearHold();
       this.nativeScreen.wantPaused = false;
       this.nativeScreen.seek(0);
       this.nativeScreen.applyPaused();

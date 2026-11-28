@@ -376,9 +376,17 @@ async function streamFor(link) {
     if (https) return /^video\/mp2t$/i.test(https.type) ? { url: https.url, live: true, type: 'mpegts' } : { url: https.url, live: true, audio: true };
   }
   if (!relayOn()) throw new Error("This station only streams over http, which can't play here (only https streams can). Try another station.");
-  // The relay sends the stream as the station does: an MPEG-TS one is played by mpegts.js.
-  const relayed = { url: `/api/radio?link=${encodeURIComponent(link)}`, live: true };
-  return /^video\/mp2t$/i.test(await relayType(s.streams[0])) ? { ...relayed, type: 'mpegts' } : { ...relayed, audio: true };
+  // The relay sends the stream as the station does: an MPEG-TS one is played by mpegts.js. The
+  // player is told the kind of the first stream that answers with sound, and the relay sends only
+  // streams of that kind, starting with that one (see relay).
+  let first = 0, type = '';
+  for (let i = 0; i < Math.min(3, s.streams.length); i++) {
+    type = await relayType(s.streams[i]);
+    if (type) { first = i; break; }
+  }
+  const ts = /^video\/mp2t$/i.test(type);
+  const relayed = { url: `/api/radio?link=${encodeURIComponent(link)}&s=${first}&kind=${ts ? 'ts' : 'audio'}`, live: true };
+  return ts ? { ...relayed, type: 'mpegts' } : { ...relayed, audio: true };
 }
 
 /** The type a station's http stream is sent as ('' if unknown), kept as long as the https check. */
@@ -435,13 +443,19 @@ async function relay(req, res, allowed) {
   firstByte = setTimeout(() => controller.abort(), TIMEOUT_MS);
   longest = setTimeout(release, MAX_RELAY_MS);
   let lastError = 'The station sent no sound.';
-  for (const url of s.streams.slice(0, 3)) {
+  // The stream streamFor picked first, then the others, as long as they're the kind the player
+  // was told (MPEG-TS or plain sound), which it was set up to play.
+  const streams = s.streams.slice(0, 3);
+  const from = Math.max(0, Math.min(streams.length - 1, parseInt(req.query.s, 10) || 0));
+  const kind = req.query.kind === 'ts' || req.query.kind === 'audio' ? req.query.kind : '';
+  for (const url of [streams[from], ...streams.filter((u, i) => i !== from)].filter(Boolean)) {
     if (released) return;
     try {
       const upstream = await lists().fetchPublic(url, { signal: controller.signal, headers: { 'User-Agent': RELAY_UA, 'Accept': '*/*', 'Accept-Encoding': 'identity' } });
       const type = String(upstream.headers.get('content-type') || '');
-      if (!upstream.ok || !AUDIO_TYPE.test(type) || PLAYLIST_TYPE.test(type)) {
-        lastError = upstream.ok ? "The station's stream isn't sound." : `The station answered ${upstream.status}.`;
+      const wrongKind = kind && (/^video\/mp2t/i.test(type) ? 'ts' : 'audio') !== kind;
+      if (!upstream.ok || !AUDIO_TYPE.test(type) || PLAYLIST_TYPE.test(type) || wrongKind) {
+        lastError = !upstream.ok ? `The station answered ${upstream.status}.` : wrongKind ? "The station's stream isn't the kind it was a moment ago." : "The station's stream isn't sound.";
         try { await upstream.body?.cancel(); } catch (e) {}
         continue;
       }

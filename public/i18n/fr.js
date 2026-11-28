@@ -81,7 +81,7 @@ FVP_STRINGS["fr"] = {
   "Loading the browser": "Chargement du navigateur",
   "Loading...": "Chargement...",
   "Look & language": "Apparence et langue",
-  "Looking up \"{title}\"...": "\"{title}\"...",
+  "Looking up \"{title}\"...": "Recherche de \"{title}\"...",
   "Made by FireRat": "Fabriqué par FireRat",
   "Made with": "Fabriqué avec",
   "Mode: {mode} ({from})": "Mode: {mode} ({from})",

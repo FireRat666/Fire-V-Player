@@ -71,12 +71,14 @@ var FireNativeScreen = (() => {
    */
   const TRACE_MS = 20000;
   /**
-   * The prime as a held video is let go (see primeStart): it plays muted for about a frame, goes
-   * back to its start, and its sound comes back once it's there. Unity's player sometimes shows
-   * no picture (sound over black) when it starts from the first frame it was held at, and a seek
-   * once it has played brings the picture back.
+   * Warming (see warmUp): a video that has loaded while a countdown holds it plays muted through
+   * the countdown instead of waiting paused at its first frame, as Unity's player sometimes then
+   * plays its sound over a black picture. WARM_REWIND_MS before the countdown ends it jumps back to
+   * its start (still muted), which is about what a jump takes to play again here, so it's playing
+   * from the start as the countdown ends and its sound comes on. With less than WARM_MIN_MS of the
+   * countdown left once it has loaded, it waits paused as before.
    */
-  const PRIME_PLAY_MS = 60, PRIME_UNMUTE_MS = 120;
+  const WARM_REWIND_MS = 1000, WARM_MIN_MS = 1500;
 
   /**
    * Put on Bilibili's embed page (player.bilibili.com/player.html) when it's the screen's page (see
@@ -571,6 +573,7 @@ var FireNativeScreen = (() => {
       if (vp.time !== this.lastRaw) {
         this.trace(`Unity's time ${this.lastRaw} -> ${vp.time}`);
         this.lastRaw = vp.time;
+        this.lastTimeAt = now;
         this.baseTime = Number(vp.time) || 0;
         this.baseAt = now;
         this.lastMovedAt = now;
@@ -598,6 +601,7 @@ var FireNativeScreen = (() => {
       }
       if (this.prepared) {
         if (!this.durationReported) this.reportDuration(); // the length may come later than the first frame
+        this.warmUp();
         this.applyPaused();
         if (this.youtubeId) this.watchStalls(now);
       }
@@ -720,7 +724,7 @@ var FireNativeScreen = (() => {
      * @returns {boolean}
      */
     hasPlayed() {
-      return this.previewed || (this.prepared && (this.endedAt != null || this.localTime() > 0.5));
+      return this.previewed || (this.prepared && !this.warming && (this.endedAt != null || this.localTime() > 0.5));
     }
 
     /**
@@ -915,26 +919,30 @@ var FireNativeScreen = (() => {
      * @param {number} seconds
      */
     setHold(seconds) {
+      if (!this.holding()) this.warmSkipped = false; // a new countdown: it may warm this time
       this.holdUntil = performance.now() + seconds * 1000;
       clearTimeout(this.countdownTimer);
       this.countdownTimer = setTimeout(() => {
+        const warmed = this.warming;
+        this.clearHold(); // its sound comes on now, at the viewer's own level (see clearHold)
+        this.lastToggleAt = -Infinity;
+        this.applyPaused();
+        // Where it is as the sound comes on, to tune WARM_REWIND_MS: Unity's last time, and when
+        // it said it (it says it once a second), against when it went back to the start.
+        const at = t => t == null ? '?' : `+${((t - this.traceFrom) / 1000).toFixed(2)}s`;
+        if (warmed) console.log(`[NativeScreen] Countdown over at ${at(performance.now())}: sound on. Went back to the start at ${at(this.rewoundAt)}; Unity last said ${this.vp && this.vp.time} at ${at(this.lastTimeAt)}.`);
         this.traceUntil = performance.now() + TRACE_MS;
         this.trace('countdown over');
-        this.clearHold();
-        this.lastToggleAt = -Infinity;
-        // Muted before it plays, for the prime (see primeStart).
-        const prime = this.canPrime();
-        if (prime) { this.priming = true; this.applyVolume(); }
-        this.applyPaused();
-        if (prime) this.primeStart();
         console.log(`[NativeScreen] Countdown over, playing (Unity says ${this.state && this.state.isPlaying ? 'playing' : 'not playing'}, at ${this.localTime().toFixed(2)}s).`);
         this.watchStart(performance.now(), 0);
         // Once it has had a moment to start. Not a forced jump, which would be heard on every
         // screen as the song starts.
         this.countdownTimer = setTimeout(() => this.requestSync(false), 1000);
       }, seconds * 1000);
-      if (this.prepared && this.localTime() > 0.2) this.seek(0);
+      if (this.warming) this.scheduleRewind(); // the countdown's end may have moved
+      else if (this.prepared && this.localTime() > 0.2) this.seek(0);
       this.lastToggleAt = -Infinity;
+      this.warmUp();
       this.applyPaused();
     }
 
@@ -968,37 +976,40 @@ var FireNativeScreen = (() => {
     }
 
     /**
-     * Whether a video let go from its hold gets the prime (see primeStart): one on the world's own
-     * video player (not a page's), still at its first frame, that this let go and isn't at its end.
+     * A video on the world's own video player (not a page's) that has loaded while a countdown
+     * holds it plays muted until the countdown ends, rather than waiting paused at its first frame
+     * (see WARM_REWIND_MS). It goes back to its start before the end (scheduleRewind).
      */
-    canPrime() {
-      return !!this.vp && typeof this.vp.read !== 'function' && this.prepared && !this.wantPaused
-        && !this.isPreview() && this.endedAt == null && (Number(this.vp.time) || 0) < 0.5;
+    warmUp() {
+      if (this.warming || this.warmSkipped || !this.vp || typeof this.vp.read === 'function' || !this.prepared) return;
+      if (!this.held() || this.wantPaused || this.endedAt != null) return;
+      const left = this.holdUntil - performance.now();
+      if (left < WARM_MIN_MS) {
+        this.warmSkipped = true;
+        console.log(`[NativeScreen] Loaded with ${(left / 1000).toFixed(2)}s of the countdown left, too little to play it muted first: it waits at its start.`);
+        return;
+      }
+      this.warming = true;
+      this.applyVolume();
+      console.log(`[NativeScreen] Loaded with ${(left / 1000).toFixed(2)}s of the countdown left: playing it muted until then (Unity's time ${this.vp.time}).`);
+      this.lastToggleAt = -Infinity;
+      this.applyPaused();
+      this.scheduleRewind();
     }
 
-    /**
-     * As a held video starts (muted by the caller): after PRIME_PLAY_MS of playing it goes back to
-     * its start, and its sound comes back PRIME_UNMUTE_MS later, so nothing of the first frame is
-     * heard. Every step is logged (trace), with Unity's time, so its effect can be seen.
-     */
-    primeStart() {
-      const vp = this.vp;
-      clearTimeout(this.primeTimer);
-      this.trace(`prime: playing muted (Unity's volume ${vp.volume}, time ${vp.time})`);
-      const began = performance.now();
-      this.primeTimer = setTimeout(() => {
-        if (this.destroyed || vp !== this.vp) return;
-        // A jump meanwhile (a skip, a sync) is where it should be now, so it isn't taken back.
-        const jumped = (this.lastSeekAt || -Infinity) >= began;
-        this.trace(`prime: ${jumped ? 'a seek came first, so it stays' : 'back to the start'} (Unity's time ${vp.time})`);
-        if (!this.wantPaused && !jumped) this.seek(0);
-        this.primeTimer = setTimeout(() => {
-          this.priming = false;
-          if (this.destroyed || vp !== this.vp) return;
-          this.applyVolume();
-          this.trace(`prime: sound back (volume ${vp.volume}, Unity's time ${vp.time})`);
-        }, PRIME_UNMUTE_MS);
-      }, PRIME_PLAY_MS);
+    /** While warming: back to the start WARM_REWIND_MS before the countdown ends, still muted. */
+    scheduleRewind() {
+      // Already back at the start for this countdown: a sync that moves its end by a moment (as
+      // each sync's own delay does) doesn't send it back again.
+      if (this.rewoundFor != null && Math.abs(this.holdUntil - this.rewoundFor) < 500) return;
+      clearTimeout(this.rewindTimer);
+      this.rewindTimer = setTimeout(() => {
+        if (this.destroyed || !this.warming || !this.vp) return;
+        this.rewoundAt = performance.now();
+        this.rewoundFor = this.holdUntil;
+        console.log(`[NativeScreen] Back to the start, muted, ${((this.holdUntil - this.rewoundAt) / 1000).toFixed(2)}s before the countdown ends (Unity's time ${this.vp.time}).`);
+        this.seek(0);
+      }, Math.max(0, this.holdUntil - WARM_REWIND_MS - performance.now()));
     }
 
     /** Ends a hold, so the next applyPaused may play. @returns {boolean} whether there was one. */
@@ -1006,13 +1017,17 @@ var FireNativeScreen = (() => {
       const was = this.holding();
       this.holdUntil = 0;
       clearTimeout(this.countdownTimer);
+      // Warming ends with the hold, and its sound comes on.
+      clearTimeout(this.rewindTimer);
+      this.rewoundFor = null;
+      if (this.warming) { this.warming = false; this.applyVolume(); }
       if (was) this.lastToggleAt = -Infinity;
       return was;
     }
 
     /** Computes Unity normalized volume (0.0 to 1.0). @returns {number} */
     unityVolume() {
-      return this.muted || this.priming ? 0 : Math.max(0, Math.min(1, Number(this.volume) / 100 || 0));
+      return this.muted || this.warming ? 0 : Math.max(0, Math.min(1, Number(this.volume) / 100 || 0));
     }
 
     /** Applies volume to Unity video player component. */
@@ -1028,7 +1043,8 @@ var FireNativeScreen = (() => {
       if (!vp || !this.prepared) return;
       const now = performance.now();
       if (now - this.lastToggleAt < TOGGLE_COOLDOWN_MS) return;
-      const paused = this.wantPaused || this.held(); // a countdown keeps the room's track paused too
+      // A countdown keeps the room's track paused too, unless it's warming (playing muted).
+      const paused = this.wantPaused || (this.held() && !this.warming);
       // A play or pause, for watchStalls' grace: not a retry of the same one, as a stalling
       // video that says it isn't playing is retried every few seconds and would never be calm.
       if (paused !== this.lastWantPaused) { this.lastWantPaused = paused; this.lastPlayPauseAt = now; }
@@ -1243,7 +1259,7 @@ var FireNativeScreen = (() => {
       clearTimeout(this.readyTimer);
       clearInterval(this.overlayTimer);
       clearTimeout(this.startTimer);
-      clearTimeout(this.primeTimer);
+      clearTimeout(this.rewindTimer);
       clearTimeout(this.setupTimer);
       if (this.vp && typeof this.vp.destroy === 'function') this.vp.destroy();
       // Destroying the object destroys the video player (or a page's browser) with it.

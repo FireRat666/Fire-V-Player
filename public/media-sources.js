@@ -7,7 +7,7 @@
 
 /**
  * @typedef {Object} DetectedMedia
- * @property {'youtube'|'file'|'hls'|'dash'|'mpegts'|'twitch'|'twitchclip'|'vimeo'|'vdoninja'|'sdq'|'archive'|'loc'|'tubi'|'nasa'|'eso'|'radio'} type - The detected media stream/source type.
+ * @property {'youtube'|'file'|'hls'|'dash'|'mpegts'|'twitch'|'twitchclip'|'vimeo'|'vdoninja'|'sdq'|'archive'|'loc'|'tubi'|'nasa'|'eso'|'radio'|'bilibili'} type - The detected media stream/source type.
  *   'tubi' is a Tubi movie, episode or series page, and 'nasa' a NASA+ video page: the player asks the
  *   server for the page's stream when it plays (`stream` is true), as Tubi's stream links expire.
  *   'archive' is an Internet Archive page or item (or a publicdomainmovie.net page) that the server
@@ -21,10 +21,13 @@
  *   marked #internet-radio, with `listed` set and the address as its `id`), a .pls or .xspf playlist
  *   file, or a link the server found to be a station (a radio .m3u, or the stream itself), which it
  *   marks with #radio. The player asks the server for the station's stream when it plays.
+ *   'bilibili' is a Bilibili video (www.bilibili.com/video/<BV id>, its /en/ page, or its embed
+ *   player's link), which plays in Bilibili's own embed player.
  * @property {string} [channel] - Twitch channel name if applicable.
  * @property {string} [video] - Twitch VOD ID if applicable.
  * @property {string} [clip] - Twitch clip slug if applicable.
- * @property {string} [id] - Vimeo video ID if applicable.
+ * @property {string} [id] - Vimeo video ID if applicable; a Bilibili video's BV (or av) id.
+ * @property {number} [part] - For Bilibili: which part of a video with several (its ?p=), from 1.
  * @property {string} [hash] - Vimeo unlisted hash token if applicable.
  * @property {string} [name] - VDO.Ninja stream/room identifier if applicable.
  * @property {boolean} [live] - True for an MPEG-TS link that is a live stream (VRCDN's .live.ts).
@@ -129,6 +132,23 @@ var MediaSources = (() => {
       const next = parts[i + 1] || '';
       const hash = u.searchParams.get('h') || (/^[0-9a-f]{6,}$/i.test(next) ? next : '');
       return { type: 'vimeo', id: parts[i], hash };
+    }
+
+    // Bilibili: bilibili.com/video/<BV id or av id>/ (also /en/video/... and the like, ?p=<part>),
+    // and its embed player, player.bilibili.com/player.html?bvid=<BV id> (or aid=<number>)&p=<part>.
+    if (host === 'bilibili.com' || host === 'player.bilibili.com') {
+      const part = Math.max(1, Math.min(999, parseInt(u.searchParams.get('p') || u.searchParams.get('page') || '1', 10) || 1));
+      let id = '';
+      if (host === 'player.bilibili.com') {
+        const aid = u.searchParams.get('aid') || '';
+        id = u.searchParams.get('bvid') || (/^\d{1,12}$/.test(aid) ? `av${aid}` : '');
+      } else {
+        const i = parts.indexOf('video');
+        if (i === 0 || (i === 1 && /^[a-z]{2}(-[a-z]{2})?$/i.test(parts[0]))) id = parts[i + 1] || '';
+      }
+      if (/^BV[0-9A-Za-z]{10}$/.test(id)) return { type: 'bilibili', id, part };
+      if (/^av\d{1,12}$/i.test(id)) return { type: 'bilibili', id: id.toLowerCase(), part };
+      return null;
     }
 
     // VDO.Ninja: vdo.ninja/?view=<stream id> (or ?room=<room>&scene for a whole room), also obs.ninja.
@@ -303,9 +323,11 @@ var MediaSources = (() => {
    * Library of Congress's films (its pages and its tile.loc.gov files), and ESO's and ESA/Hubble's
    * videos (their pages and their own servers' files). Shoutcast's and Radio Browser's stations
    * are too, as they come from their directories (by id) rather than from an address anyone typed,
-   * and SomaFM's channels and internet-radio.com's stations; other radio links aren't.
+   * and SomaFM's channels and internet-radio.com's stations; other radio links aren't. Bilibili's
+   * videos play in its own embed player, but have no ratings, so they only play where the world
+   * allows titles for adults (see needsRating).
    */
-  const TRUSTED = new Set(['youtube', 'twitch', 'twitchclip', 'vimeo', 'archive', 'loc', 'tubi', 'nasa', 'eso']);
+  const TRUSTED = new Set(['youtube', 'twitch', 'twitchclip', 'vimeo', 'archive', 'loc', 'tubi', 'nasa', 'eso', 'bilibili']);
 
   /**
    * Checks whether a detected media source is from an inherently trusted service.
@@ -369,19 +391,32 @@ var MediaSources = (() => {
 
   /**
    * Whether a detected link is from a site with adult titles among the rest (Tubi, the Internet
-   * Archive), whose rating is looked up before it's added or played.
+   * Archive), whose rating is looked up before it's added or played. Bilibili's videos have no
+   * rating, so they count as for adults.
    *
    * @param {DetectedMedia|null} media
    * @returns {boolean}
    */
   function needsRating(media) {
-    return !!media && (media.type === 'tubi' || media.type === 'archive' || (media.type === 'file' && !!media.archive));
+    return !!media && (media.type === 'tubi' || media.type === 'archive' || media.type === 'bilibili' || (media.type === 'file' && !!media.archive));
   }
 
   /** Shown when a title for adults is refused because the world doesn't allow them. */
   const MATURE_MESSAGE = "This video is for adults, and this world doesn't allow those. Its owner can allow them with the mature-links snippet setting.";
+  /** Shown instead for a Bilibili video, which has no rating to check. */
+  const UNRATED_SITE_MESSAGE = "Bilibili videos have no ratings, so they only play where the world allows titles for adults. Its owner can allow them with the mature-links snippet setting.";
 
-  return { detect, nameFromLink, parseUrl, isTrusted, youtubeId, tubiMature, needsRating, UNTRUSTED_MESSAGE, MATURE_MESSAGE };
+  /**
+   * Why a link for adults is refused: MATURE_MESSAGE, or UNRATED_SITE_MESSAGE for a Bilibili video.
+   * @param {DetectedMedia|string|null} media - A detected link, or a link.
+   * @returns {string}
+   */
+  function matureMessage(media) {
+    const m = typeof media === 'string' ? detect(media) : media;
+    return m && m.type === 'bilibili' ? UNRATED_SITE_MESSAGE : MATURE_MESSAGE;
+  }
+
+  return { detect, nameFromLink, parseUrl, isTrusted, youtubeId, tubiMature, needsRating, matureMessage, UNTRUSTED_MESSAGE, MATURE_MESSAGE };
 })();
 
 if ((typeof process !== 'undefined') && process.release && process.release.name.search(/node|io.js/) !== -1) {

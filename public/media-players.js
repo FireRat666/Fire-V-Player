@@ -1,7 +1,7 @@
 /**
  * @fileoverview Unified media player abstraction and multi-source switch.
  * Adapts non-YouTube media sources (HTML5 video, HLS streams, Twitch streams/VODs/clips,
- * Vimeo, and VDO.Ninja) to expose the same interface as the YouTube iframe API,
+ * Vimeo, VDO.Ninja and Bilibili) to expose the same interface as the YouTube iframe API,
  * allowing synchronized playback, seek, volume, and state management.
  * @module public/media-players
  */
@@ -1261,6 +1261,118 @@ class SdqSource extends BaseMediaSource {
 }
 
 /**
+ * Player adapter for a Bilibili video, in Bilibili's own embed player (player.bilibili.com). That
+ * player takes no commands from the page around it, only where to start (t=) and whether to start
+ * muted, in its address. So this keeps the video's time itself: pausing takes the embed away and
+ * shows the video's picture, and playing, seeking and muting load it again at the time it should
+ * be at. Its sound can't be turned down, only muted (volume 0 mutes it). A cover over it keeps a
+ * click from pausing the video on one screen only.
+ * @class BilibiliSource
+ * @extends {BaseMediaSource}
+ */
+class BilibiliSource extends BaseMediaSource {
+  /**
+   * @param {Object} opts - Source configuration options.
+   * @param {Object} media - The detected video: its BV (or av) id and part.
+   */
+  constructor(opts, media) {
+    super(opts);
+    this.media = media;
+    this.muted = !!opts.muted;
+    this.volume = Number(opts.volume);
+    this.t = Math.max(0, Number(opts.start) || 0);
+    this.tAt = performance.now();
+    this.running = false; // whether the time moves: the embed is there and playing
+    const box = this.box = document.createElement('div');
+    Object.assign(box.style, { position: 'relative', width: '100%', height: '100%', background: '#000', overflow: 'hidden' });
+    if (opts.thumbnail) {
+      // Bilibili's picture server refuses pictures asked for from other sites' pages.
+      const img = this.picture = document.createElement('img');
+      img.referrerPolicy = 'no-referrer';
+      img.src = opts.thumbnail.replace(/@\d+w_\d+h\.jpg$/, '');
+      Object.assign(img.style, { position: 'absolute', inset: '0', width: '100%', height: '100%', objectFit: 'contain' });
+      box.appendChild(img);
+    }
+    // A phone gets Bilibili's mobile player, which waits for a tap to start (and from the start):
+    // that's left to the viewer there, so the cover is left off.
+    const ua = navigator.userAgent || '';
+    const cover = this.cover = document.createElement('div');
+    if (!(/AppleWebKit.*Mobile/.test(ua) && !/Domono/.test(ua))) {
+      Object.assign(cover.style, { position: 'absolute', inset: '0', zIndex: '2' });
+      box.appendChild(cover);
+    }
+    opts.container.appendChild(box);
+    this.ready = true;
+    this.load(this.t);
+  }
+
+  /** The embed player's address, starting at `at` seconds. */
+  embedLink(at) {
+    const id = this.media.id;
+    const key = /^av/i.test(id) ? `aid=${id.slice(2)}` : `bvid=${encodeURIComponent(id)}`;
+    const muted = this.muted || this.volume <= 0;
+    return `https://player.bilibili.com/player.html?${key}&p=${this.media.part || 1}&t=${Math.max(0, at).toFixed(1)}`
+      + `&autoplay=1&danmaku=0&high_quality=1&muted=${muted ? 1 : 0}`;
+  }
+
+  /** (Re)loads the embed, playing from `at`. */
+  load(at) {
+    this.unload();
+    const f = this.frame = document.createElement('iframe');
+    f.src = this.embedLink(at);
+    // No fullscreen: on an in-world screen it leaves the player blank until the space is rejoined.
+    f.allow = 'autoplay';
+    f.allowFullscreen = false;
+    Object.assign(f.style, { position: 'absolute', inset: '0', width: '100%', height: '100%', border: '0', zIndex: '1' });
+    this.box.insertBefore(f, this.cover.parentNode ? this.cover : null);
+    this.t = Math.max(0, at);
+    this.tAt = performance.now();
+    this.running = true;
+  }
+
+  unload() {
+    if (this.frame) { this.frame.remove(); this.frame = null; }
+  }
+
+  play() {
+    this.wantPaused = false;
+    if (!this.frame) this.load(this.t);
+  }
+  pause() {
+    this.wantPaused = true;
+    if (!this.frame) return;
+    this.t = this.time();
+    this.running = false;
+    this.unload();
+  }
+  seek(t) {
+    t = Math.max(0, Number(t) || 0);
+    // Each seek reloads the embed, so one to about where it is already is left alone.
+    if (Math.abs(t - this.time()) < 1.5) return;
+    if (this.frame) this.load(t);
+    else { this.t = t; this.tAt = performance.now(); }
+  }
+  time() { return this.running ? this.t + (performance.now() - this.tAt) / 1000 : this.t; }
+  state() { return this.frame ? MEDIA_STATE.PLAYING : MEDIA_STATE.PAUSED; }
+  setVolume(v) {
+    const was = this.muted || this.volume <= 0;
+    this.volume = Number(v);
+    if (this.frame && was !== (this.muted || this.volume <= 0)) this.load(this.time());
+  }
+  setMuted(m) {
+    if (!!m === this.muted) return;
+    const was = this.muted || this.volume <= 0;
+    this.muted = !!m;
+    if (this.frame && was !== (this.muted || this.volume <= 0)) this.load(this.time());
+  }
+  destroy() {
+    this.destroyed = true;
+    this.unload();
+    this.box.remove();
+  }
+}
+
+/**
  * Player adapter for Vimeo videos using the Vimeo SDK.
  * @class VimeoSource
  * @extends {BaseMediaSource}
@@ -1444,6 +1556,14 @@ class MediaSwitch {
     else if (media.type === 'vimeo') this.source = new VimeoSource(opts, media);
     else if (media.type === 'vdoninja') this.source = new VdoNinjaSource(opts, media);
     else if (media.type === 'sdq') this.source = new SdqSource(opts, media);
+    else if (media.type === 'bilibili') {
+      // Bilibili's videos have no rating, so they only play where the world allows titles for adults.
+      if (this.opts.allowMature && this.opts.allowMature()) this.source = new BilibiliSource(opts, media);
+      else {
+        this.source = new NoticeSource({ container: this.container }, MediaSources.matureMessage(media));
+        this.opts.onError(MediaSources.matureMessage(media));
+      }
+    }
     else this.source = new VideoElementSource(opts, media);
   }
 

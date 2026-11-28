@@ -1179,7 +1179,7 @@ class App {
         const found = (await media.resolveMediaLinks(term)).map(v => (v && typeof v.mature !== 'boolean'
           && MediaSources.needsRating(media.detect(v.link || '')) ? { ...v, mature: true } : v));
         // A link to a title for adults says why it has no results.
-        if (found.length && !media.filterMature(ws, found).items.length) fail(media.MATURE_MESSAGE);
+        if (found.length && !media.filterMature(ws, found).items.length) fail(media.matureMessage(term));
         else results(found);
       } catch (error) {
         fail(error.message);

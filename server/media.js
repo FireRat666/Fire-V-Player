@@ -11,6 +11,7 @@ const loc = require('./loc.js');
 const eso = require('./eso.js');
 const streaming = require('./streaming.js');
 const radio = require('./radio.js');
+const bilibili = require('./bilibili.js');
 
 const FETCH_TIMEOUT_MS = 5000;
 
@@ -140,6 +141,9 @@ async function resolveMediaLink(link) {
   // Tubi and NASA+ pages keep their page link; the player asks for the stream (/api/stream).
   if (media.type === 'tubi' || media.type === 'nasa') return streaming.resolveLink(link);
 
+  // A Bilibili video plays in Bilibili's own embed player; its page gives its title and length.
+  if (media.type === 'bilibili') return bilibili.resolveLink(link);
+
   // A radio station (Shoutcast, or a .pls or .xspf file) keeps its link too: the player asks for
   // its stream (/api/stream), as a station's stream address can change.
   if (media.type === 'radio') return radio.resolveLink(link);
@@ -194,13 +198,15 @@ function allowedFor(ws, link) {
 
 /**
  * Whether a Tubi or Internet Archive link is for adults (see MediaSources.tubiMature and
- * archive.isMatureMeta). Other links aren't rated, and give false.
+ * archive.isMatureMeta). A Bilibili video has no rating, so it is. Other links aren't rated,
+ * and give false.
  * @param {string} link
  * @returns {Promise<boolean>} Rejects when the rating couldn't be looked up.
  */
 async function isMature(link) {
   const m = MediaSources.detect(link);
   if (!MediaSources.needsRating(m)) return false;
+  if (m.type === 'bilibili') return true;
   return m.type === 'tubi' ? streaming.isMature(link) : archive.isMature(link);
 }
 
@@ -246,7 +252,7 @@ async function screenMature(ws, item, said) {
   if (adult === null) adult = typeof said === 'boolean' ? said : null;
   // Its rating couldn't be found: not added, where the world doesn't allow titles for adults.
   if (adult === null) throw new Error(UNRATED_MESSAGE);
-  if (adult) throw new Error(MediaSources.MATURE_MESSAGE);
+  if (adult) throw new Error(MediaSources.matureMessage(rest.link));
   return rest;
 }
 
@@ -287,6 +293,6 @@ function needsRating(link) {
 
 module.exports = {
   resolveMediaLink, resolveMediaLinks, sniffRadio, detect: MediaSources.detect, allowedFor,
-  isMature, allowsMature, screenMature, filterMature, needsRating,
+  isMature, allowsMature, screenMature, filterMature, needsRating, matureMessage: MediaSources.matureMessage,
   UNTRUSTED_MESSAGE: MediaSources.UNTRUSTED_MESSAGE, MATURE_MESSAGE: MediaSources.MATURE_MESSAGE
 };

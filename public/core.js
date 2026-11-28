@@ -2884,6 +2884,9 @@ var Core = class {
   }
   makeAndAddElement(type, style, parent) {
     const element = document.createElement(type);
+    // Pictures (thumbnails) are asked for without saying which page wants them: Bilibili's picture
+    // server refuses ones asked for from other sites.
+    if (type === 'img') element.referrerPolicy = 'no-referrer';
     Object.assign(element.style, style || {});
     (parent ? parent : document.body).appendChild(element);
     return element;
@@ -3269,7 +3272,7 @@ var Core = class {
     if (single && single.type !== 'archive') {
       const names = { youtube: 'YouTube video', twitch: single.channel ? `Twitch: ${single.channel}` : 'Twitch video', twitchclip: 'Twitch clip',
         vimeo: 'Vimeo video', vdoninja: 'VDO.Ninja stream', sdq: `Screen share: ${single.room}`, hls: 'Stream', mpegts: single.live ? 'Live stream' : 'Video', file: 'Video file',
-        tubi: single.kind === 'series' ? 'Tubi series' : 'Tubi video', nasa: 'NASA+ video', eso: 'ESO video', radio: 'Radio station' };
+        tubi: single.kind === 'series' ? 'Tubi series' : 'Tubi video', nasa: 'NASA+ video', eso: 'ESO video', radio: 'Radio station', bilibili: 'Bilibili video' };
       return names[single.type] || 'Video';
     }
     try {

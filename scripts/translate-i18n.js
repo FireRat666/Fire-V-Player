@@ -51,7 +51,7 @@ function doubt(en, out) {
 // Strings that are names, not words to translate.
 const KEEP = new Set(['Fire-V-Player', 'Fire-V-Player Karaoke', 'YouTube', 'Archive Films', 'Tubi', 'NASA+', 'ESO', 'ESO Fulldome', 'Shoutcast', 'Radio Browser', 'SomaFM', 'internet-radio.com',
   'Screen Share', 'Go Live', 'LIVE', 'CC', 'FireRat', 'English', 'Français', 'Deutsch', 'Español', 'Português', '日本語',
-  'Dropbox', 'Twitch', 'Vimeo', 'VDO.Ninja', 'Google Drive',
+  'Dropbox', 'Twitch', 'Vimeo', 'VDO.Ninja', 'Google Drive', 'Bilibili',
   // Not shown in the panel: log lines, timeout names, words added to a search, a key name.
   'Panel destroyed during build', 'Loading the panel language', 'This app has no UI Kit', 'Using the UI Kit', 'No UI Kit in this app, using the plain look',
   '(scrolling list)', 'zoom karaoke', 'Enter']);

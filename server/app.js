@@ -896,6 +896,8 @@ class App {
     this.videoPlayers[ws.i].playlist.length = 0;
     this.videoPlayers[ws.i].currentTrack = 0;
     this.videoPlayers[ws.i].currentTime = 0;
+    // Adds asked for before this (still waiting their turn) don't go into the new playlist.
+    this.videoPlayers[ws.i].gen = (this.videoPlayers[ws.i].gen || 0) + 1;
   }
 
   /**
@@ -1160,7 +1162,8 @@ class App {
    */
   async search(data, ws) {
     const isObject = data && typeof data === 'object';
-    let term = String((isObject ? data.term : data) || '').trim().slice(0, 500);
+    const raw = String((isObject ? data.term : data) || '').trim();
+    let term = raw.slice(0, 500);
     const source = isObject && ['archive', 'tubi', 'nasa', 'eso', 'esodome', 'shoutcast', 'radiobrowser', 'somafm', 'internetradio', 'screen'].includes(data.source) ? data.source : 'youtube';
     // A screen share's room code is its watch link; a pasted link (watch or publish) is used as it is.
     if (source === 'screen' && term && !/^(https?:\/\/|www\.)/i.test(term)) {
@@ -1226,6 +1229,8 @@ class App {
     // or empty results, rather than searching YouTube for the URL string.
     if (/^(https?:\/\/|www\.)/i.test(term)) {
       // A radio station's playlist or stream, found by what the link sends.
+      // A link is never cut short: one longer than a search can be isn't looked up.
+      if (raw.length > 500) { fail('That link is too long.'); return; }
       const station = /^https?:\/\//i.test(term) ? await media.sniffRadio(term) : null;
       if (station) {
         if (media.allowedFor(ws, station.link)) results([station]);

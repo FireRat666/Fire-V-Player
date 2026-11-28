@@ -99,6 +99,11 @@ function safeUri(u) {
   return String(u).replace(/["\r\n]/g, encodeURIComponent);
 }
 
+/** A stream's peak bitrate, in bits a second: its busiest segment (as joined), by its size and length. */
+function peakBandwidth(t) {
+  return Math.ceil(t.refs.reduce((max, [size, ms]) => Math.max(max, size * 8000 / ms), 0));
+}
+
 /**
  * The master playlist: the video stream, with the sound as its audio group.
  * @param {Object} spec
@@ -111,7 +116,7 @@ function masterPlaylist(spec, m) {
     '#EXT-X-VERSION:7',
     '#EXT-X-INDEPENDENT-SEGMENTS',
     `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="Audio",DEFAULT=YES,AUTOSELECT=YES,URI="audio.m3u8?m=${m}"`,
-    `#EXT-X-STREAM-INF:BANDWIDTH=${v.bw + a.bw},CODECS="${v.codecs},${a.codecs}",RESOLUTION=${v.w}x${v.h},AUDIO="a"`,
+    `#EXT-X-STREAM-INF:BANDWIDTH=${peakBandwidth(v) + peakBandwidth(a)},CODECS="${v.codecs},${a.codecs}",RESOLUTION=${v.w}x${v.h},AUDIO="a"`,
     `video.m3u8?m=${m}`,
     ''
   ].join('\n');

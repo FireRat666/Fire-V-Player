@@ -54,6 +54,8 @@ const AUDIO_TYPE = /^(audio\/|application\/ogg|video\/mp2t|application\/octet-st
 const PLAYLIST_TYPE = /mpegurl|scpls|xspf|x-pls/i;
 /** HLS's types (an .m3u8), which an HLS station's stream is sent as. */
 const HLS_TYPE = /^(application|audio)\/(vnd\.apple\.mpegurl|x-mpegurl|mpegurl)$/i;
+/** How a playlist (HLS, M3U, PLS, XSPF) starts, which a stream sent as binary may be instead of sound. */
+const PLAYLIST_START = /^\s*(#EXTM3U|\[playlist\]|<\?xml|<playlist[\s>]|https?:\/\/)/i;
 /** What answersWithSound gives for an HLS stream (it plays with hls.js, not as sound). */
 const HLS = 'application/vnd.apple.mpegurl';
 
@@ -142,6 +144,8 @@ function looksLikeRadio(text, type) {
   // Links the player knows (videos, and sound files too: an .m3u of songs is a playlist, as a file
   // name alone doesn't show a stream is live) make it a list, not a station.
   if (parsed.streams.some(s => MediaSources.detect(s.url) && MediaSources.detect(s.url).type !== 'radio')) return false;
+  // So do lists (a Tubi category, a NASA+ series, an archive.org item...): each is read as a list.
+  if (parsed.streams.some(s => { const l = lists().listSource(s.url); return !!l && l.kind !== 'file'; })) return false;
   return /mpegurl|scpls/i.test(type || '') || parsed.streams.length <= 10;
 }
 
@@ -184,6 +188,11 @@ async function readStation(url, asPlayer) {
     if (!/^(\[playlist\]|#EXTM3U|<\?xml|<playlist[\s>]|https?:\/\/)/i.test(head)) {
       try { await reader.cancel(); } catch (e) {}
       return { title: clean(res.headers.get('icy-name'), 120), streams: [url] };
+    }
+    // A playlist, held to its size limit from its first bytes (one chunk can be big).
+    if (total > MAX_PLAYLIST_BYTES) {
+      try { await reader.cancel(); } catch (e) {}
+      throw new Error("That isn't a radio station's playlist (it's too big).");
     }
     if (done) return finish();
   }
@@ -305,7 +314,9 @@ async function answersWithSound(url, ua = UA, httpsOnly = /^https:/i.test(url)) 
     const res = await lists().fetchPublic(url, { signal: controller.signal, httpsOnly, headers: { 'User-Agent': ua, 'Accept': '*/*', 'Accept-Encoding': 'identity' } });
     const type = String(res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
     // An .m3u8 address is read as one whatever its type (some servers send text/plain).
-    if (res.ok && (HLS_TYPE.test(type) || /\.m3u8($|\?)/i.test(url))) {
+    // So is a generic binary type, which an HLS playlist with no .m3u8 may be sent as too.
+    const generic = type === 'application/octet-stream';
+    if (res.ok && (HLS_TYPE.test(type) || /\.m3u8($|\?)/i.test(url) || generic)) {
       // An HLS playlist has #EXT-X- tags; a radio .m3u (the same types) doesn't.
       let head = '';
       try {
@@ -318,7 +329,9 @@ async function answersWithSound(url, ua = UA, httpsOnly = /^https:/i.test(url)) 
         try { await reader.cancel(); } catch (e) {}
       } catch (e) {}
       controller.abort();
-      return /^\s*#EXTM3U[\s\S]*#EXT-X-/.test(head) ? HLS : '';
+      if (/^\s*#EXTM3U[\s\S]*#EXT-X-/.test(head)) return HLS;
+      // Sent as binary and not a playlist of any kind: the sound itself.
+      return generic && !PLAYLIST_START.test(head) ? type : '';
     }
     controller.abort();
     try { await res.body?.cancel(); } catch (e) {}
@@ -334,7 +347,7 @@ async function answersWithSound(url, ua = UA, httpsOnly = /^https:/i.test(url)) 
  * but "/;" gives the stream. Only an answer is kept for HTTPS_TTL_MS: when the station couldn't be
  * reached over https at all, it's asked again next time.
  */
-async function httpsVersion(url) {
+async function httpsVersion(url, onUnreachable) {
   try {
     return await cache.remember(`https:${url}`, HTTPS_TTL_MS, async () => {
       const u = new URL(url);
@@ -355,6 +368,8 @@ async function httpsVersion(url) {
       return null;
     });
   } catch (e) {
+    // Couldn't tell (a timeout, a connection that failed): not the same as "no https stream".
+    if (onUnreachable) onUnreachable(e);
     return null;
   }
 }
@@ -367,13 +382,14 @@ async function httpsVersion(url) {
  */
 async function streamFor(link) {
   const s = await station(link);
+  let unsure = false; // some stream's https check couldn't be finished
   for (const url of s.streams.slice(0, 3)) {
     // A station that streams HLS (some on Radio Browser) plays as an HLS stream, over https only:
     // one on http plays from its https address when it has one there, and not at all otherwise
     // (the relay passes on sound, not a playlist and its pieces).
     // An https one is checked first: it has to answer there, and not by sending the player to http.
     const m3u8 = /\.m3u8($|\?)/i.test(url);
-    const https = await httpsVersion(url);
+    const https = await httpsVersion(url, () => { unsure = true; });
     if (m3u8 && /^https:/i.test(url)) {
       if (https) return { url: https.url, live: true };
       continue;
@@ -382,6 +398,7 @@ async function streamFor(link) {
     if (m3u8) continue;
     if (https) return /^video\/mp2t$/i.test(https.type) ? { url: https.url, live: true, type: 'mpegts' } : { url: https.url, live: true, audio: true };
   }
+  if (!relayOn() && unsure) throw new Error("Couldn't reach that station over https just now. Try again in a moment.");
   if (!relayOn()) throw new Error("This station only streams over http, which can't play here (only https streams can). Try another station.");
   // The relay sends the stream as the station does: an MPEG-TS one is played by mpegts.js. The
   // player is told the kind of the first stream that answers with sound, and the relay sends only
@@ -495,6 +512,12 @@ async function relay(req, res, allowed) {
         if (value && value.length) { first = value; break; }
       }
       if (!first) { lastError = 'The station sent no sound.'; continue; }
+      // Sent as binary, but a playlist (an HLS one, say), not sound: not passed on.
+      if (/^application\/octet-stream/i.test(type) && PLAYLIST_START.test(Buffer.from(first).toString('latin1', 0, 512))) {
+        lastError = "The station's stream isn't sound.";
+        try { await reader.cancel(); } catch (e) {}
+        continue;
+      }
       if (released || res.destroyed) { try { await reader.cancel(); } catch (e) {} return; }
       started = true;
       clearTimeout(timer);

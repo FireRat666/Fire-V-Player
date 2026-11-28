@@ -234,8 +234,12 @@ async function readTubiSeries(id, season, limit) {
   const seriesMature = MediaSources.tubiMature(series.ratings);
   // A missing number (null, which Number() makes 0) takes the fallback.
   const num = (v, fallback) => (v != null && Number.isFinite(Number(v)) && String(v).trim() !== '' ? Number(v) : fallback);
-  // [{n, eps: [{id, num}]}]: the full list where the page has it, else the site data's.
-  const listed = (data.fvpSeasons && data.fvpSeasons.length ? data.fvpSeasons : series.seasons || []).map((s, i) => ({
+  // [{n, eps: [{id, num}]}]: the full list where the page has it, else the site data's, which has
+  // the first season only (and 20 of its episodes at most). That list counts as partial, and the
+  // page is read again next time.
+  const fallback = !(data.fvpSeasons && data.fvpSeasons.length);
+  if (fallback) cache.delete(`tubi:series/${id}`);
+  const listed = (fallback ? series.seasons || [] : data.fvpSeasons).map((s, i) => ({
     n: num(s.number, 1000 + i),
     eps: (s.episodes || []).map((ep, k) => ({ id: String(ep.id || ''), num: num(ep.num != null ? ep.num : ep.episode_number != null ? ep.episode_number : (byId[ep.id] || {}).episode_number, 1000 + k) }))
       .filter(ep => /^\d{1,12}$/.test(ep.id))
@@ -252,7 +256,7 @@ async function readTubiSeries(id, season, limit) {
     }
   }
   const items = new Array(wanted.length);
-  let partial = false;
+  let partial = fallback;
   // An episode with its season and number in its title. Without details (not read in time, or
   // its page wouldn't load) it's still listed, so it can be played: its title and picture come
   // when it's looked up.
@@ -299,7 +303,8 @@ async function readTubiSeries(id, season, limit) {
     items[k] = entry(k, known ? tubiItem(known, 'episode') : null);
     if (!known) partial = true;
   }
-  if (partial) console.warn(`[TUBI] series/${id}: some episodes are listed without their details.`);
+  if (fallback) console.warn(`[TUBI] series/${id}: the page had no list of every season, so only the first season's episodes are listed.`);
+  else if (partial) console.warn(`[TUBI] series/${id}: some episodes are listed without their details.`);
   const title = clean(series.title, 120) || 'Tubi series';
   return { title: one && season !== 'first' ? clean(`${title}, Season ${season}`, 120) : title, items, partial, mature: seriesMature };
 }

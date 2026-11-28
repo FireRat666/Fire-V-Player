@@ -12,7 +12,8 @@
  *   { type: 'resolve', n, id, maxHeight }
  * Messages out (window.O.sendMessage), all with from: 'yt-resolve':
  *   { type: 'ready' }                                                once, when it can take requests
- *   { type: 'result', n, ok: true, m, title, height, durMs, cues }   cues: its captions, [startMs, durMs, text] each
+ *   { type: 'result', n, ok: true, m, title, height, durMs, cues, capsLate }   cues: its captions, [startMs, durMs, text] each;
+ *                                                                    capsLate: they didn't come in time
  *   { type: 'result', n, ok: false, reason, unplayable, live }
  */
 (function () {
@@ -120,7 +121,7 @@
   // The video stream: H.264 in MP4, as sharp as allowed. By the label, not the height (a widescreen
   // film's "1080p" is 1920x804), and never taller than wide (Shorts, which a 16:9 screen stretches).
   // Within a quality, the lowest frame rate, then the lowest bitrate.
-  // Every usable stream, the best choice first (as pickVideo), then the rest of that quality, then
+  // Every usable stream, the best choice first, then the rest of that quality, then
   // the qualities below: a stream whose index won't load is passed over for the next (see resolve).
   function videoChoices(formats, maxHeight) {
     var usable = formats.filter(function (f) {
@@ -136,22 +137,6 @@
       out = out.concat(at);
     });
     return out;
-  }
-
-  function pickVideo(formats, maxHeight) {
-    var usable = formats.filter(function (f) {
-      return hasRanges(f) && /^video\/mp4/.test(f.mimeType || '') && /avc1/.test(f.mimeType || '')
-        && !(Number(f.width) < Number(f.height));
-    });
-    var ladder = QUALITIES.filter(function (q) { return q <= maxHeight; });
-    if (!ladder.length) ladder = [QUALITIES[QUALITIES.length - 1]];
-    for (var i = 0; i < ladder.length; i++) {
-      var at = usable.filter(function (f) { return labelOf(f) === ladder[i]; });
-      if (!at.length) continue;
-      at.sort(function (a, b) { return (Number(a.fps) || 0) - (Number(b.fps) || 0) || (Number(a.bitrate) || 0) - (Number(b.bitrate) || 0); });
-      return at[0];
-    }
-    return null;
   }
 
   // The first sidx box in buf (which starts at byte idxStart of the file): each fragment's size in
@@ -179,6 +164,8 @@
     var count = dv.getUint16(q); q += 2;
     var refs = [];
     for (var i = 0; i < count && q + 12 <= off + boxSize; i++) {
+      // A reference to another sidx (its top bit set), not to a fragment: not an index this reads.
+      if (dv.getUint32(q) >>> 31) return null;
       refs.push([dv.getUint32(q) & 0x7fffffff, Math.max(1, Math.round(dv.getUint32(q + 4) * 1000 / timescale))]);
       q += 12;
     }
@@ -207,9 +194,15 @@
     });
   }
 
+  // How long one try at a stream's index may take (asking and reading it), so a slow one gives way
+  // to the next within the lookup's time.
+  var INDEX_TIMEOUT_MS = 4000;
   function readIndexOnce(f) {
     var start = Number(f.indexRange.start), end = Number(f.indexRange.end);
-    return fetch(f.url + '&range=' + start + '-' + end, { credentials: 'omit' })
+    // Aborting stops the request and the reading of its answer alike.
+    var controller = new AbortController();
+    var timer = setTimeout(function () { controller.abort(); }, INDEX_TIMEOUT_MS);
+    return fetch(f.url + '&range=' + start + '-' + end, { credentials: 'omit', signal: controller.signal })
       .then(function (r) {
         if (!r.ok) throw new Error('The stream index answered ' + r.status + '.');
         return r.arrayBuffer();
@@ -218,7 +211,8 @@
         var sidx = parseSidx(buf, start);
         if (!sidx) throw new Error("Couldn't read the stream's index.");
         return sidx;
-      });
+      })
+      .finally(function () { clearTimeout(timer); });
   }
 
   function track(f, sidx, video) {
@@ -283,6 +277,17 @@
   var MAX_CUES = 4000, MAX_CUE_TEXT = 300, MAX_CUE_CHARS = 300000, CAPTIONS_TIMEOUT_MS = 6000;
   // How long a lookup whose streams are ready waits for captions still on their way.
   var CAPTIONS_GRACE_MS = 500;
+  // Each video's captions, kept while its player answer is (the same lookup again, after captions
+  // came too late for the first one, gets them at once).
+  var captionCache = {};
+  function captionsFor(id, json) {
+    var hit = captionCache[id];
+    if (hit && Date.now() - hit.at < PLAYER_CACHE_MS) return hit.p;
+    Object.keys(captionCache).forEach(function (k) { if (Date.now() - captionCache[k].at >= PLAYER_CACHE_MS) delete captionCache[k]; });
+    var p = captions(json);
+    captionCache[id] = { at: Date.now(), p: p };
+    return p;
+  }
   function captions(json) {
     var list = (((json && json.captions) || {}).playerCaptionsTracklistRenderer || {}).captionTracks || [];
     var en = list.filter(function (t) { return /^en/i.test(String(t.languageCode || '')); });
@@ -327,7 +332,8 @@
       var details = json.videoDetails || {};
       if (details.isLive || details.isUpcoming) { fail(n, 'Live streams play in the browser.', { live: true }); return; }
       var formats = (json.streamingData && json.streamingData.adaptiveFormats) || [];
-      var v = pickVideo(formats, maxHeight);
+      var choices = videoChoices(formats, maxHeight);
+      var v = choices[0];
       var a = formats.filter(function (f) { return Number(f.itag) === 140 && hasRanges(f); })[0];
       if (!v || !a) {
         var tall = formats.some(function (f) { return /^video\//.test(f.mimeType || '') && Number(f.width) < Number(f.height); });
@@ -336,15 +342,16 @@
       }
       // Captions are asked for alongside, but the video doesn't wait for them: once the streams
       // are ready they get CAPTIONS_GRACE_MS more, and it plays without them after that.
-      var caps = captions(json);
-      return Promise.all([firstVideo(videoChoices(formats, maxHeight)), readIndex(a)]).then(function (idx) {
-        var late = new Promise(function (r) { setTimeout(function () { r([]); }, CAPTIONS_GRACE_MS); });
-        return Promise.race([caps, late]).then(function (cues) { return [idx[0], idx[1], cues]; });
+      // capsLate: they didn't come in time (there may be some), so the world asks again later.
+      var caps = captionsFor(id, json).then(function (cues) { return { cues: cues }; });
+      return Promise.all([firstVideo(choices), readIndex(a)]).then(function (idx) {
+        var late = new Promise(function (r) { setTimeout(function () { r({ cues: [], late: true }); }, CAPTIONS_GRACE_MS); });
+        return Promise.race([caps, late]).then(function (c) { return [idx[0], idx[1], c.cues, !!c.late]; });
       }).then(function (idx) {
         v = idx[0].f;
         var spec = { v: track(v, idx[0].sidx, true), a: track(a, idx[1], false), durMs: Number(v.approxDurationMs) || Number(a.approxDurationMs) || 0 };
         return packToFit(spec).then(function (m) {
-          send({ type: 'result', n: n, ok: true, m: m, title: details.title || '', height: labelOf(v), durMs: spec.durMs, cues: idx[2] });
+          send({ type: 'result', n: n, ok: true, m: m, title: details.title || '', height: labelOf(v), durMs: spec.durMs, cues: idx[2], capsLate: idx[3] });
         });
       });
     }).catch(function (e) {
@@ -361,5 +368,9 @@
   try { visitor = localStorage.getItem(VISITOR_KEY) || ''; } catch (e) {}
   (visitor ? Promise.resolve(visitor) : fetchVisitor())
     .catch(function (e) { log('No visitor id: ' + ((e && e.message) || e)); })
-    .then(function () { send({ type: 'ready' }); });
+    .then(function () {
+      send({ type: 'ready' });
+      // The world asks again when a lookup went unanswered: still here, it says so again.
+      window.__fvpYtHello = function () { send({ type: 'ready' }); };
+    });
 })();

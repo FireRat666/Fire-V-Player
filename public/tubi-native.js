@@ -62,9 +62,8 @@ var FireTubiResolver = (() => {
       go.On('browser-message', e => this.onMessage(e));
       const component = await core.addComponent(go, core.bsComponent('Browser',
         { url: PAGE_URL, pageWidth: 320, pageHeight: 180 }, 'BanterBrowser', [PAGE_URL, false, 1300, 320, 180, null]));
-      // Removed meanwhile: destroy() has already destroyed the object (this.go). Given up on: it goes now.
-      if (this.destroyed) return;
-      if (this.failed) { core.destroyObject(go); this.go = null; return; }
+      // Removed or given up on meanwhile: destroy() or giveUp() has already destroyed the object.
+      if (this.destroyed || this.failed) return;
       this.component = component;
       try { if (typeof component.ToggleInteraction === 'function') component.ToggleInteraction(false); } catch (e) {}
       // Quiet: Tubi's search page has no sound, but it's a browser all the same.
@@ -72,6 +71,8 @@ var FireTubiResolver = (() => {
       // The browser starts on about:blank, so the loader is put on the page until it's there.
       const code = `(function(){if(location.hostname!=="tubitv.com"||window.__fvpTubiLoader)return;window.__fvpTubiLoader=1;`
         + `var s=document.createElement("script");s.src=${JSON.stringify(this.scriptUrl())};`
+        // A script that fails to load clears the mark, so the next try puts it on again.
+        + `s.onerror=function(){window.__fvpTubiLoader=0;s.remove();};`
         + `(document.head||document.documentElement).appendChild(s);})();`;
       const json = JSON.stringify({ actions: [{ actionType: 'runscript', strParam1: code }] });
       const inject = () => {
@@ -88,6 +89,10 @@ var FireTubiResolver = (() => {
       clearTimeout(this.injectTimer);
       clearTimeout(this.readyTimer);
       console.warn(`[TubiNative] ${reason}`);
+      // What was made goes (create() takes care of what's still being made).
+      if (this.go) this.core.destroyObject(this.go);
+      this.go = null;
+      this.component = null;
       this.readyWaiters.splice(0).forEach(w => w(false));
     }
 

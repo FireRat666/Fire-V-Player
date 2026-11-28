@@ -2856,6 +2856,9 @@ var FirePlaylistPanel = class {
         if (found && found.ok) what = { title: found.title || o.title, link: o.link, duration: found.duration, thumbnail: found.thumbnail, mature: found.mature };
       } catch (e) {}
       if (this.destroyed) return;
+      // A newer Add or Now was pressed during the lookup: this one is dropped, so it can't start
+      // playback (or add) after it.
+      if (n !== this.browseActionN) return;
     }
     if (!this.send(now ? Commands.ADD_AND_PLAY : Commands.ADD_TO_PLAYLIST, what)) {
       // Not sent (the connection dropped): the offer stays, to press again once it's back.
@@ -3701,7 +3704,8 @@ var FirePlaylistPanel = class {
       this.setText(this.listPromptLabel, failed
         ? this.tr('That link isn\'t a playlist or video this player can use: {error}', { error: data.error })
         : this.tr('That\'s a playlist: {name}{size}. Replace the playlist, add it all to the end, or save it to Lists (for everyone here, or just for you)?', { name, size }) + (can ? ' ' + this.tr(can.trim()) : ''));
-      this.display(this.promptReplaceBtn, host && !failed);
+      // A list read on this device (a Tubi series) may be one the server can't load (as in Lists).
+      this.display(this.promptReplaceBtn, host && !failed && !(data && data.device));
       this.display(this.promptAppendBtn, this.canAdd() && !failed);
       this.display(this.promptShareBtn, this.canAdd() && !failed);
       this.display(this.promptSaveBtn, !failed);

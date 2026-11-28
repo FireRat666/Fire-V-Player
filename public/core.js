@@ -441,9 +441,13 @@ var Core = class {
       }
       // A script that neither loads nor fails (a stalled connection) would leave every Tubi lookup
       // waiting for good, and the server never asked: past TUBI_SCRIPT_MS this gives up.
+      // The wait that timed out forgets its attempt too (if it's still the current one), so a later
+      // lookup loads the script again.
+      const current = this.tubiScript;
       let timer;
-      await Promise.race([this.tubiScript, new Promise(resolve => { timer = setTimeout(resolve, TUBI_SCRIPT_MS); })]);
+      const late = await Promise.race([current.then(() => false, () => false), new Promise(resolve => { timer = setTimeout(() => resolve(true), TUBI_SCRIPT_MS); })]);
       clearTimeout(timer);
+      if (late && this.tubiScript === current && typeof FireTubiResolver === 'undefined') this.tubiScript = null;
       if (this.destroyed || typeof FireTubiResolver === 'undefined' || !FireTubiResolver.possible()) return null;
     }
     if (!FireTubiResolver.possible()) return null;
@@ -471,7 +475,8 @@ var Core = class {
       answer = { ok: false, reason: String(e && e.message || e) };
     }
     if (this.destroyed || !asker || asker !== this.browser || asker.removed || asker.navigation !== navigation) return;
-    Promise.resolve(this.sendBrowserMessage({ path: Commands.TUBI_STREAM_RESULT, data: Object.assign({ n }, answer) })).catch(() => {});
+    // The page doesn't answer this one, so nothing waits for an answer.
+    Promise.resolve(this.sendBrowserMessage({ path: Commands.TUBI_STREAM_RESULT, data: Object.assign({ n }, answer) }, true)).catch(() => {});
   }
   // The sharpest YouTube quality for this viewer, from the screen's resolution (the snippet's, or
   // theirs from the panel): the quality nearest its width, so 1600 and up is 1080p, 1280 is 720p.
@@ -2871,7 +2876,7 @@ var Core = class {
   recieveBrowserMessage(msg) {
     if(msg.id && this.browserAcks && this.browserAcks[msg.id]) {
       this.browserAcks[msg.id]();
-      this.browserAcks[msg.id] = null;
+      delete this.browserAcks[msg.id];
     }else{
       switch(msg.path) {
         case Commands.ERROR:
@@ -2899,7 +2904,8 @@ var Core = class {
     Promise.resolve(this.sendBrowserMessage({ path: Commands.CAPTIONS, data: this.captions })).catch(() => {});
     this.showToast(this.captions ? 'Captions on' : 'Captions off');
   }
-  sendBrowserMessage(msg){
+  // noAck: for a message the page doesn't send back, so no answer is waited for.
+  sendBrowserMessage(msg, noAck){
     if(!window.isBanter) {
       return;
     }
@@ -2916,7 +2922,8 @@ var Core = class {
     }
     return new Promise((resolve, reject) => {
       if(this.browser) {
-        this.browserAcks[msg.id] = resolve;
+        if (noAck) resolve();
+        else this.browserAcks[msg.id] = resolve;
         this.runBrowserActions([{actionType: "postmessage", strParam1: JSON.stringify(msg)}]);
       }else{
         reject(new Error("Browser element not initialized. Cannot send message."));

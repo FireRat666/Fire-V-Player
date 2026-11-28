@@ -116,7 +116,12 @@ function inOrder(ws, job) {
 function addToPlaylist(app, ws, v, skipUpdate, isYoutubeWebsite) {
   // The room it was asked in: a socket that has moved to another room since doesn't add there.
   const room = ws.i;
-  return inOrder(ws, () => (ws.i === room ? addNow(app, ws, v, skipUpdate, isYoutubeWebsite, room) : undefined));
+  // And the playlist it was asked for: one cleared or replaced since (+ All's queued episodes
+  // included) doesn't get it.
+  const asked = app.videoPlayers[room];
+  const gen = asked && asked.gen;
+  return inOrder(ws, () => (ws.i === room && app.videoPlayers[room] === asked && (!asked || asked.gen === gen)
+    ? addNow(app, ws, v, skipUpdate, isYoutubeWebsite, room) : undefined));
 }
 
 async function addNow(app, ws, v, skipUpdate, isYoutubeWebsite, room = ws.i) {
@@ -124,10 +129,13 @@ async function addNow(app, ws, v, skipUpdate, isYoutubeWebsite, room = ws.i) {
   if (player) {
     // Locked, in playlist mode: someone else's video waits for the host to approve it.
     if (player.locked && !player.isKaraoke && ws.u && ws.u.id && player.host && player.host.id !== ws.u.id) {
-      await suggestVideo(app, ws, v, isYoutubeWebsite);
+      await suggestVideo(app, ws, v, isYoutubeWebsite, room);
       return;
     }
     await app.onlyIfHost(ws, async () => {
+      // The mode and playlist it was allowed for, checked again after the lookup.
+      const karaoke = !!player.isKaraoke;
+      const gen = player.gen;
       let resolvedV;
       try {
         resolvedV = await resolveVideoData(app, ws, v);
@@ -141,7 +149,16 @@ async function addNow(app, ws, v, skipUpdate, isYoutubeWebsite, room = ws.i) {
         return;
       }
       // The socket moved to another room during the lookup: not added anywhere.
-      if (ws.i !== room || app.videoPlayers[room] !== player) return;
+      if (ws.i !== room || app.videoPlayers[room] !== player || player.gen !== gen) return;
+      if (!!player.isKaraoke !== karaoke) {
+        app.send(ws, Commands.ERROR, { message: 'The player switched mode meanwhile. Add the video again.' });
+        return;
+      }
+      // The same limit as a list added to the end.
+      if (player.playlist.length >= MAX_PLAYLIST_IMPORT) {
+        app.send(ws, Commands.ERROR, { message: `The playlist is full (${MAX_PLAYLIST_IMPORT}).` });
+        return;
+      }
       // Checked again: the host may have locked the player during the lookup.
       if (player.locked && !(player.host && player.host.id === ws.u.id)) {
         app.send(ws, Commands.ERROR, { message: "The player was locked meanwhile. Add the video again to ask the host." });
@@ -221,8 +238,8 @@ function broadcastWaiting(app, instanceId) {
  * @param {boolean} [isYoutubeWebsite] - Whether it came from the web search.
  * @returns {Promise<void>}
  */
-async function suggestVideo(app, ws, v, isYoutubeWebsite) {
-  const player = app.videoPlayers[ws.i];
+async function suggestVideo(app, ws, v, isYoutubeWebsite, room = ws.i) {
+  const player = app.videoPlayers[room];
   if (!player) return;
   if (!Array.isArray(player.waiting)) player.waiting = [];
   // Checked before the lookup, and again after it, as several adds can be looked up at once.
@@ -245,6 +262,8 @@ async function suggestVideo(app, ws, v, isYoutubeWebsite) {
     app.send(ws, Commands.ERROR, { message: `Failed to resolve video: ${err.message}` });
     return;
   }
+  // Moved to another room during the lookup, or the room's player was made again: not added.
+  if (ws.i !== room || app.videoPlayers[room] !== player) return;
   if (app._isDuplicateVideo(player, resolvedV.link)) {
     app.send(ws, Commands.ERROR, { message: "This video is already in the playlist." });
     return;
@@ -261,8 +280,8 @@ async function suggestVideo(app, ws, v, isYoutubeWebsite) {
     return;
   }
   if (!player.locked || (player.host && player.host.id === ws.u.id)) {
-    appendVideo(app, ws.i, app._createVideoObject(resolvedV, ws.u, 'scraper', isYoutubeWebsite));
-    await app.savePlayerState(ws.i);
+    appendVideo(app, room, app._createVideoObject(resolvedV, ws.u, 'scraper', isYoutubeWebsite));
+    await app.savePlayerState(room);
     return;
   }
   if (full()) return;
@@ -270,10 +289,10 @@ async function suggestVideo(app, ws, v, isYoutubeWebsite) {
   // A title that isn't text (a client can send anything) is no title, here and in what follows.
   const title = typeof resolvedV.title === 'string' ? resolvedV.title : '';
   player.waiting.push({ video: app._createVideoObject({ ...resolvedV, title }, user, 'scraper', isYoutubeWebsite), user, timestamp: Date.now() });
-  console.log(`${ws.u.name} asked to add "${title}" in ${ws.i}; it waits for the host.`);
-  broadcastWaiting(app, ws.i);
+  console.log(`${ws.u.name} asked to add "${title}" in ${room}; it waits for the host.`);
+  broadcastWaiting(app, room);
   app.send(ws, Commands.ERROR, { message: `"${title || 'The video'}" waits for the host to approve it.` });
-  await app.savePlayerState(ws.i);
+  await app.savePlayerState(room);
 }
 
 /**

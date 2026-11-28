@@ -193,9 +193,15 @@ var FireNativeScreen = (() => {
     }
     /** Plays if it says it's paused, and pauses if it says it's playing (as the world's player does). */
     PlayToggle() {
-      this.want.play = !this.read('isPlaying');
+      this.setPlaying(!this.read('isPlaying'));
+    }
+    /** Asks the page to play or pause, whatever it last reported (applyPaused uses this). */
+    setPlaying(play) {
+      this.want.play = !!play;
       this.push();
     }
+    /** Whether it's been asked to play. */
+    wants() { return this.want.play; }
     WatchProperties() {}
     /** What readState asks for: isPlaying, isPrepared or duration. */
     read(name) {
@@ -398,7 +404,9 @@ var FireNativeScreen = (() => {
         }
         if (!found.ok) {
           // Live streams, Shorts, and anything else it can't play go to YouTube's own player.
-          toBrowser(found.live ? 'live' : found.shorts ? 'shorts' : found.reason);
+          // One that YouTube didn't answer for in time (or the lookup page didn't start) is a passing
+          // failure, which Reload Screen tries again (see core.js reloadScreen).
+          toBrowser(found.live ? 'live' : found.shorts ? 'shorts' : found.unplayable ? found.reason : 'not loaded in time');
           return;
         }
         this.height = found.height;
@@ -636,7 +644,8 @@ var FireNativeScreen = (() => {
       const d = this.duration();
       const calm = now - Math.max(this.preparedAt, this.lastPlayPauseAt || -Infinity, this.lastSeekAt || -Infinity) > STALL_GRACE_MS;
       const shouldPlay = calm && !this.wantPaused && !this.held() && this.endedAt == null && !(d && this.localTimeAt(false) >= d - 2);
-      const still = now - this.lastMovedAt;
+      // Since it last moved, or since it was last meant to play again (a pause isn't a stall).
+      const still = now - Math.max(this.lastMovedAt, this.lastPlayPauseAt || -Infinity);
       if (!shouldPlay || still < STALL_MS) {
         this.inStall = false;
         return;
@@ -1064,10 +1073,20 @@ var FireNativeScreen = (() => {
       // A play or pause, for watchStalls' grace: not a retry of the same one, as a stalling
       // video that says it isn't playing is retried every few seconds and would never be calm.
       if (paused !== this.lastWantPaused) { this.lastWantPaused = paused; this.lastPlayPauseAt = now; }
-      if (this.playing() === !paused) return;
+      // A page's video is told what's wanted, not toggled: its last report may be behind what it was
+      // last asked (a pause asked while it says it's paused, as it couldn't start, still counts).
+      const page = typeof vp.setPlaying === 'function';
+      if (page ? vp.wants() === !paused : this.playing() === !paused) return;
       // At the end, playing again would start the file over. The server moves on instead.
       const d = this.duration();
       if (!paused && (this.endedAt != null || (d && this.localTime() >= d - 0.5))) return;
+      if (page) {
+        this.lastToggleAt = now;
+        this.seenPlaying = false;
+        this.trace(`Asking the page to ${paused ? 'pause' : 'play'}`);
+        vp.setPlaying(!paused);
+        return;
+      }
       this.lastToggleAt = now;
       this.seenPlaying = false; // wait for Unity to say it's playing again
       this.trace(`PlayToggle to ${paused ? 'pause' : 'play'} (we had Unity as ${this.state.isPlaying ? 'playing' : 'not playing'}, time ${vp.time})`);

@@ -16,7 +16,7 @@ var FireYouTubeResolver = (() => {
   /** The page the hidden browser sits on: on YouTube's own site, and tiny. */
   const PAGE_URL = 'https://www.youtube.com/robots.txt';
   /** Bump when yt-resolve.js changes, so browsers don't keep an old copy. */
-  const SCRIPT_VERSION = 4;
+  const SCRIPT_VERSION = 5;
   /** How often the loader is put on the page until it says it's ready, and for how long. */
   const INJECT_EVERY_MS = 500;
   const READY_TIMEOUT_MS = 20000;
@@ -38,6 +38,8 @@ var FireYouTubeResolver = (() => {
       this.isReady = false;
       this.failed = null;       // why the hidden page never became ready, once it hasn't
       this.createdAt = performance.now();
+      // The page must be ready in time, making its object and browser included (they can stall).
+      this.readyTimer = setTimeout(() => this.giveUp("The YouTube lookup page didn't start."), READY_TIMEOUT_MS);
       this.ready = this.create().catch(e => this.giveUp(`Couldn't make the YouTube lookup browser: ${e && e.message || e}`));
     }
 
@@ -51,37 +53,55 @@ var FireYouTubeResolver = (() => {
       const t = core.screenTransform();
       // Out of sight (50 m below the screen) and too small to see or click.
       const position = new BS.Vector3(t.position.x, t.position.y - 50, t.position.z);
-      const go = this.go = await core.makeObject('FireVPlayer_YouTubeLookup', { position, scale: new BS.Vector3(0.0001, 0.0001, 0.0001) });
+      const go = await core.makeObject('FireVPlayer_YouTubeLookup', { position, scale: new BS.Vector3(0.0001, 0.0001, 0.0001) });
+      // Removed meanwhile: what was made goes.
+      if (this.destroyed) { core.destroyObject(go); return; }
+      this.go = go;
       go.On('browser-message', e => this.onMessage(e));
-      const component = this.component = await core.addComponent(go, core.bsComponent('Browser',
+      const component = await core.addComponent(go, core.bsComponent('Browser',
         { url: PAGE_URL, pageWidth: 320, pageHeight: 180 }, 'BanterBrowser', [PAGE_URL, false, 1300, 320, 180, null]));
+      if (this.destroyed) return; // destroy() has destroyed the object
+      this.component = component;
       try { if (typeof component.ToggleInteraction === 'function') component.ToggleInteraction(false); } catch (e) {}
       // Quiet: it has no sound of its own, but it's a browser all the same.
       try { if ('volume' in component) component.volume = 0; } catch (e) {}
       // The browser starts on about:blank, so the loader is put on the page until it's there.
-      const code = `(function(){if(location.hostname!=="www.youtube.com"||window.__fvpYtLoader)return;window.__fvpYtLoader=1;`
+      // Already on the page, it's asked to say it's ready again (see handshake).
+      const code = `(function(){if(location.hostname!=="www.youtube.com")return;if(window.__fvpYtLoader){if(window.__fvpYtHello)window.__fvpYtHello();return;}window.__fvpYtLoader=1;`
         + `var s=document.createElement("script");s.src=${JSON.stringify(this.scriptUrl())};`
         // A script that fails to load clears the mark, so the next try puts it on again.
         + `s.onerror=function(){window.__fvpYtLoader=0;s.remove();};`
         + `(document.head||document.documentElement).appendChild(s);})();`;
-      const json = JSON.stringify({ actions: [{ actionType: 'runscript', strParam1: code }] });
-      const started = performance.now();
-      const inject = () => {
-        if (this.isReady || this.destroyed || this.failed) return;
-        if (performance.now() - started > READY_TIMEOUT_MS) {
-          this.giveUp("The YouTube lookup page didn't start.");
-          return;
-        }
-        try { component.RunActions(json); } catch (e) {}
-        this.injectTimer = setTimeout(inject, INJECT_EVERY_MS);
-      };
-      inject();
+      this.injectJson = JSON.stringify({ actions: [{ actionType: 'runscript', strParam1: code }] });
+      this.inject();
+    }
+
+    /** Puts the loader on the page every INJECT_EVERY_MS until it says it's ready (or it's given up on). */
+    inject() {
+      clearTimeout(this.injectTimer);
+      if (this.isReady || this.destroyed || this.failed || !this.component) return;
+      try { this.component.RunActions(this.injectJson); } catch (e) {}
+      this.injectTimer = setTimeout(() => this.inject(), INJECT_EVERY_MS);
+    }
+
+    /**
+     * A lookup went unanswered: the hidden page may have loaded again, without the script. It's
+     * asked to say it's ready again (and given the script if it lost it), within READY_TIMEOUT_MS.
+     */
+    handshake() {
+      if (!this.isReady || this.destroyed || !this.component) return;
+      console.warn('[YouTubeNative] A lookup went unanswered, so the lookup page is checked again.');
+      this.isReady = false;
+      clearTimeout(this.readyTimer);
+      this.readyTimer = setTimeout(() => this.giveUp("The YouTube lookup page stopped answering."), READY_TIMEOUT_MS);
+      this.inject();
     }
 
     giveUp(reason) {
       if (this.isReady || this.failed) return;
       this.failed = reason;
       clearTimeout(this.injectTimer);
+      clearTimeout(this.readyTimer);
       console.warn(`[YouTubeNative] ${reason}`);
       this.readyWaiters.splice(0).forEach(w => w(false));
     }
@@ -104,6 +124,7 @@ var FireYouTubeResolver = (() => {
         this.isReady = true;
         this.failed = null; // a late start still counts
         clearTimeout(this.injectTimer);
+        clearTimeout(this.readyTimer);
         console.log(`[YouTubeNative] The lookup page is ready (${Math.round(performance.now() - this.createdAt)} ms).`);
         this.readyWaiters.splice(0).forEach(w => w(true));
         return;
@@ -126,13 +147,22 @@ var FireYouTubeResolver = (() => {
     async resolve(id, maxHeight) {
       const key = `${id}@${maxHeight}`;
       const cached = this.cache.get(key);
-      if (cached && Date.now() - cached.at < CACHE_MS) return cached.answer;
+      const fresh = cached && Date.now() - cached.at < CACHE_MS ? cached.answer : null;
+      // One whose captions came too late is looked up again (quick: the page keeps what it found),
+      // so they come this time; that answer is kept if this one fails.
+      if (fresh && !fresh.capsLate) return fresh;
+      const found = await this.ask(id, maxHeight, key);
+      return !found.ok && fresh ? fresh : found;
+    }
+
+    async ask(id, maxHeight, key) {
       if (!(await this.whenReady())) return { ok: false, reason: this.failed || 'The YouTube lookup page is gone.' };
       const n = ++this.n;
       const started = performance.now();
       const msg = await new Promise(resolve => {
         const timer = setTimeout(() => {
           this.pending.delete(n);
+          this.handshake();
           resolve({ ok: false, reason: "YouTube didn't answer in time." });
         }, REQUEST_TIMEOUT_MS);
         this.pending.set(n, { resolve, timer });
@@ -151,7 +181,7 @@ var FireYouTubeResolver = (() => {
       // Its captions, [startMs, durMs, text] each (see yt-resolve.js), for the world's player to show.
       const cues = (Array.isArray(msg.cues) ? msg.cues : []).filter(c => Array.isArray(c) && Number.isFinite(Number(c[0])) && Number.isFinite(Number(c[1])) && typeof c[2] === 'string')
         .map(c => [Number(c[0]), Number(c[1]), c[2].slice(0, 300)]).sort((x, y) => x[0] - y[0]);
-      const answer = { ok: true, url, height: Number(msg.height) || 0, title: String(msg.title || ''), cues };
+      const answer = { ok: true, url, height: Number(msg.height) || 0, title: String(msg.title || ''), cues, capsLate: !!msg.capsLate };
       console.log(`[YouTubeNative] ${id}: ${answer.height}p, looked up in ${Math.round(performance.now() - started)} ms.`);
       this.remember(key, answer);
       return answer;
@@ -169,6 +199,7 @@ var FireYouTubeResolver = (() => {
     destroy() {
       this.destroyed = true;
       clearTimeout(this.injectTimer);
+      clearTimeout(this.readyTimer);
       this.pending.forEach(p => { clearTimeout(p.timer); p.resolve({ ok: false, reason: 'The player was removed.' }); });
       this.pending.clear();
       this.readyWaiters.splice(0).forEach(w => w(false));

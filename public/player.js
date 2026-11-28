@@ -355,15 +355,18 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       this.player = window.MediaSwitch ? new MediaSwitch(this.yt, {
         getId: link => this.core.getId(link),
         onDuration: (link, seconds) => this.reportMediaDuration(link, seconds),
-        onError: (message, notice) => {
+        onError: (message, notice, link) => {
           // A notice (a Twitch clip that can't be turned down) plays on: a toast says so.
           // Otherwise this load won't play (copy protection, a title for adults here, a link this
           // world doesn't allow...), and the screen says why in place of "Loading..." until
           // something else is loaded (see updateLoading), so everyone watching can see it.
+          // The link that failed, as MediaSwitch says: a refusal comes before playVidya has made
+          // it the current video.
           const failed = this.previewVideo || this.currentVideo;
-          if (notice || !(failed && failed.link)) this.core.showToast(message, 6000);
+          const failedLink = link || (failed && failed.link);
+          if (notice || !failedLink) this.core.showToast(message, 6000);
           else {
-            this.failure = { link: failed.link, message: String(message || "This can't play here.") };
+            this.failure = { link: failedLink, message: String(message || "This can't play here.") };
             this.updateLoading();
           }
           if (this.previewVideo) {

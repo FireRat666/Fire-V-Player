@@ -368,21 +368,22 @@ class VideoElementSource extends BaseMediaSource {
     const hls = media.type === 'hls';
     if (media.type === 'mpegts') {
       // Browsers can't play MPEG-TS themselves; mpegts.js feeds it to the video element.
+      // A station's card says so too, not "Tuning in...".
+      const fail = message => {
+        if (this.radioCard) this.radioCard.show(false, false, true);
+        opts.onError(message);
+      };
       loadMediaScript('mpegts').then(() => {
         if (this.destroyed) return;
-        if (!window.mpegts || !mpegts.isSupported()) { opts.onError("This browser can't play this stream."); return; }
+        if (!window.mpegts || !mpegts.isSupported()) { fail("This browser can't play this stream."); return; }
         const m = this.mpegts = mpegts.createPlayer({ type: 'mpegts', isLive: !!media.live, url: media.url || url },
           // Live, it starts on the first data rather than waiting to gather some (the stash), so
           // a VRCDN stream starts in a second or two instead of many.
           media.live ? { liveBufferLatencyChasing: true, lazyLoad: false, enableStashBuffer: false } : { lazyLoad: true });
-        m.on(mpegts.Events.ERROR, () => {
-          // A station's card says so too, not "Tuning in...".
-          if (this.radioCard) this.radioCard.show(false, false, true);
-          opts.onError("Couldn't play this stream. It may be offline, or the site may not allow it here.");
-        });
+        m.on(mpegts.Events.ERROR, () => fail("Couldn't play this stream. It may be offline, or the site may not allow it here."));
         m.attachMediaElement(el);
         m.load();
-      }).catch(err => { if (!this.destroyed) opts.onError(err.message); });
+      }).catch(err => { if (!this.destroyed) fail(err.message); });
     } else if (media.type === 'dash') {
       loadMediaScript('dash').then(() => {
         if (this.destroyed) return;
@@ -1553,7 +1554,7 @@ class MediaSwitch {
     // Files and streams from any site only play where this viewer's world allows them.
     if (!MediaSources.isTrusted(media) && !(this.opts.allowUntrusted && this.opts.allowUntrusted())) {
       this.source = new NoticeSource({ container: this.container }, MediaSources.UNTRUSTED_MESSAGE);
-      this.opts.onError(MediaSources.UNTRUSTED_MESSAGE);
+      this.opts.onError(MediaSources.UNTRUSTED_MESSAGE, false, link);
       return;
     }
     const opts = {
@@ -1562,7 +1563,7 @@ class MediaSwitch {
       title: String((item && item.title) || ''), thumbnail: String((item && item.thumbnail) || ''),
       onDuration: seconds => this.opts.onDuration(link, seconds),
       // Only while it's still the source: one replaced or stopped since says nothing (see stopSource).
-      onError: (message, notice) => { if (!opts.stale) this.opts.onError(message, notice); },
+      onError: (message, notice) => { if (!opts.stale) this.opts.onError(message, notice, link); },
       requestClick: () => { if (this.opts.requestClick) this.opts.requestClick(); },
       deviceStream: this.opts.deviceStream,
       allowMature: this.opts.allowMature
@@ -1577,7 +1578,7 @@ class MediaSwitch {
       if (this.opts.allowMature && this.opts.allowMature()) this.source = new BilibiliSource(opts, media);
       else {
         this.source = new NoticeSource({ container: this.container }, MediaSources.matureMessage(media));
-        this.opts.onError(MediaSources.matureMessage(media));
+        this.opts.onError(MediaSources.matureMessage(media), false, link);
       }
     }
     else this.source = new VideoElementSource(opts, media);

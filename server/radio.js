@@ -285,17 +285,17 @@ async function sniff(link) {
 }
 
 /**
- * The type a stream answers at `url` with, to a browser, when it's sound ('' when it answers with
+ * The type a stream answers at `url` with, to a browser (or to `ua`, such as the relay's), when it's sound ('' when it answers with
  * something else), or HLS when it's an HLS stream (by its type and its first lines, whatever its
  * address: a station's may have no .m3u8). A PLS, XSPF or plain .m3u list isn't either. It throws
  * when the station can't be reached at all, which isn't kept.
  */
-async function answersWithSound(url) {
+async function answersWithSound(url, ua = UA) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5000);
   try {
     // The https probe must stay on https: one redirected to http couldn't play there either.
-    const res = await lists().fetchPublic(url, { signal: controller.signal, httpsOnly: /^https:/i.test(url), headers: { 'User-Agent': UA, 'Accept': '*/*', 'Accept-Encoding': 'identity' } });
+    const res = await lists().fetchPublic(url, { signal: controller.signal, httpsOnly: /^https:/i.test(url), headers: { 'User-Agent': ua, 'Accept': '*/*', 'Accept-Encoding': 'identity' } });
     const type = String(res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
     // An .m3u8 address is read as one whatever its type (some servers send text/plain).
     if (res.ok && (HLS_TYPE.test(type) || /\.m3u8($|\?)/i.test(url))) {
@@ -391,10 +391,14 @@ async function streamFor(link) {
   return ts ? { ...relayed, type: 'mpegts' } : { ...relayed, audio: true };
 }
 
-/** The type a station's http stream is sent as ('' if unknown), kept as long as the https check. */
+/**
+ * The type a station's http stream is sent to the relay as ('' if unknown), kept as long as the
+ * https check. Asked as the relay asks (RELAY_UA): a Shoutcast server sends a browser its status
+ * page at its root address, and the relay its stream.
+ */
 async function relayType(url) {
   try {
-    return await cache.remember(`type:${url}`, HTTPS_TTL_MS, () => answersWithSound(url));
+    return await cache.remember(`relaytype:${url}`, HTTPS_TTL_MS, () => answersWithSound(url, RELAY_UA));
   } catch (e) {
     return '';
   }

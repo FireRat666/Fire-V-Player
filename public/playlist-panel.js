@@ -1473,8 +1473,8 @@ var FirePlaylistPanel = class {
     await this.button(phoneFoot, '✓ Done', () => this.hidePasteCode(), { backgroundColor: '#455a64' });
 
     // Search helpers: karaoke's words to add to the search, then recent searches, as the kit's
-    // chips (as its filter rows have).
-    this.searchToolsRow = await row(this.mainView, { overflow: 'hidden' });
+    // chips (as its filter rows have). They wrap onto a second line rather than squeeze together.
+    this.searchToolsRow = await row(this.mainView, { flexWrap: 'wrap', overflow: 'hidden' });
     if (this.karaoke) {
       for (const word of ['karaoke', 'lyrics', 'zoom karaoke']) this.kitChip(this.searchToolsRow, word, () => this.addSearchWord(word), 'add', 'add');
     }
@@ -1488,12 +1488,14 @@ var FirePlaylistPanel = class {
         this.setSearchText(q);
         this.doSearch();
       }, 'filter', 'schedule');
-      chip.SetStyles({ flexShrink: 1, maxWidth: '240px' });
+      chip.SetStyles({ maxWidth: '200px', overflow: 'hidden' });
       this.recentBtns.push(chip);
     }
     this.clearRecentBtn = this.kitChip(this.searchToolsRow, 'Clear', () => this.clearRecent(), 'danger', 'close');
     // Takes the results away, back to the page as it was before a search (for this viewer only).
     this.clearResultsBtn = this.kitChip(this.searchToolsRow, 'Clear Results', () => this.clearResults(), 'danger', 'close');
+    // A little room between the two lines when they wrap.
+    for (const chip of [...this.recentBtns, this.clearRecentBtn, this.clearResultsBtn]) chip.SetStyles({ marginTop: '2px', marginBottom: '2px' });
 
     // List rows: a fixed pool in the kit's scroll view (with its thin scrollbar), re-filled as the
     // list or its window changes.

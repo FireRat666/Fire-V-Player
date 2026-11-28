@@ -3309,8 +3309,10 @@ var FirePlaylistPanel = class {
     if (data && data.device && data.state === 'ready') {
       const inPlaylist = new Set(((this.core.player && this.core.player.playlist) || []).map(v => v.link));
       const items = data.items.filter(v => !inPlaylist.has(v.link)).slice(0, 300);
-      items.forEach(v => this.send(Commands.ADD_TO_PLAYLIST, v));
-      this.setStatus(this.tr(items.length === 1 ? 'Adding {count} video...' : 'Adding {count} videos...', { count: items.length }), 0);
+      // Only what was sent is counted; the list stays here, so + All can be pressed again.
+      const sent = items.filter(v => this.send(Commands.ADD_TO_PLAYLIST, v)).length;
+      if (sent < items.length) { this.setStatus('Not connected to the server. Reconnecting...', 4000); return; }
+      this.setStatus(this.tr(sent === 1 ? 'Adding {count} video...' : 'Adding {count} videos...', { count: sent }), 0);
       return;
     }
     this.send(Commands.FROM_PLAYLIST, { id, append: true, fromPlaylist: true });

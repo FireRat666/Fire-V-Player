@@ -32,12 +32,12 @@
   // And each stream's playlist size, counted as the server's checkTrack does: per fragment, its
   // address and LINES_PER_REF more.
   var MAX_PLAYLIST = 16 * 1024 * 1024, LINES_PER_REF = 80;
-  function playlistFits(t) { return t.refs.length * (String(t.u).length + LINES_PER_REF) <= MAX_PLAYLIST; }
+  function playlistFits(t) { return t.refs.length * (new TextEncoder().encode(String(t.u)).length + LINES_PER_REF) <= MAX_PLAYLIST; }
   // A long video's fragments are joined into longer segments until it fits: each n in a row as one
   // (a segment may hold several fragments). Longer segments make seeking a little slower.
   var JOINS = [1, 2, 3, 4, 6, 8];
   // Player answers kept for a few minutes, so a lower quality asked for after a stall is quick.
-  var PLAYER_CACHE_MS = 5 * 60 * 1000;
+  var PLAYER_CACHE_MS = 5 * 60 * 1000, PLAYER_CACHE_MAX = 10;
   var playerCache = {};
   var visitor = '';
 
@@ -93,9 +93,20 @@
       return fetchVisitor().then(function () { return playerRequest(id); }, function () { return json; });
     }).then(function (json) {
       var status = json && json.playabilityStatus && json.playabilityStatus.status;
-      if (status === 'OK') playerCache[id] = { at: Date.now(), json: json };
+      if (status === 'OK') keepPlayer(id, json);
       return json;
     });
+  }
+
+  // Keeps a player answer: expired ones go, then the oldest past PLAYER_CACHE_MAX.
+  function keepPlayer(id, json) {
+    var now = Date.now();
+    Object.keys(playerCache).forEach(function (k) { if (now - playerCache[k].at >= PLAYER_CACHE_MS) delete playerCache[k]; });
+    delete playerCache[id];
+    playerCache[id] = { at: now, json: json };
+    var keys = Object.keys(playerCache);
+    keys.sort(function (a, b) { return playerCache[a].at - playerCache[b].at; });
+    while (keys.length > PLAYER_CACHE_MAX) delete playerCache[keys.shift()];
   }
 
   function labelOf(f) {
@@ -156,6 +167,7 @@
     }
     if (off + 8 > dv.byteLength) return null;
     var boxSize = dv.getUint32(off);
+    if (boxSize < 8 || off + boxSize > dv.byteLength) return null; // cut short: asked for again
     var q = off + 8;
     var version = dv.getUint8(q); q += 8;            // version + flags, reference_ID
     var timescale = dv.getUint32(q); q += 4;
@@ -170,7 +182,8 @@
       refs.push([dv.getUint32(q) & 0x7fffffff, Math.max(1, Math.round(dv.getUint32(q + 4) * 1000 / timescale))]);
       q += 12;
     }
-    return refs.length ? { first: idxStart + off + boxSize + firstOffset, refs: refs } : null;
+    // Every fragment it lists, or none: a partial index would cut the video short.
+    return refs.length && refs.length === count ? { first: idxStart + off + boxSize + firstOffset, refs: refs } : null;
   }
 
   // A stream's index, asked for again once if it fails: YouTube sometimes sends the request on to

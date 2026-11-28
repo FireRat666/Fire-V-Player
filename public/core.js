@@ -389,15 +389,16 @@ var Core = class {
   // A YouTube video it couldn't play goes back to YouTube's own player in the browser the same way.
   playFileInBrowser(link, why) {
     if (!link) return;
-    (this.browserFiles = this.browserFiles || new Set()).add(link);
+    // Why, too: Reload Screen tries the world's player again after a passing failure (see reloadScreen).
+    (this.browserFiles = this.browserFiles || new Map()).set(link, why || '');
     const youtube = !!(window.MediaSources && MediaSources.youtubeId(link));
     const bilibili = !!(window.MediaSources && MediaSources.detect(link) && MediaSources.detect(link).type === 'bilibili');
     console.log(`[Core] The world's video player couldn't start ${link}${why ? ` (${why})` : ''}, so it plays in the browser.`);
     if (bilibili) {
       this.showToast("Bilibili's player didn't load as the screen, so it plays inside the player page instead, where its volume can't be turned down.", 7000);
     } else if (youtube) {
-      // Live streams always go this way, so they get no toast.
-      if (why !== 'live') this.showToast(`This video can't play on the world's video player${why === 'shorts' ? " (it's a Short)" : ''}, so it plays in the browser instead.`, 6000);
+      // Live streams and Shorts always go this way, so they get no toast.
+      if (why !== 'live' && why !== 'shorts') this.showToast("This video can't play on the world's video player, so it plays in the browser instead.", 6000);
     } else {
       this.showToast("The world's video player can't play this file, so it plays in the browser instead.", 6000);
     }
@@ -593,6 +594,10 @@ var Core = class {
     if (this.lastScreenReload && now - this.lastScreenReload < 3000) return; // a double click
     this.lastScreenReload = now;
     console.log('[Core] Reloading this viewer\'s screen.');
+    // A link that went to the browser only because it was slow or its setup failed gets the
+    // world's player again; one it can't play (a Short, a live stream, a format) stays in the browser.
+    const link = this.currentLink();
+    if (this.browserFiles && ['not loaded in time', 'setup failed'].includes(this.browserFiles.get(link))) this.browserFiles.delete(link);
     if (this.nativeScreen) {
       this.nativeScreen.destroy();
       this.nativeScreen = null;

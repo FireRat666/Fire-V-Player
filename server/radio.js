@@ -445,11 +445,13 @@ async function relay(req, res, allowed) {
         try { await upstream.body?.cancel(); } catch (e) {}
         continue;
       }
-      clearTimeout(firstByte);
       // AAC+ is sent as audio/aacp, which browsers don't all take: it's AAC to them.
       const sent = type.split(';')[0].trim().replace(/^audio\/aacp$/i, 'audio/aac');
       res.status(200).set({ 'Content-Type': sent, 'Cache-Control': 'no-store' });
       const body = Readable.fromWeb(upstream.body);
+      // The wait for its first sound ends with its first bytes, not its headers: a station that
+      // answers and then sends nothing is cut off and gives its slot back.
+      body.on('data', function first(chunk) { if (chunk && chunk.length) { clearTimeout(firstByte); body.off('data', first); } });
       body.on('error', () => { release(); res.destroy(); });
       body.on('end', () => { release(); res.end(); });
       body.pipe(res);

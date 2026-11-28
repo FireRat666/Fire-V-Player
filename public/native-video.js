@@ -174,6 +174,7 @@ var FireNativeScreen = (() => {
       this.want.seek = this.t;
       this.want.seekN++;
       this.seekAt = performance.now();
+      this.reported.ended = false; // until the page says so again, from where it went
       this.push();
     }
     get volume() { return this.want.volume; }
@@ -388,6 +389,14 @@ var FireNativeScreen = (() => {
         }
         this.height = found.height;
         url = found.url;
+        // The same deadline covers making the player: one whose setup never finishes goes to the
+        // browser too (poll's check takes over once the player exists).
+        this.setupTimer = setTimeout(() => {
+          if (this.destroyed || this.vp || this.warned) return;
+          this.warned = true;
+          console.warn(`[NativeScreen] ${this.link} wasn't set up after ${YOUTUBE_PREPARE_TIMEOUT_MS / 1000}s.`);
+          toBrowser('not loaded in time');
+        }, Math.max(0, YOUTUBE_PREPARE_TIMEOUT_MS - (performance.now() - this.startedAt)));
         // Its captions, shown over the picture while the viewer has captions on (see updateCaptions).
         this.cues = Array.isArray(found.cues) ? found.cues : [];
       }
@@ -395,11 +404,12 @@ var FireNativeScreen = (() => {
       // The plane's renderer has to exist before the video player, which draws onto its material.
       await core.addComponent(go, core.bsComponent('Plane', { width: w, height: h }, 'BanterPlane', [w, h]));
       await core.addComponent(go, core.bsComponent('Material', { shaderName: 'Unlit/Diffuse' }, 'BanterMaterial', ['Unlit/Diffuse']));
-      if (this.destroyed) return;
+      if (this.destroyed || (this.youtubeId && this.warned)) return;
       const settings = { url, volume: this.unityVolume(), loop: false, playOnAwake: !this.wantPaused && !this.held(), skipOnDrop: true, waitForFirstFrame: true };
       const vp = await core.addComponent(go, core.bsComponent('VideoPlayer', settings,
         'BanterVideoPlayer', [settings.url, settings.volume, settings.loop, settings.playOnAwake, settings.skipOnDrop, settings.waitForFirstFrame]));
-      if (this.destroyed) return;
+      clearTimeout(this.setupTimer);
+      if (this.destroyed || (this.youtubeId && this.warned)) return;
       this.vp = vp;
       this.trace(`made the player: playOnAwake ${settings.playOnAwake}, volume ${settings.volume}, held ${this.held()}, wantPaused ${this.wantPaused}`);
       // time only reaches the page when watched. The other read-only values (isPrepared,
@@ -447,6 +457,7 @@ var FireNativeScreen = (() => {
       this.pageSize = [w, h];
       this.vp = new PageVideo(holder, component, this.unityVolume(), !this.wantPaused && !this.held());
       this.vp.onFresh = () => { if (!this.destroyed) this.requestSync(true); };
+      this.applyResolution(); // the viewer may have changed it while the page was being made
       this.startedAt = performance.now();
       this.startPolling();
       core.applyAudio(true);
@@ -530,6 +541,12 @@ var FireNativeScreen = (() => {
       // since the last toggle counts, so a reading that hasn't caught up with a toggle doesn't.
       const isPlaying = names.indexOf('isPlaying');
       const reported = isPlaying >= 0 && values[isPlaying] !== undefined && values[isPlaying] !== null;
+      // A Bilibili page says when its video has ended; not playing there is a pause, a reload or a wait.
+      if (typeof vp.read === 'function') {
+        if (vp.reported && vp.reported.ended && this.endedAt == null && !this.wantPaused) this.endedAt = this.localTimeAt(true);
+        else if (reported && this.state.isPlaying) this.seenPlaying = true;
+        return;
+      }
       if (reported && this.state.isPlaying) this.seenPlaying = true;
       // A YouTube video stops by itself while it waits for more of the stream too, so there only
       // a stop near its end is the end, and with no known length it never is (the server moves on).
@@ -682,12 +699,19 @@ var FireNativeScreen = (() => {
       const standalone = typeof this.core.isStandaloneDevice === 'function' && this.core.isStandaloneDevice();
       // The start this is for (see App.trackReady): a restart of the same song is a new wait.
       const start = this.core.player ? Number(this.core.player.lastStartTime) : NaN;
-      this.readyTimer = setTimeout(() => {
+      const send = () => {
         if (this.destroyed || !this.prepared || this.isPreview()) return;
         const track = this.currentTrack();
         if (!track || track.link !== this.link) return;
-        this.core.sendMessage({ path: Commands.TRACK_READY, data: Object.assign({ link: this.link, native: true }, Number.isFinite(start) ? { start } : {}) });
-      }, standalone ? SETTLE_STANDALONE_MS : SETTLE_MS);
+        // The same start still: a newer one gets its own report.
+        const now = this.core.player ? Number(this.core.player.lastStartTime) : NaN;
+        if (Number.isFinite(start) && now !== start) return;
+        // Not connected (a reconnect): sent again once it is, so the room isn't kept waiting.
+        if (!this.core.sendMessage({ path: Commands.TRACK_READY, data: Object.assign({ link: this.link, native: true }, Number.isFinite(start) ? { start } : {}) })) {
+          this.readyTimer = setTimeout(send, 1000);
+        }
+      };
+      this.readyTimer = setTimeout(send, standalone ? SETTLE_STANDALONE_MS : SETTLE_MS);
     }
 
     /**
@@ -961,10 +985,13 @@ var FireNativeScreen = (() => {
       const vp = this.vp;
       clearTimeout(this.primeTimer);
       this.trace(`prime: playing muted (Unity's volume ${vp.volume}, time ${vp.time})`);
+      const began = performance.now();
       this.primeTimer = setTimeout(() => {
         if (this.destroyed || vp !== this.vp) return;
-        this.trace(`prime: back to the start (Unity's time ${vp.time})`);
-        if (!this.wantPaused) this.seek(0);
+        // A jump meanwhile (a skip, a sync) is where it should be now, so it isn't taken back.
+        const jumped = (this.lastSeekAt || -Infinity) >= began;
+        this.trace(`prime: ${jumped ? 'a seek came first, so it stays' : 'back to the start'} (Unity's time ${vp.time})`);
+        if (!this.wantPaused && !jumped) this.seek(0);
         this.primeTimer = setTimeout(() => {
           this.priming = false;
           if (this.destroyed || vp !== this.vp) return;
@@ -1217,6 +1244,7 @@ var FireNativeScreen = (() => {
       clearInterval(this.overlayTimer);
       clearTimeout(this.startTimer);
       clearTimeout(this.primeTimer);
+      clearTimeout(this.setupTimer);
       if (this.vp && typeof this.vp.destroy === 'function') this.vp.destroy();
       // Destroying the object destroys the video player (or a page's browser) with it.
       if (this.go) this.core.destroyObject(this.go);

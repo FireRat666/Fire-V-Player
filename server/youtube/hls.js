@@ -27,6 +27,9 @@ const MAX_PLAYLIST = 16 * 1024 * 1024;
 /** Per fragment, the playlist lines around its address (#EXTINF and #EXT-X-BYTERANGE), at most. */
 const LINES_PER_REF = 80;
 
+/** The playlists this answers, by file name. */
+const PLAYLISTS = new Map([['master.m3u8', 'master'], ['video.m3u8', 'video'], ['audio.m3u8', 'audio']]);
+
 /** A whole number from 0 up to the largest a byte offset can safely be. */
 function isCount(n) {
   return Number.isSafeInteger(n) && n >= 0;
@@ -64,7 +67,7 @@ function checkTrack(t, video) {
   if (!isRange(t.init) || !isRange(t.idx) || !isCount(t.first) || !isCount(t.bw)) return null;
   if (typeof t.codecs !== 'string' || !/^[A-Za-z0-9.]{1,40}$/.test(t.codecs)) return null;
   if (!Array.isArray(t.refs) || !t.refs.length || t.refs.length > MAX_REFS) return null;
-  if (t.refs.length * (safeUri(t.u).length + LINES_PER_REF) > MAX_PLAYLIST) return null;
+  if (t.refs.length * (Buffer.byteLength(safeUri(t.u)) + LINES_PER_REF) > MAX_PLAYLIST) return null;
   if (!t.refs.every(r => Array.isArray(r) && r.length === 2 && isCount(r[0]) && r[0] > 0 && isCount(r[1]) && r[1] > 0)) return null;
   if (video && !(isCount(t.w) && t.w > 0 && isCount(t.h) && t.h > 0)) return null;
   return t;
@@ -143,7 +146,7 @@ function mediaPlaylist(t) {
  */
 function setupRoutes(app) {
   app.get('/yt-hls/:file', (req, res, next) => {
-    const name = { 'master.m3u8': 'master', 'video.m3u8': 'video', 'audio.m3u8': 'audio' }[req.params.file];
+    const name = PLAYLISTS.get(req.params.file);
     if (!name) { next(); return; }
     const m = typeof req.query.m === 'string' ? req.query.m : '';
     const spec = unpack(m);

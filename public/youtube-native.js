@@ -16,7 +16,7 @@ var FireYouTubeResolver = (() => {
   /** The page the hidden browser sits on: on YouTube's own site, and tiny. */
   const PAGE_URL = 'https://www.youtube.com/robots.txt';
   /** Bump when yt-resolve.js changes, so browsers don't keep an old copy. */
-  const SCRIPT_VERSION = 2;
+  const SCRIPT_VERSION = 3;
   /** How often the loader is put on the page until it says it's ready, and for how long. */
   const INJECT_EVERY_MS = 500;
   const READY_TIMEOUT_MS = 20000;
@@ -24,6 +24,8 @@ var FireYouTubeResolver = (() => {
   const REQUEST_TIMEOUT_MS = 15000;
   /** How long a lookup is kept: YouTube's addresses last about 6 hours. */
   const CACHE_MS = 60 * 60 * 1000;
+  /** The most lookups kept (each with its captions): the oldest go first. */
+  const CACHE_MAX = 40;
 
   return class {
     /** @param {Object} core - The Core. */
@@ -59,6 +61,8 @@ var FireYouTubeResolver = (() => {
       // The browser starts on about:blank, so the loader is put on the page until it's there.
       const code = `(function(){if(location.hostname!=="www.youtube.com"||window.__fvpYtLoader)return;window.__fvpYtLoader=1;`
         + `var s=document.createElement("script");s.src=${JSON.stringify(this.scriptUrl())};`
+        // A script that fails to load clears the mark, so the next try puts it on again.
+        + `s.onerror=function(){window.__fvpYtLoader=0;s.remove();};`
         + `(document.head||document.documentElement).appendChild(s);})();`;
       const json = JSON.stringify({ actions: [{ actionType: 'runscript', strParam1: code }] });
       const started = performance.now();
@@ -149,8 +153,17 @@ var FireYouTubeResolver = (() => {
         .map(c => [Number(c[0]), Number(c[1]), c[2].slice(0, 300)]).sort((x, y) => x[0] - y[0]);
       const answer = { ok: true, url, height: Number(msg.height) || 0, title: String(msg.title || ''), cues };
       console.log(`[YouTubeNative] ${id}: ${answer.height}p, looked up in ${Math.round(performance.now() - started)} ms.`);
-      this.cache.set(key, { at: Date.now(), answer });
+      this.remember(key, answer);
       return answer;
+    }
+
+    /** Keeps a lookup: expired ones go, and the oldest past CACHE_MAX (captions and all). */
+    remember(key, answer) {
+      const now = Date.now();
+      for (const [k, v] of this.cache) if (now - v.at >= CACHE_MS) this.cache.delete(k);
+      this.cache.delete(key);
+      this.cache.set(key, { at: now, answer });
+      while (this.cache.size > CACHE_MAX) this.cache.delete(this.cache.keys().next().value);
     }
 
     destroy() {

@@ -154,21 +154,28 @@ async function readStation(url, asPlayer) {
     await cancel();
     return { title: clean(res.headers.get('icy-name'), 120), streams: [url] };
   };
+  const sound = AUDIO_TYPE.test(type) && !PLAYLIST_TYPE.test(type);
+  // A generic type (application/octet-stream) is sent for playlist files too: its first bytes say
+  // which it is. Any other sound type is the stream (its body is cancelled before it's locked).
+  if (sound && !/^application\/octet-stream/i.test(type)) return stream();
   const reader = res.body.getReader();
   const chunks = [];
   let total = 0;
-  if (AUDIO_TYPE.test(type) && !PLAYLIST_TYPE.test(type)) {
-    // A generic type (application/octet-stream) is sent for playlist files too: its first bytes
-    // say which it is. Any other sound type is the stream.
-    if (!/^application\/octet-stream/i.test(type)) return stream();
-    const first = await reader.read();
-    const head = first.value ? Buffer.from(first.value).toString('latin1', 0, 512).replace(/^\ufeff|^\xef\xbb\xbf/, '').trimStart() : '';
+  if (sound) {
+    // The start may come split over chunks ("[" then "playlist]"), so 512 bytes (or the whole
+    // body, if shorter) are read before deciding.
+    let done = false;
+    while (total < 512 && !done) {
+      const next = await reader.read();
+      done = next.done;
+      if (next.value) { chunks.push(next.value); total += next.value.length; }
+    }
+    const head = Buffer.concat(chunks).toString('latin1', 0, 512).replace(/^\ufeff|^\xef\xbb\xbf/, '').trimStart();
     if (!/^(\[playlist\]|#EXTM3U|<\?xml|<playlist[\s>]|https?:\/\/)/i.test(head)) {
       try { await reader.cancel(); } catch (e) {}
       return { title: clean(res.headers.get('icy-name'), 120), streams: [url] };
     }
-    if (first.value) { chunks.push(first.value); total += first.value.length; }
-    if (first.done) return finish();
+    if (done) return finish();
   }
   for (;;) {
     const { done, value } = await reader.read();

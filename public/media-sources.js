@@ -28,8 +28,8 @@
  * @property {string} [clip] - Twitch clip slug if applicable.
  * @property {string} [id] - Vimeo video ID if applicable; a Bilibili video's BV (or av) id.
  * @property {number} [part] - For Bilibili: which part of a video with several (its ?p=), from 1.
- * @property {string} [bilibili] - For a 'file' from biliplayer.91vrchat.com (a service that sends a
- *   Bilibili video's own .mp4): the Bilibili video's link.
+ * @property {string} [bilibili] - For a 'file' from biliplayer.91vrchat.com or btv.rspark.cn (services
+ *   that send a Bilibili video's own .mp4): the Bilibili video's link.
  * @property {string} [hash] - Vimeo unlisted hash token if applicable.
  * @property {string} [name] - VDO.Ninja stream/room identifier if applicable.
  * @property {boolean} [live] - True for an MPEG-TS link that is a live stream (VRCDN's .live.ts).
@@ -144,6 +144,16 @@ var MediaSources = (() => {
       if (!inner || inner.type !== 'bilibili') return null;
       const page = `https://www.bilibili.com/video/${inner.id}/${inner.part > 1 ? `?p=${inner.part}` : ''}`;
       return { type: 'file', url: `https://biliplayer.91vrchat.com/player/?url=${encodeURIComponent(page)}`, bilibili: page };
+    }
+    // btv.rspark.cn: another service like it, by a video's BV (or av) id (btv.rspark.cn/<id>) or
+    // its link (btv.rspark.cn/?url=<link>). Played the same way.
+    if (host === 'btv.rspark.cn') {
+      const inner = parts.length === 1 && /^(BV[0-9A-Za-z]{10}|av\d{1,12})$/i.test(parts[0])
+        ? detect(`https://www.bilibili.com/video/${parts[0]}/`)
+        : (!parts.length ? detect(u.searchParams.get('url') || '') : null);
+      if (!inner || inner.type !== 'bilibili') return null;
+      const page = `https://www.bilibili.com/video/${inner.id}/${inner.part > 1 ? `?p=${inner.part}` : ''}`;
+      return { type: 'file', url: `https://btv.rspark.cn/?url=${encodeURIComponent(page)}`, bilibili: page };
     }
 
     // Bilibili: bilibili.com/video/<BV id or av id>/ (also /en/video/... and the like, ?p=<part>),

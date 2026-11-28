@@ -143,8 +143,8 @@ async function resolveMediaLink(link) {
 
   // A Bilibili video plays in Bilibili's own embed player; its page gives its title and length.
   if (media.type === 'bilibili') return bilibili.resolveLink(link);
-  // A biliplayer.91vrchat.com link plays the video's .mp4 it redirects to; the Bilibili page gives
-  // its title and length. It keeps the biliplayer link, as the .mp4's address expires.
+  // A biliplayer.91vrchat.com or btv.rspark.cn link plays the video's .mp4 it redirects to; the
+  // Bilibili page gives its title and length. It keeps the service's link, as the .mp4's address expires.
   if (media.type === 'file' && media.bilibili) return { ...(await bilibili.resolveLink(media.bilibili)), link: media.url };
 
   // A radio station (Shoutcast, or a .pls or .xspf file) keeps its link too: the player asks for

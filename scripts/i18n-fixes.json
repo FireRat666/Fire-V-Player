@@ -17,7 +17,10 @@
     "Close Browser": "Browser schließen",
     "Looking up \"{title}\"...": "Suche nach \"{title}\"...",
     "The website can't play this station itself. Checking whether the Fire Player can...": "Die Website kann diese Station nicht selbst spielen. Prüfen, ob der Fire Player es kann...",
-    "Pick Episodes": "Episoden auswählen"
+    "Pick Episodes": "Episoden auswählen",
+    "Clear Results": "Ergebnisse leeren",
+    "Then search here for that name, or paste this link with {name} changed to the same name:": "Suche dann hier nach diesem Namen, oder füge diesen Link ein, mit {name} durch denselben Namen ersetzt:",
+    "To share your PC's screen, open this page on the PC, with {name} changed to a name of your own (it can be anything):": "Um den Bildschirm deines PCs zu teilen, öffne diese Seite auf dem PC und ersetze {name} durch einen eigenen Namen (er kann beliebig sein):"
   },
   "fr": {
     "Save for Me": "Enregistrer pour moi",
@@ -321,7 +324,10 @@
     "{count} results hidden: they are for adults, and this world does not allow those.": "{count} 件の結果を非表示：大人向けで、このワールドでは許可されていません。",
     "{count} skipped": "{count} 件スキップ",
     "{count} video": "動画 {count} 本",
-    "{count} videos": "動画 {count} 本"
+    "{count} videos": "動画 {count} 本",
+    "Clear Results": "結果を消去",
+    "To share your PC's screen, open this page on the PC, with {name} changed to a name of your own (it can be anything):": "PC の画面を共有するには、PC でこのページを開き、{name} を自分の好きな名前に変えてください(何でもかまいません):",
+    "Then search here for that name, or paste this link with {name} changed to the same name:": "次に、ここでその名前を検索するか、{name} を同じ名前に変えたこのリンクを貼り付けてください:"
   },
   "es": {
     "Season {n}": "Temporada {n}",
@@ -422,7 +428,9 @@
     "With Shoutcast, internet-radio.com or Tubi picked, opens its site beside the panel. Play a station, or open a movie or series, and it offers to add it.": "Con Shoutcast, internet-radio.com o Tubi elegido, abre su sitio junto al panel. Reproduce una estación, o abre una película o serie, y ofrece añadirla.",
     "internet-radio.com is open beside the panel. Press Play on a station there, or open a station's page, to add it.": "internet-radio.com está abierto junto al panel. Pulsa Reproducir en una estación, o abre la página de una estación, para añadirla.",
     "Pick Episodes": "Elegir episodios",
-    "Pick Shoutcast, internet-radio.com or Tubi in the drop-down to browse its site.": "Elige Shoutcast, internet-radio.com o Tubi en el desplegable para navegar por su sitio."
+    "Pick Shoutcast, internet-radio.com or Tubi in the drop-down to browse its site.": "Elige Shoutcast, internet-radio.com o Tubi en el desplegable para navegar por su sitio.",
+    "Clear Results": "Borrar resultados",
+    "Then search here for that name, or paste this link with {name} changed to the same name:": "Después busca aquí ese nombre, o pega este enlace con {name} cambiado por el mismo nombre:"
   },
   "pt": {
     "Accent": "Cor de destaque",
@@ -797,6 +805,9 @@
     "{count} results hidden: they are for adults, and this world does not allow those.": "已隐藏 {count} 个结果：它们面向成人，而这个世界不允许此类内容。",
     "{count} skipped": "已跳过 {count} 个",
     "{count} video": "{count} 个视频",
-    "{count} videos": "{count} 个视频"
+    "{count} videos": "{count} 个视频",
+    "Clear Results": "清除结果",
+    "To share your PC's screen, open this page on the PC, with {name} changed to a name of your own (it can be anything):": "要共享电脑屏幕，请在电脑上打开此页面，并把 {name} 改成你自己的名字（随便什么都行）：",
+    "Then search here for that name, or paste this link with {name} changed to the same name:": "然后在这里搜索这个名字，或粘贴这个链接（把 {name} 改成同一个名字）："
   }
 }

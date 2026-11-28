@@ -80,6 +80,11 @@ var FireNativeScreen = (() => {
    * WARM_MIN_MS of the countdown left once it has loaded, it waits paused as before.
    */
   const WARM_REWIND_MS = 1500, WARM_MIN_MS = 2000;
+  /**
+   * Where it goes back to: just after the start, not 0:00 itself. Every start that went back to
+   * exactly 0:00 played its sound over a black (or frozen) picture; jumps to anywhere later didn't.
+   */
+  const WARM_START_S = 0.1;
 
   /**
    * Put on Bilibili's embed page (player.bilibili.com/player.html) when it's the screen's page (see
@@ -1011,8 +1016,8 @@ var FireNativeScreen = (() => {
         if (this.destroyed || !this.warming || !this.vp) return;
         this.rewoundAt = performance.now();
         this.rewoundFor = this.holdUntil;
-        console.log(`[NativeScreen] Back to the start, muted, ${((this.holdUntil - this.rewoundAt) / 1000).toFixed(2)}s before the countdown ends (Unity's time ${this.vp.time}).`);
-        this.seek(0);
+        console.log(`[NativeScreen] Back to ${WARM_START_S}s, muted, ${((this.holdUntil - this.rewoundAt) / 1000).toFixed(2)}s before the countdown ends (Unity's time ${this.vp.time}).`);
+        this.seek(WARM_START_S);
       }, Math.max(0, this.holdUntil - WARM_REWIND_MS - performance.now()));
     }
 

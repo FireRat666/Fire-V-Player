@@ -296,8 +296,31 @@ async function soundStation(link) {
   const m = MediaSources.detect(link);
   const u = MediaSources.parseUrl(link);
   if (!m || m.type !== 'file' || m.url || !u || u.protocol !== 'http:' || !AUDIO_FILE.test(u.pathname)) return null;
+  // Only a live stream: a recording stays a file, so it can be sought.
+  if (!(await isLive(u.href))) return null;
   u.hash = 'radio';
   try { return await resolveLink(u.href); } catch (e) { return null; }
+}
+
+/**
+ * Whether a sound file's address is a live stream: it answers as a station does (icy- headers),
+ * or with sound of no length that can't be read in parts. One that can't be asked counts as a file.
+ */
+async function isLive(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const res = await lists().fetchPublic(url, { signal: controller.signal, headers: { 'User-Agent': RELAY_UA, 'Accept': '*/*', 'Accept-Encoding': 'identity', 'Icy-MetaData': '0' } });
+    const h = res.headers;
+    const live = res.ok && ([...h.keys()].some(k => /^icy-/i.test(k))
+      || (!h.get('content-length') && !/bytes/i.test(h.get('accept-ranges') || '')));
+    return live;
+  } catch (e) {
+    return false;
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
 }
 
 async function sniff(link) {
@@ -429,7 +452,10 @@ async function streamFor(link) {
     if (m3u8) continue;
     if (https) return /^video\/mp2t$/i.test(https.type) ? { url: https.url, live: true, type: 'mpegts' } : { url: https.url, live: true, audio: true };
   }
-  if (refused) return /\.m3u8($|\?)/i.test(refused) ? { url: refused, live: true } : { url: refused, live: true, audio: true };
+  // An https address that refused this server, for the viewer's own device to try: after the
+  // relay, which is known to work when it's on and the station answers it.
+  const guess = () => (/\.m3u8($|\?)/i.test(refused) ? { url: refused, live: true } : { url: refused, live: true, audio: true });
+  if (refused && !relayOn()) return guess();
   if (!relayOn() && unsure) throw new Error("Couldn't reach that station over https just now. Try again in a moment.");
   if (!relayOn()) throw new Error("This station only streams over http, which can't play here (only https streams can). Try another station.");
   // The relay sends the stream as the station does: an MPEG-TS one is played by mpegts.js. The
@@ -441,6 +467,7 @@ async function streamFor(link) {
     const t = await relayType(s.streams[i]);
     if (t && t !== HLS && AUDIO_TYPE.test(t) && !PLAYLIST_TYPE.test(t)) { first = i; type = t; break; }
   }
+  if (first < 0 && refused) return guess();
   if (first < 0) throw new Error("This station's stream couldn't be reached as sound, so it can't play here. Try another station.");
   const ts = /^video\/mp2t$/i.test(type);
   const relayed = { url: `/api/radio?link=${encodeURIComponent(link)}&s=${first}&kind=${ts ? 'ts' : 'audio'}`, live: true };
@@ -537,15 +564,21 @@ async function relay(req, res, allowed) {
         continue;
       }
       const reader = upstream.body.getReader();
-      let first = null;
+      // Its first sound. Sent as binary, 512 bytes (or all of it, if shorter) are read first, as a
+      // playlist's start may come split over chunks; all of it is passed on.
+      const generic = /^application\/octet-stream/i.test(type);
+      const got = [];
+      let size = 0;
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
-        if (value && value.length) { first = value; break; }
+        if (value && value.length) { got.push(Buffer.from(value)); size += value.length; }
+        if (size && (!generic || size >= 512)) break;
       }
+      const first = size ? Buffer.concat(got) : null;
       if (!first) { lastError = 'The station sent no sound.'; continue; }
       // Sent as binary, but a playlist (an HLS one, say), not sound: not passed on.
-      if (/^application\/octet-stream/i.test(type) && PLAYLIST_START.test(Buffer.from(first).toString('latin1', 0, 512))) {
+      if (generic && PLAYLIST_START.test(first.toString('latin1', 0, 512))) {
         lastError = "The station's stream isn't sound.";
         try { await reader.cancel(); } catch (e) {}
         continue;
@@ -558,7 +591,7 @@ async function relay(req, res, allowed) {
       res.status(200).set({ 'Content-Type': sent, 'Cache-Control': 'no-store' });
       async function* sound() {
         try {
-          yield Buffer.from(first);
+          yield first;
           for (;;) {
             const { done, value } = await reader.read();
             if (done) return;

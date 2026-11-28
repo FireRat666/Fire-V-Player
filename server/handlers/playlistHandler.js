@@ -9,6 +9,7 @@ const Commands = require('../../public/commands.js');
 const { videoById } = require('../youtube/search.js');
 const media = require('../media.js');
 const lists = require('../lists.js');
+const radio = require('../radio.js');
 // The most videos a YouTube playlist import adds. The whole playlist goes to everyone on each
 // change, so this keeps that message a sensible size.
 const MAX_PLAYLIST_IMPORT = 500;
@@ -44,6 +45,13 @@ async function resolveVideoLink(app, ws, v) {
     const videoId = app.getYoutubeId(v);
     if (!videoId) {
       if (media.detect(v) && !media.allowedFor(ws, v)) throw new Error(media.UNTRUSTED_MESSAGE);
+      // A live stream at a sound file's address on plain http plays as a station (see
+      // radio.soundStation); anything else there (a recording) stays a file.
+      const live = await radio.soundStation(v.trim());
+      if (live) {
+        if (!media.allowedFor(ws, live.link)) throw new Error(media.UNTRUSTED_MESSAGE);
+        return live;
+      }
       const other = await media.resolveMediaLink(v); // Twitch, Vimeo, a file or stream
       if (other) return other;
       // A link that turns out to be a radio station (a radio .m3u, or a stream's own address).
@@ -255,6 +263,7 @@ async function suggestVideo(app, ws, v, isYoutubeWebsite, room = ws.i) {
     return false;
   };
   if (full()) return;
+  const gen = player.gen; // the playlist it was asked for (see addToPlaylist)
   let resolvedV;
   try {
     resolvedV = await resolveVideoData(app, ws, v);
@@ -263,7 +272,7 @@ async function suggestVideo(app, ws, v, isYoutubeWebsite, room = ws.i) {
     return;
   }
   // Moved to another room during the lookup, or the room's player was made again: not added.
-  if (ws.i !== room || app.videoPlayers[room] !== player) return;
+  if (ws.i !== room || app.videoPlayers[room] !== player || player.gen !== gen) return;
   if (app._isDuplicateVideo(player, resolvedV.link)) {
     app.send(ws, Commands.ERROR, { message: "This video is already in the playlist." });
     return;
@@ -280,6 +289,10 @@ async function suggestVideo(app, ws, v, isYoutubeWebsite, room = ws.i) {
     return;
   }
   if (!player.locked || (player.host && player.host.id === ws.u.id)) {
+    if (player.playlist.length >= MAX_PLAYLIST_IMPORT) {
+      app.send(ws, Commands.ERROR, { message: `The playlist is full (${MAX_PLAYLIST_IMPORT}).` });
+      return;
+    }
     appendVideo(app, room, app._createVideoObject(resolvedV, ws.u, 'scraper', isYoutubeWebsite));
     await app.savePlayerState(room);
     return;

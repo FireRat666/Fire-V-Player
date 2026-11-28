@@ -284,9 +284,14 @@
     var hit = captionCache[id];
     if (hit && Date.now() - hit.at < PLAYER_CACHE_MS) return hit.p;
     Object.keys(captionCache).forEach(function (k) { if (Date.now() - captionCache[k].at >= PLAYER_CACHE_MS) delete captionCache[k]; });
-    var p = captions(json);
-    captionCache[id] = { at: Date.now(), p: p };
-    return p;
+    // One that failed or timed out (null) isn't kept, so the next lookup asks again.
+    var entry = { at: Date.now() };
+    entry.p = captions(json).then(function (cues) {
+      if (cues === null && captionCache[id] === entry) delete captionCache[id];
+      return cues || [];
+    });
+    captionCache[id] = entry;
+    return entry.p;
   }
   function captions(json) {
     var list = (((json && json.captions) || {}).playerCaptionsTracklistRenderer || {}).captionTracks || [];
@@ -298,6 +303,7 @@
     var got = fetch(url + '&fmt=json3', { credentials: 'omit' })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (js) {
+        if (!js) return null;
         var cues = [], chars = 0;
         ((js && js.events) || []).forEach(function (e) {
           if (!e || !e.segs || cues.length >= MAX_CUES || chars > MAX_CUE_CHARS) return;
@@ -308,8 +314,9 @@
         });
         return cues;
       });
-    var late = new Promise(function (r) { setTimeout(function () { r([]); }, CAPTIONS_TIMEOUT_MS); });
-    return Promise.race([got, late]).catch(function () { return []; });
+    // null: they couldn't be had (they failed, or took too long), as opposed to none.
+    var late = new Promise(function (r) { setTimeout(function () { r(null); }, CAPTIONS_TIMEOUT_MS); });
+    return Promise.race([got, late]).catch(function () { return null; });
   }
 
   function fail(n, reason, extra) {

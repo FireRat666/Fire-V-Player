@@ -626,6 +626,11 @@ var Core = class {
     // world's player again; one it can't play (a Short, a live stream, a format) stays in the browser.
     const link = this.currentLink();
     if (this.browserFiles && ['not loaded in time', 'setup failed'].includes(this.browserFiles.get(link))) this.browserFiles.delete(link);
+    // A YouTube lookup page that never started gets another go (it's made again when wanted).
+    if (this.ytResolver && this.ytResolver.failed && !this.ytResolver.isReady) {
+      this.ytResolver.destroy();
+      this.ytResolver = null;
+    }
     if (this.nativeScreen) {
       this.nativeScreen.destroy();
       this.nativeScreen = null;

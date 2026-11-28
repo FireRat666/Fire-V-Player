@@ -1187,6 +1187,8 @@ class App {
       results([]);
       return;
     }
+    // A link is never cut short: one longer than a search can be isn't looked up.
+    if (/^(https?:\/\/|www\.)/i.test(raw) && raw.length > 500) { fail('That link is too long.'); return; }
     // Twitch, Vimeo, Internet Archive and direct video/stream links become results, as a YouTube
     // link does. An Archive link lists each video in its item.
     const detected = media.detect(term);
@@ -1229,8 +1231,6 @@ class App {
     // or empty results, rather than searching YouTube for the URL string.
     if (/^(https?:\/\/|www\.)/i.test(term)) {
       // A radio station's playlist or stream, found by what the link sends.
-      // A link is never cut short: one longer than a search can be isn't looked up.
-      if (raw.length > 500) { fail('That link is too long.'); return; }
       const station = /^https?:\/\//i.test(term) ? await media.sniffRadio(term) : null;
       if (station) {
         if (media.allowedFor(ws, station.link)) results([station]);

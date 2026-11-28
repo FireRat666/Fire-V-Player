@@ -379,11 +379,13 @@ async function streamFor(link) {
   // The relay sends the stream as the station does: an MPEG-TS one is played by mpegts.js. The
   // player is told the kind of the first stream that answers with sound, and the relay sends only
   // streams of that kind, starting with that one (see relay).
-  let first = 0, type = '';
+  // Only sound the relay passes on (not an HLS playlist): with none, it can't play.
+  let first = -1, type = '';
   for (let i = 0; i < Math.min(3, s.streams.length); i++) {
-    type = await relayType(s.streams[i]);
-    if (type) { first = i; break; }
+    const t = await relayType(s.streams[i]);
+    if (t && t !== HLS && AUDIO_TYPE.test(t) && !PLAYLIST_TYPE.test(t)) { first = i; type = t; break; }
   }
+  if (first < 0) throw new Error("This station's stream couldn't be reached as sound, so it can't play here. Try another station.");
   const ts = /^video\/mp2t$/i.test(type);
   const relayed = { url: `/api/radio?link=${encodeURIComponent(link)}&s=${first}&kind=${ts ? 'ts' : 'audio'}`, live: true };
   return ts ? { ...relayed, type: 'mpegts' } : { ...relayed, audio: true };

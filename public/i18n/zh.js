@@ -20,6 +20,7 @@ FVP_STRINGS["zh"] = {
   "Admin Take Over": "管理员接管",
   "Admin Take Over only works in a Creator SDK world.": "“管理员接管”只能在 Creator SDK 世界中使用。",
   "All": "全部",
+  "All of these are already in the playlist.": "所有这一切都在播放列表中.",
   "Amber": "琥珀色",
   "Anyone can add videos. Only the host can play, skip, move or remove them.": "任何人都可以添加视频。只有主持人可以播放、跳过、移动或删除视频。",
   "Anyone can join the queue, and the next singer can start their own song.": "任何人都可以加入排队，下一位歌手可以自己开始唱歌。",

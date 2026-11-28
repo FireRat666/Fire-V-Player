@@ -377,7 +377,7 @@ class VideoElementSource extends BaseMediaSource {
         m.on(mpegts.Events.ERROR, () => opts.onError("Couldn't play this stream. It may be offline, or the site may not allow it here."));
         m.attachMediaElement(el);
         m.load();
-      }).catch(err => opts.onError(err.message));
+      }).catch(err => { if (!this.destroyed) opts.onError(err.message); });
     } else if (media.type === 'dash') {
       loadMediaScript('dash').then(() => {
         if (this.destroyed) return;
@@ -396,7 +396,7 @@ class VideoElementSource extends BaseMediaSource {
             : "Couldn't play this stream. It may be offline, or the site may not allow it here.");
         });
         d.initialize(el, url, true);
-      }).catch(err => opts.onError(err.message));
+      }).catch(err => { if (!this.destroyed) opts.onError(err.message); });
     } else if (!hls) {
       el.src = url;
     } else {
@@ -1554,7 +1554,8 @@ class MediaSwitch {
       captions: this.captions,
       title: String((item && item.title) || ''), thumbnail: String((item && item.thumbnail) || ''),
       onDuration: seconds => this.opts.onDuration(link, seconds),
-      onError: (message, notice) => this.opts.onError(message, notice),
+      // Only while it's still the source: one replaced or stopped since says nothing (see stopSource).
+      onError: (message, notice) => { if (!opts.stale) this.opts.onError(message, notice); },
       requestClick: () => { if (this.opts.requestClick) this.opts.requestClick(); },
       deviceStream: this.opts.deviceStream,
       allowMature: this.opts.allowMature
@@ -1577,7 +1578,8 @@ class MediaSwitch {
 
   /** Destroys the active non-YouTube player source instance. */
   stopSource() {
-    if (this.source) { this.source.destroy(); this.source = null; }
+    // Its opts are marked stale, so anything it says from now on (a late error) is dropped.
+    if (this.source) { if (this.source.opts) this.source.opts.stale = true; this.source.destroy(); this.source = null; }
   }
 
   /** Toggles visibility between YouTube iframe and alternative media container. */

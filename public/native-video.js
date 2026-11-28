@@ -1107,6 +1107,7 @@ var FireNativeScreen = (() => {
     /** Re-synchronizes after track changes or host seek events. */
     resync() {
       if (this.isPreview()) return;
+      this.localOffset = null; // a track change or host seek moves everyone, the skipper too
       this.autoSync = this.core.autoSync === true;
       if (this.core.player) this.wantPaused = !!this.core.player.paused;
       this.hostSyncPending = true;
@@ -1131,7 +1132,7 @@ var FireNativeScreen = (() => {
       this.resumeSyncPending = false;
       this.hostSyncPending = false;
       const latency = Math.max(0, Date.now() - Number(data.clientTimestamp || Date.now())) / 2000;
-      const serverTime = Number(data.currentTime) + (this.wantPaused ? 0 : latency);
+      let serverTime = Number(data.currentTime) + (this.wantPaused ? 0 : latency);
       if (!Number.isFinite(serverTime)) return;
       // A karaoke song counting down to its start: it waits at 0:00, paused, until then.
       if (serverTime < 0) {
@@ -1140,6 +1141,10 @@ var FireNativeScreen = (() => {
       }
       // Held, but the world has started: play, and go to where it is.
       if (this.clearHold()) { hard = true; this.applyPaused(); }
+      // Made again for a new quality after the viewer had skipped away from the room: it keeps to
+      // where they were, relative to the room (see core.js rebuildNativeScreen), until a track
+      // change, host seek or resume moves everyone.
+      if (Number.isFinite(this.localOffset)) serverTime += this.localOffset;
       const d = this.duration();
       if (d && serverTime >= d - 0.5) return; // about to end; the server moves on
       // Ended with no known length: the server keeps counting until someone skips, so only a
@@ -1216,6 +1221,9 @@ var FireNativeScreen = (() => {
             this.resumeSyncPending = false;
             this.pendingSync = this.hostSyncPending ? { hard: true } : null;
           }
+          // A skip during the countdown's warming stands: it isn't taken back to the start before
+          // the end (it stays muted until then, as the countdown's warming does).
+          if (this.warming) { clearTimeout(this.rewindTimer); this.rewoundFor = this.holdUntil; }
           const amount = this.core.isKaraoke ? SKIP_KARAOKE_S : SKIP_S;
           this.seek(this.localTime() + (msg.path === Commands.SKIP_FORWARD ? amount : -amount));
           break;
@@ -1224,6 +1232,7 @@ var FireNativeScreen = (() => {
           if (this.isPreview()) break;
           const data = msg.data || {};
           this.wantPaused = !!data.paused;
+          this.localOffset = null; // a resume goes to the host's point, the skipper too
           this.clearHold(); // the sync after a resume starts it again if the song is still counting down
           const at = Number(data.currentTime);
           // Resumed during a karaoke countdown: wait out what's left of it at 0:00, as onSync does.
@@ -1252,7 +1261,7 @@ var FireNativeScreen = (() => {
           // The viewer's own Auto Sync button: on pulls them back into step straight away.
           this.autoSync = msg.data === true || msg.data === 'true';
           this.core.autoSync = this.autoSync;
-          if (this.autoSync) this.requestSync(false);
+          if (this.autoSync) { this.localOffset = null; this.requestSync(false); } // back in step with the room
           break;
       }
     }

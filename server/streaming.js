@@ -216,7 +216,8 @@ function tubiEpisode(id) {
  * and number ("S01:E03 - Name").
  */
 async function tubiSeries(id, season, limit) {
-  const key = `tubi:series:${id}:${season || 'all'}${limit ? `:${limit}` : ''}`;
+  // Season 0 (specials) is a season, not "every season".
+  const key = `tubi:series:${id}:${season != null && season !== '' ? season : 'all'}${limit ? `:${limit}` : ''}`;
   const list = await cache.remember(key, PAGE_TTL_MS, () => readTubiSeries(id, season, limit));
   // Missing some episodes' details: asked for again soon (the ones read are kept on their own).
   if (list.partial && !list.shortened) { list.shortened = true; cache.set(key, list, PARTIAL_TTL_MS); }
@@ -240,9 +241,10 @@ async function readTubiSeries(id, season, limit) {
       .filter(ep => /^\d{1,12}$/.test(ep.id))
   })).sort((a, b) => a.n - b.n);
   let seasons = listed;
+  const one = season != null && season !== ''; // one season asked for (0 is the specials)
   if (season === 'first') seasons = listed.slice(0, 1);
-  else if (season) seasons = listed.filter(s => s.n === Number(season));
-  if (season && !seasons.length) throw new Error(`That Tubi series has no season ${season} here.`);
+  else if (one) seasons = listed.filter(s => s.n === Number(season));
+  if (one && !seasons.length) throw new Error(`That Tubi series has no season ${season} here.`);
   const wanted = [];
   for (const s of seasons) {
     for (const ep of s.eps.slice().sort((a, b) => a.num - b.num)) {
@@ -296,7 +298,7 @@ async function readTubiSeries(id, season, limit) {
   }
   if (partial) console.warn(`[TUBI] series/${id}: some episodes are listed without their details.`);
   const title = clean(series.title, 120) || 'Tubi series';
-  return { title: season && season !== 'first' ? clean(`${title}, Season ${season}`, 120) : title, items, partial, mature: seriesMature };
+  return { title: one && season !== 'first' ? clean(`${title}, Season ${season}`, 120) : title, items, partial, mature: seriesMature };
 }
 
 /** The titles in a Tubi category (up to 50, as its page shows). Only these are cached, not the page. */
@@ -470,7 +472,7 @@ async function resolveLink(link) {
   if (media.type === 'tubi') {
     if (media.kind === 'series') {
       // Only the first episode is read, not the rest of its season.
-      const { items } = await tubiSeries(media.id, media.season || 'first', 1);
+      const { items } = await tubiSeries(media.id, media.season != null ? media.season : 'first', 1);
       if (!items.length) throw new Error('That Tubi series has no episodes here.');
       return strip(items[0]);
     }

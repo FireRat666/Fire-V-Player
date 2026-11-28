@@ -20,6 +20,7 @@ FVP_STRINGS["pt"] = {
   "Admin Take Over": "Assumir (admin)",
   "Admin Take Over only works in a Creator SDK world.": "Assumir (admin) só funciona em um mundo com o Creator SDK.",
   "All": "Tudo",
+  "All of these are already in the playlist.": "Todos estes já estão na lista de reprodução.",
   "Amber": "Âmbar",
   "Anyone can add videos. Only the host can play, skip, move or remove them.": "Qualquer um pode adicionar vídeos. Só o anfitrião pode reproduzir, pular, mover ou removê-los.",
   "Anyone can join the queue, and the next singer can start their own song.": "Qualquer um pode entrar na fila, e o próximo cantor pode começar sua própria música.",

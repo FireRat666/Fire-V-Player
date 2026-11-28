@@ -2665,13 +2665,17 @@ var FirePlaylistPanel = class {
     try {
       await browser.open(site);
     } catch (e) {
-      if (this.siteBrowser === browser) this.siteBrowser = null;
-      // The failed attempt's window goes too.
+      // The failed attempt's window goes, and only while it's still the open one does it say so:
+      // a Close, or a newer Browse, since then has its own say.
+      const ours = this.siteBrowser === browser;
+      if (ours) this.siteBrowser = null;
       try { browser.destroy(); } catch (err) {}
+      if (!ours) return;
       this.setStatus("Couldn't open the browser.");
       this.render();
       return;
     }
+    if (this.siteBrowser !== browser || this.destroyed) return;
     this.setStatus(site === 'tubi' ? 'Tubi is open beside the panel. Open a movie or a series there to add it.'
       : site === 'internetradio' ? "internet-radio.com is open beside the panel. Press Play on a station there, or open a station's page, to add it."
         : 'Shoutcast is open beside the panel. Press Play on a station there to add it.', 8000);
@@ -2906,7 +2910,10 @@ var FirePlaylistPanel = class {
     // A search made recently on this device shows its kept results straight away. Links are
     // always looked up again (a stream may have gone live or offline).
     // A screen share room is looked up each time too, as it's a link made from the code.
-    const isLink = /^(https?|rtspt?):\/\//i.test(q) || !!this.core.getId(q) || this.searchSource === 'screen';
+    // A bare 11-character word is a YouTube id only when searching YouTube: on Tubi and the rest
+    // it's a search (a pasted YouTube link still goes to the server, whatever the source).
+    const bareId = !/[\/.]/.test(q);
+    const isLink = /^(https?|rtspt?):\/\//i.test(q) || (!!this.core.getId(q) && (!bareId || this.searchSource === 'youtube')) || this.searchSource === 'screen';
     const key = this.searchKey(q, this.searchSource);
     const hit = !isLink && this.cachedSearch(key);
     const kept = hit && this.keptResults(hit);
@@ -3309,6 +3316,7 @@ var FirePlaylistPanel = class {
     if (data && data.device && data.state === 'ready') {
       const inPlaylist = new Set(((this.core.player && this.core.player.playlist) || []).map(v => v.link));
       const items = data.items.filter(v => !inPlaylist.has(v.link)).slice(0, 300);
+      if (!items.length) { this.setStatus('All of these are already in the playlist.', 4000); return; }
       // Only what was sent is counted; the list stays here, so + All can be pressed again.
       const sent = items.filter(v => this.send(Commands.ADD_TO_PLAYLIST, v)).length;
       if (sent < items.length) { this.setStatus('Not connected to the server. Reconnecting...', 4000); return; }
@@ -3723,7 +3731,7 @@ var FirePlaylistPanel = class {
     });
     this.display(this.recentLabel, recent.length > 0);
     this.display(this.clearRecentBtn, recent.length > 0);
-    this.display(this.clearResultsBtn, onSearch && (this.searchResults.length > 0 || !!this.searchTimer));
+    this.display(this.clearResultsBtn, onSearch && (this.searchResults.length > 0 || this.searchHidden > 0 || !!this.searchTimer));
 
     const items = onLists ? this.listEntries() : onSearch ? this.searchResults : list;
     const size = this.pageSize();

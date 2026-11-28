@@ -20,6 +20,7 @@ FVP_STRINGS["ja"] = {
   "Admin Take Over": "管理者として引き継ぐ",
   "Admin Take Over only works in a Creator SDK world.": "「管理者として引き継ぐ」は Creator SDK のワールドでのみ使えます。",
   "All": "すべて",
+  "All of these are already in the playlist.": "これらはすべてプレイリストにあります.",
   "Amber": "アンバー",
   "Anyone can add videos. Only the host can play, skip, move or remove them.": "誰でも動画を追加できます。再生、スキップ、移動、削除はホストだけができます。",
   "Anyone can join the queue, and the next singer can start their own song.": "誰でも順番待ちに参加でき、次の歌い手が自分の曲を始められます。",

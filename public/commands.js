@@ -50,7 +50,7 @@ var Commands = {
   CAPTIONS: 'captions', // in-world script -> its own player page: show or hide closed captions
   PREVIEW_VIDEO: 'preview-video', // in-world script -> its own player page: play a preview video (or null to go back to the room's track)
   TUBI_STREAM: 'tubi-stream', // player page -> its in-world script: { n, link }, look a Tubi stream up from this device (tubi-native.js)
-  TUBI_STREAM_RESULT: 'tubi-stream-result', // in-world script -> its player page: { n, ok, url, reason }
+  TUBI_STREAM_RESULT: 'tubi-stream-result', // in-world script -> its player page: { n, ok: true, url, mature } or { n, ok: false, reason }
   AUTO_SYNC: 'auto-sync',
   SKIP_BACK: 'skip-back',
   SKIP_FORWARD: 'skip-forward',

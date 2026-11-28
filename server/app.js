@@ -568,7 +568,11 @@ class App {
           break;
         }
         const kind = MediaSources.detect(link);
-        if (!kind || kind.type !== 'radio') break;
+        // Every check gets an answer, so the panel's offer doesn't wait on one that never comes.
+        if (!kind || kind.type !== 'radio') {
+          this.send(ws, Commands.RADIO_CHECK_RESULT, { link, ok: false, error: "That isn't a radio station's link." });
+          break;
+        }
         radio.streamFor(link).then(
           () => this.send(ws, Commands.RADIO_CHECK_RESULT, { link, ok: true }),
           e => this.send(ws, Commands.RADIO_CHECK_RESULT, { link, ok: false, error: String(e && e.message || "Couldn't reach that radio station.") }));

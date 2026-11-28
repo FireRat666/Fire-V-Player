@@ -70,6 +70,8 @@ function checkTrack(t, video) {
   if (t.refs.length * (Buffer.byteLength(safeUri(t.u)) + LINES_PER_REF) > MAX_PLAYLIST) return null;
   if (!t.refs.every(r => Array.isArray(r) && r.length === 2 && isCount(r[0]) && r[0] > 0 && isCount(r[1]) && r[1] > 0)) return null;
   if (video && !(isCount(t.w) && t.w > 0 && isCount(t.h) && t.h > 0)) return null;
+  // The last fragment's end, as each fragment's offset is the sum of those before it.
+  if (!isCount(t.refs.reduce((end, r) => end + r[0], t.first))) return null;
   return t;
 }
 

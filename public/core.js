@@ -488,11 +488,21 @@ var Core = class {
     return true;
   }
   // The world's video player made again for the same link (a new quality), where the world is.
+  // A viewer who skipped away from the room (Auto Sync off) keeps that offset: the new one goes to
+  // the room's time plus it, not to the room's time.
   rebuildNativeScreen() {
     if (!this.nativeScreen || !this.screenReady) return;
-    const link = this.nativeScreen.link;
-    this.nativeScreen.destroy();
+    const old = this.nativeScreen;
+    const link = old.link;
+    const p = this.player;
+    let offset = null;
+    if (old.autoSync === false && old.prepared && p && !p.paused && Number.isFinite(Number(p.lastStartTime))) {
+      offset = old.localTime() - (Date.now() / 1000 - Number(p.lastStartTime));
+      if (!Number.isFinite(offset)) offset = null;
+    }
+    old.destroy();
     this.nativeScreen = new FireNativeScreen(this, link);
+    if (offset != null) this.nativeScreen.localOffset = offset;
     this.audioBusyUntil = Date.now() + 20000;
     this.syncSecondScreens();
   }

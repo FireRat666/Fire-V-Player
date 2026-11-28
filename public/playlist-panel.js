@@ -77,6 +77,10 @@ var SEARCH_SOURCES = {
   // shares can't play without it (see searchSources).
   screen: { label: 'Screen Share', status: 'Searching screen.sdq.st: type a room code, or paste its link.' }
 };
+// How to share a screen with screen.sdq.st, shown on Search while Screen Share is picked and there
+// are no results: the page to open on the PC, and the link a room's name gives.
+var SCREEN_SHARE_PUBLISH = 'https://screen.sdq.st:8443/publish.html?room=YOURNAME&fps=30&width=1920&height=1080';
+var SCREEN_SHARE_WATCH = 'https://screen.sdq.st:8443/?room=YOURNAME';
 // The server works on 3 list previews at a time per connection and refuses more, so the rest wait.
 /** Where Browse's window can go round the panel, in the order Move Browser takes them. */
 var BROWSE_PLACES = ['right', 'left', 'front'];
@@ -879,6 +883,23 @@ var FirePlaylistPanel = class {
     try { localStorage.setItem(this.recentKey, JSON.stringify(this.recentSearches)); } catch (e) {}
   }
 
+  // Search's results go, and a search still waiting is dropped: Search shows what it does before a
+  // search. They stay kept on this device (searching the same again is quick), but opening the
+  // panel again doesn't bring them back.
+  clearResults() {
+    clearInterval(this.searchTimer);
+    this.searchTimer = null;
+    this.searchId++; // a search still waiting doesn't bring results back when it's answered
+    this.pendingSearchKey = null;
+    this.searchResults = [];
+    this.searchHidden = 0;
+    this.searchPage = 0;
+    try { localStorage.setItem(`${this.searchCacheKey}:cleared`, String(Date.now())); } catch (e) {}
+    this.resetScroll();
+    this.setStatus('');
+    this.render();
+  }
+
   clearRecent() {
     this.recentSearches = [];
     try { localStorage.removeItem(this.recentKey); } catch (e) {}
@@ -937,6 +958,10 @@ var FirePlaylistPanel = class {
     const newest = Object.keys(all).filter(k => k.split(':')[1] === tag).sort((a, b) => (all[b].at || 0) - (all[a].at || 0))[0];
     const hit = newest && this.cachedSearch(newest);
     if (!hit) return;
+    // Not results cleared since (see clearResults).
+    let cleared = 0;
+    try { cleared = Number(localStorage.getItem(`${this.searchCacheKey}:cleared`)) || 0; } catch (e) {}
+    if ((all[newest].at || 0) <= cleared) return;
     const kept = this.keptResults(hit);
     this.searchResults = kept.results;
     this.searchHidden = kept.hidden;
@@ -1467,6 +1492,8 @@ var FirePlaylistPanel = class {
       this.recentBtns.push(chip);
     }
     this.clearRecentBtn = this.kitChip(this.searchToolsRow, 'Clear', () => this.clearRecent(), 'danger', 'close');
+    // Takes the results away, back to the page as it was before a search (for this viewer only).
+    this.clearResultsBtn = this.kitChip(this.searchToolsRow, 'Clear Results', () => this.clearResults(), 'danger', 'close');
 
     // List rows: a fixed pool in the kit's scroll view (with its thin scrollbar), re-filled as the
     // list or its window changes.
@@ -3692,6 +3719,7 @@ var FirePlaylistPanel = class {
     });
     this.display(this.recentLabel, recent.length > 0);
     this.display(this.clearRecentBtn, recent.length > 0);
+    this.display(this.clearResultsBtn, onSearch && (this.searchResults.length > 0 || !!this.searchTimer));
 
     const items = onLists ? this.listEntries() : onSearch ? this.searchResults : list;
     const size = this.pageSize();
@@ -3731,16 +3759,25 @@ var FirePlaylistPanel = class {
     }
 
     let empty = '';
-    if (!items.length) {
+    let literal = false;
+    if (!items.length && onSearch && !this.karaoke && this.searchSource === 'screen') {
+      // What a screen share's name is, and how to start one (see SCREEN_SHARE_PUBLISH).
+      const name = { name: 'YOURNAME' };
+      empty = [this.tr("To share your PC's screen, open this page on the PC, with {name} changed to a name of your own (it can be anything):", name),
+        SCREEN_SHARE_PUBLISH,
+        this.tr('Then search here for that name, or paste this link with {name} changed to the same name:', name),
+        SCREEN_SHARE_WATCH].join('\n\n');
+      literal = true;
+    } else if (!items.length) {
       if (onLists) empty = "No saved lists. Paste a YouTube playlist or a list of links into + Search & Add (or More > + Add by link) and choose ★ Save for Everyone or ☆ Save for Me.";
       else if (onSearch) empty = this.karaoke ? 'Search for a song above, or paste a link.' : 'Search YouTube above, or paste a YouTube, Twitch, Vimeo or video link.';
       else if (this.karaoke) empty = host ? 'No singers yet. Use Search to pick a song and join the queue.' : 'No singers yet. Use Search to pick a song and join the queue. Whoever runs the karaoke should take over the player first (press ♛ at the top).';
       else empty = 'The playlist is empty. Use Search to add videos.';
     }
-    this.setText(this.emptyLabel, empty);
+    this.setText(this.emptyLabel, empty, literal);
     this.display(this.emptyLabel, !!empty);
     if (empty) {
-      const icon = onLists ? 'bookmark' : onSearch ? 'search' : this.karaoke ? 'mic' : 'videocam';
+      const icon = onLists ? 'bookmark' : literal ? 'videocam' : onSearch ? 'search' : this.karaoke ? 'mic' : 'videocam';
       if (this._changed(this.emptyLabel, 'icon', icon)) this.emptyLabel.icon = icon;
     }
     this.display(this.madeWithRow, onSearch && !items.length);

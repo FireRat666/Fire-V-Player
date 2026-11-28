@@ -288,7 +288,13 @@ var FireNativeScreen = (() => {
       this.holdFromCore();
       this.ready = this.create().catch(e => {
         console.error('[NativeScreen] Could not set up the video player.', e);
-        this.core.showToast("Couldn't start the world's video player.", 6000);
+        if (this.destroyed) return;
+        // The loading words go, and the browser plays it instead (its own toast says so).
+        this.overlayDone = true;
+        clearInterval(this.overlayTimer);
+        this.showOverlay(false);
+        if (typeof this.core.playFileInBrowser === 'function') this.core.playFileInBrowser(this.link, 'setup failed');
+        else this.core.showToast("Couldn't start the world's video player.", 6000);
       });
     }
 

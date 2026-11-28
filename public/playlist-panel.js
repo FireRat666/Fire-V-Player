@@ -2806,6 +2806,9 @@ var FirePlaylistPanel = class {
     if (!now && !this.canAdd() && !this.addWaits()) { this.setStatus('The player is locked: only the host can add videos.'); return; }
     if (!this.core.connected()) { this.setStatus('Not connected to the server. Reconnecting...', 4000); return; }
     let what = o.link;
+    // The window this offer came from: a lookup below may outlast it (closed, or Browse opened again).
+    const browser = this.siteBrowser;
+    const ours = () => !!browser && this.siteBrowser === browser && (!this.browseOffer || this.browseOffer === o);
     if (o.kind === 'video' && window.isBanter && typeof this.core.tubiResolver === 'function') {
       this.setBrowseOffer(null);
       this.setStatus(this.tr('Looking up "{title}"...', { title: o.title }), 0);
@@ -2818,12 +2821,13 @@ var FirePlaylistPanel = class {
     }
     if (!this.send(now ? Commands.ADD_AND_PLAY : Commands.ADD_TO_PLAYLIST, what)) {
       // Not sent (the connection dropped): the offer stays, to press again once it's back.
-      if (!this.browseOffer && this.siteBrowser) this.setBrowseOffer(o);
+      if (!this.browseOffer && ours()) this.setBrowseOffer(o);
       this.setStatus('Not connected to the server. Reconnecting...', 4000);
       return;
     }
-    // Sent, so done with the site: it closes (Browse opens it again for more).
-    this.closeBrowse();
+    // Sent, so done with the site: it closes (Browse opens it again for more), unless it's
+    // another window now, or the same one with a newer offer.
+    if (ours()) this.closeBrowse();
     if (now) this.setStatus(this.tr('Playing "{title}"', { title: o.title }));
     else this.setStatus(this.addWaits() ? this.tr('Asking the host to add "{title}"...', { title: o.title }) : this.tr('Adding "{title}"...', { title: o.title }));
   }

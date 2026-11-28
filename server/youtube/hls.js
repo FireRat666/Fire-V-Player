@@ -64,7 +64,7 @@ function checkTrack(t, video) {
   if (!isRange(t.init) || !isRange(t.idx) || !isCount(t.first) || !isCount(t.bw)) return null;
   if (typeof t.codecs !== 'string' || !/^[A-Za-z0-9.]{1,40}$/.test(t.codecs)) return null;
   if (!Array.isArray(t.refs) || !t.refs.length || t.refs.length > MAX_REFS) return null;
-  if (t.refs.length * (t.u.length + LINES_PER_REF) > MAX_PLAYLIST) return null;
+  if (t.refs.length * (safeUri(t.u).length + LINES_PER_REF) > MAX_PLAYLIST) return null;
   if (!t.refs.every(r => Array.isArray(r) && r.length === 2 && isCount(r[0]) && r[0] > 0 && isCount(r[1]) && r[1] > 0)) return null;
   if (video && !(isCount(t.w) && t.w > 0 && isCount(t.h) && t.h > 0)) return null;
   return t;

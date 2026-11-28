@@ -557,7 +557,12 @@ class App {
         break;
       case Commands.RADIO_CHECK: {
         // Whether a station Browse found can play here: what /api/stream would give (kept a while).
-        const link = String(msg.data && msg.data.link || '').slice(0, 1000);
+        // The reply names the link exactly as it came, which the panel matches its offer by.
+        const link = String(msg.data && msg.data.link || '');
+        if (link.length > 1000) {
+          this.send(ws, Commands.RADIO_CHECK_RESULT, { link, ok: false, error: "That station's link is too long." });
+          break;
+        }
         const kind = MediaSources.detect(link);
         if (!kind || kind.type !== 'radio') break;
         radio.streamFor(link).then(

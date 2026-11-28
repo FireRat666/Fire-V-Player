@@ -123,7 +123,7 @@ FVP_STRINGS["fr"] = {
   "Pause and play, for everyone (host)": "Pause et jouer, pour tout le monde (hôte)",
   "Phone": "Téléphone",
   "Pick Episodes": "Choisir des épisodes",
-  "Pick Shoutcast, internet-radio.com or Tubi in the drop-down to browse its site.": "Pick Shoutcast, internet-radio.com ou Tubi dans la liste déroulante pour parcourir son site.",
+  "Pick Shoutcast, internet-radio.com or Tubi in the drop-down to browse its site.": "Choisissez Shoutcast, internet-radio.com ou Tubi dans la liste déroulante pour parcourir son site.",
   "Play Now": "Jouez maintenant",
   "Playing \"{title}\"": "Jouer \"{title}\"",
   "Playlist": "Playlist",

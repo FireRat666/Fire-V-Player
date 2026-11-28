@@ -124,10 +124,11 @@ function isMatureMeta(meta) {
   if (!collections.some(c => COLLECTIONS.includes(c))) return true;
   if (collections.some(c => ADULT_MARKS.has(c.toLowerCase()))) return true;
   const list = value => [].concat(value || []).map(String);
-  const subjects = list(meta.subject).flatMap(s => s.split(/[;,]/));
+  // Entities decoded first (as the description's are below), so "stag&nbsp;film" reads as "stag film".
+  const subjects = list(meta.subject).map(decodeEntities).flatMap(s => s.split(/[;,]/));
   if (subjects.some(s => ADULT_SUBJECTS.test(s))) return true;
   // Runs of spaces count as one, so "stag  film" reads as "stag film".
-  const named = list(meta.title).concat(subjects).join(' ').replace(/\s+/g, ' ');
+  const named = list(meta.title).map(decodeEntities).concat(subjects).join(' ').replace(/\s+/g, ' ');
   if (ADULT_TITLE_WORDS.test(named)) return true;
   // Its HTML's entities decoded (&nbsp; between "stag" and "film" included), so its words match.
   const description = decodeEntities(list(meta.description).join(' ').replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ');

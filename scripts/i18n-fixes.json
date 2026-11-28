@@ -15,7 +15,9 @@
     "Search YouTube, Internet Archive, Tubi, NASA+ or ESO: pick the source from the drop-down beside the box. Or paste a link.": "Suche auf YouTube, Internet Archive, Tubi, NASA+ oder ESO: Wähle die Quelle im Dropdown neben dem Feld. Oder füge einen Link ein.",
     "Search YouTube, Internet Archive, Tubi, NASA+, ESO or a screen share by its room code: pick the source from the drop-down beside the box. Or paste a link.": "Suche auf YouTube, Internet Archive, Tubi, NASA+, ESO oder nach einer Bildschirmfreigabe über ihren Raumcode: Wähle die Quelle im Dropdown neben dem Feld. Oder füge einen Link ein.",
     "Close Browser": "Browser schließen",
-    "Looking up \"{title}\"...": "Suche nach \"{title}\"..."
+    "Looking up \"{title}\"...": "Suche nach \"{title}\"...",
+    "The website can't play this station itself. Checking whether the Fire Player can...": "Die Website kann diese Station nicht selbst spielen. Prüfen, ob der Fire Player es kann...",
+    "Pick Episodes": "Episoden auswählen"
   },
   "fr": {
     "Save for Me": "Enregistrer pour moi",
@@ -25,7 +27,8 @@
     "shared": "partagée",
     "Go back from live (everyone):": "Reculer par rapport au direct (tout le monde) :",
     "Search YouTube, Internet Archive, Tubi, NASA+ or ESO: pick the source from the drop-down beside the box. Or paste a link.": "Recherchez sur YouTube, Internet Archive, Tubi, NASA+ ou ESO : choisissez la source dans le menu déroulant à côté du champ. Ou collez un lien.",
-    "Search YouTube, Internet Archive, Tubi, NASA+, ESO or a screen share by its room code: pick the source from the drop-down beside the box. Or paste a link.": "Recherchez sur YouTube, Internet Archive, Tubi, NASA+, ESO ou un partage d’écran par son code de salle : choisissez la source dans le menu déroulant à côté du champ. Ou collez un lien."
+    "Search YouTube, Internet Archive, Tubi, NASA+, ESO or a screen share by its room code: pick the source from the drop-down beside the box. Or paste a link.": "Recherchez sur YouTube, Internet Archive, Tubi, NASA+, ESO ou un partage d’écran par son code de salle : choisissez la source dans le menu déroulant à côté du champ. Ou collez un lien.",
+    "Pick Shoutcast, internet-radio.com or Tubi in the drop-down to browse its site.": "Choisissez Shoutcast, internet-radio.com ou Tubi dans la liste déroulante pour parcourir son site."
   },
   "ja": {
     "\"{title}\" can't play here.": "「{title}」はここでは再生できません。",
@@ -417,7 +420,9 @@
     "The website can't play this station itself, but the Fire Player can: add it with the bar above.": "El sitio web no puede reproducir esta estación, pero el Fire Player sí: añádela con la barra de arriba.",
     "The website can't play this station itself. Checking whether the Fire Player can...": "El sitio web no puede reproducir esta estación. Comprobando si el Fire Player puede...",
     "With Shoutcast, internet-radio.com or Tubi picked, opens its site beside the panel. Play a station, or open a movie or series, and it offers to add it.": "Con Shoutcast, internet-radio.com o Tubi elegido, abre su sitio junto al panel. Reproduce una estación, o abre una película o serie, y ofrece añadirla.",
-    "internet-radio.com is open beside the panel. Press Play on a station there, or open a station's page, to add it.": "internet-radio.com está abierto junto al panel. Pulsa Reproducir en una estación, o abre la página de una estación, para añadirla."
+    "internet-radio.com is open beside the panel. Press Play on a station there, or open a station's page, to add it.": "internet-radio.com está abierto junto al panel. Pulsa Reproducir en una estación, o abre la página de una estación, para añadirla.",
+    "Pick Episodes": "Elegir episodios",
+    "Pick Shoutcast, internet-radio.com or Tubi in the drop-down to browse its site.": "Elige Shoutcast, internet-radio.com o Tubi en el desplegable para navegar por su sitio."
   },
   "pt": {
     "Accent": "Cor de destaque",

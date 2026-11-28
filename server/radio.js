@@ -297,7 +297,8 @@ async function answersWithSound(url) {
     // The https probe must stay on https: one redirected to http couldn't play there either.
     const res = await lists().fetchPublic(url, { signal: controller.signal, httpsOnly: /^https:/i.test(url), headers: { 'User-Agent': UA, 'Accept': '*/*', 'Accept-Encoding': 'identity' } });
     const type = String(res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-    if (res.ok && HLS_TYPE.test(type)) {
+    // An .m3u8 address is read as one whatever its type (some servers send text/plain).
+    if (res.ok && (HLS_TYPE.test(type) || /\.m3u8($|\?)/i.test(url))) {
       // An HLS playlist has #EXT-X- tags; a radio .m3u (the same types) doesn't.
       let head = '';
       try {
@@ -363,9 +364,13 @@ async function streamFor(link) {
     // A station that streams HLS (some on Radio Browser) plays as an HLS stream, over https only:
     // one on http plays from its https address when it has one there, and not at all otherwise
     // (the relay passes on sound, not a playlist and its pieces).
+    // An https one is checked first: it has to answer there, and not by sending the player to http.
     const m3u8 = /\.m3u8($|\?)/i.test(url);
-    if (m3u8 && /^https:/i.test(url)) return { url, live: true };
     const https = await httpsVersion(url);
+    if (m3u8 && /^https:/i.test(url)) {
+      if (https) return { url: https.url, live: true };
+      continue;
+    }
     if (https && https.type === HLS) return { url: https.url, live: true };
     if (m3u8) continue;
     if (https) return /^video\/mp2t$/i.test(https.type) ? { url: https.url, live: true, type: 'mpegts' } : { url: https.url, live: true, audio: true };

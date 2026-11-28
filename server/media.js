@@ -280,8 +280,13 @@ function sniffRadio(link) {
   return radio.sniff(String(link || '').trim());
 }
 
+/** Whether a link is one whose rating is checked (Tubi, or the Internet Archive). */
+function needsRating(link) {
+  return MediaSources.needsRating(MediaSources.detect(String(link || '')));
+}
+
 module.exports = {
   resolveMediaLink, resolveMediaLinks, sniffRadio, detect: MediaSources.detect, allowedFor,
-  isMature, allowsMature, screenMature, filterMature,
+  isMature, allowsMature, screenMature, filterMature, needsRating,
   UNTRUSTED_MESSAGE: MediaSources.UNTRUSTED_MESSAGE, MATURE_MESSAGE: MediaSources.MATURE_MESSAGE
 };

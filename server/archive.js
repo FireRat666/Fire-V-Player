@@ -130,7 +130,7 @@ function isMatureMeta(meta) {
   if (ADULT_TITLE_WORDS.test(named)) return true;
   // Its HTML's entities decoded (&nbsp; between "stag" and "film" included), so its words match.
   const description = decodeEntities(list(meta.description).join(' ').replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ');
-  const all = `${named} ${description.slice(0, 5000)}`;
+  const all = `${named} ${description}`;
   return ADULT_WORDS.test(all);
 }
 

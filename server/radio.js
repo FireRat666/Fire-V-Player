@@ -137,22 +137,37 @@ function looksLikeRadio(text, type) {
  * What an address gives: a playlist file's streams, or the stream itself when it's sound.
  * @returns {Promise<{title: string, streams: string[]}>}
  */
-async function readStation(url) {
-  const res = await lists().fetchPublic(url, { headers: { 'User-Agent': UA, 'Accept': '*/*' } });
+async function readStation(url, asPlayer) {
+  // A Shoutcast server sends a browser its status page at its root address, so an address with no
+  // playlist on it is asked again as a player (RELAY_UA), which gets the stream.
+  const res = await lists().fetchPublic(url, { headers: { 'User-Agent': asPlayer ? RELAY_UA : UA, 'Accept': '*/*' } });
   const type = String(res.headers.get('content-type') || '').toLowerCase();
   const cancel = async () => { try { await res.body?.cancel(); } catch (e) {} };
   if (!res.ok) {
     await cancel();
     throw new Error(res.status === 404 ? "That station doesn't exist (any more)." : `The station's site answered ${res.status}.`);
   }
-  if (AUDIO_TYPE.test(type) && !PLAYLIST_TYPE.test(type)) {
+  const stream = async () => {
     // The stream itself: its name comes from its icy-name header.
     await cancel();
     return { title: clean(res.headers.get('icy-name'), 120), streams: [url] };
-  }
+  };
   const reader = res.body.getReader();
   const chunks = [];
   let total = 0;
+  if (AUDIO_TYPE.test(type) && !PLAYLIST_TYPE.test(type)) {
+    // A generic type (application/octet-stream) is sent for playlist files too: its first bytes
+    // say which it is. Any other sound type is the stream.
+    if (!/^application\/octet-stream/i.test(type)) return stream();
+    const first = await reader.read();
+    const head = first.value ? Buffer.from(first.value).toString('latin1', 0, 512).replace(/^\ufeff|^\xef\xbb\xbf/, '').trimStart() : '';
+    if (!/^(\[playlist\]|#EXTM3U|<\?xml|<playlist[\s>]|https?:\/\/)/i.test(head)) {
+      try { await reader.cancel(); } catch (e) {}
+      return { title: clean(res.headers.get('icy-name'), 120), streams: [url] };
+    }
+    if (first.value) { chunks.push(first.value); total += first.value.length; }
+    if (first.done) return finish();
+  }
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -163,12 +178,18 @@ async function readStation(url) {
     }
     chunks.push(value);
   }
-  // Shoutcast's .pls and .m3u say they are ISO-8859-1; the others are UTF-8 in practice.
-  const latin = /charset=iso-8859-1/i.test(type) && !/xspf/i.test(type);
-  const text = Buffer.concat(chunks).toString(latin ? 'latin1' : 'utf8');
-  const parsed = parsePlaylist(text);
-  if (!parsed.streams.length) throw new Error("That link has no radio stream in it.");
-  return { title: parsed.title, streams: parsed.streams.map(s => s.url).slice(0, 10) };
+  return finish();
+  function finish() {
+    // Shoutcast's .pls and .m3u say they are ISO-8859-1; the others are UTF-8 in practice.
+    const latin = /charset=iso-8859-1/i.test(type) && !/xspf/i.test(type);
+    const text = Buffer.concat(chunks).toString(latin ? 'latin1' : 'utf8');
+    const parsed = parsePlaylist(text);
+    if (!parsed.streams.length) {
+      if (!asPlayer && /text\/html/i.test(type)) return readStation(url, true);
+      throw new Error("That link has no radio stream in it.");
+    }
+    return { title: parsed.title, streams: parsed.streams.map(s => s.url).slice(0, 10) };
+  }
 }
 
 /** A radio link's address to read: the link without its #radio mark. */
@@ -255,7 +276,8 @@ async function answersWithSound(url) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5000);
   try {
-    const res = await lists().fetchPublic(url, { signal: controller.signal, headers: { 'User-Agent': UA, 'Accept': '*/*', 'Accept-Encoding': 'identity' } });
+    // The https probe must stay on https: one redirected to http couldn't play there either.
+    const res = await lists().fetchPublic(url, { signal: controller.signal, httpsOnly: /^https:/i.test(url), headers: { 'User-Agent': UA, 'Accept': '*/*', 'Accept-Encoding': 'identity' } });
     const type = String(res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
     controller.abort();
     try { await res.body?.cancel(); } catch (e) {}
@@ -314,7 +336,18 @@ async function streamFor(link) {
     if (https) return /^video\/mp2t$/i.test(https.type) ? { url: https.url, live: true, type: 'mpegts' } : { url: https.url, live: true, audio: true };
   }
   if (!relayOn()) throw new Error("This station only streams over http, which can't play here (only https streams can). Try another station.");
-  return { url: `/api/radio?link=${encodeURIComponent(link)}`, live: true, audio: true };
+  // The relay sends the stream as the station does: an MPEG-TS one is played by mpegts.js.
+  const relayed = { url: `/api/radio?link=${encodeURIComponent(link)}`, live: true };
+  return /^video\/mp2t$/i.test(await relayType(s.streams[0])) ? { ...relayed, type: 'mpegts' } : { ...relayed, audio: true };
+}
+
+/** The type a station's http stream is sent as ('' if unknown), kept as long as the https check. */
+async function relayType(url) {
+  try {
+    return await cache.remember(`type:${url}`, HTTPS_TTL_MS, () => answersWithSound(url));
+  } catch (e) {
+    return '';
+  }
 }
 
 /**

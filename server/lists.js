@@ -340,6 +340,8 @@ async function fetchPublic(url, opts = {}) {
   const signal = opts.signal || AbortSignal.timeout(FETCH_TIMEOUT_MS);
   for (let hop = 0; hop < 6; hop++) {
     assertPublicUrl(url);
+    // opts.httpsOnly: every address on the way must be https (a redirect to http is refused).
+    if (opts.httpsOnly && !/^https:/i.test(url)) throw new ListError('That link redirects away from https.');
     const res = await requestPublic(url, signal, opts.headers);
     if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
       try { await res.body?.cancel(); } catch (e) {}

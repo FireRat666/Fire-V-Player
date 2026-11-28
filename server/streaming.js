@@ -215,15 +215,16 @@ function tubiEpisode(id) {
  * and the rest are read from their own pages, a few at a time. An episode's title says its season
  * and number ("S01:E03 - Name").
  */
-async function tubiSeries(id, season) {
-  const key = `tubi:series:${id}:${season || 'all'}`;
-  const list = await cache.remember(key, PAGE_TTL_MS, () => readTubiSeries(id, season));
+async function tubiSeries(id, season, limit) {
+  const key = `tubi:series:${id}:${season || 'all'}${limit ? `:${limit}` : ''}`;
+  const list = await cache.remember(key, PAGE_TTL_MS, () => readTubiSeries(id, season, limit));
   // Missing some episodes' details: asked for again soon (the ones read are kept on their own).
   if (list.partial && !list.shortened) { list.shortened = true; cache.set(key, list, PARTIAL_TTL_MS); }
   return list;
 }
 
-async function readTubiSeries(id, season) {
+/** readTubiSeries: `limit`, when given, is the most episodes listed (and read), from the first. */
+async function readTubiSeries(id, season, limit) {
   const data = await tubiPage(`series/${id}`);
   const byId = (data.video && data.video.byId) || {};
   const series = byId[`0${id}`] || byId[id];
@@ -244,7 +245,7 @@ async function readTubiSeries(id, season) {
   const wanted = [];
   for (const s of seasons) {
     for (const ep of s.eps.slice().sort((a, b) => a.num - b.num)) {
-      if (wanted.length < MAX_EPISODES) wanted.push({ season: s.n, ep });
+      if (wanted.length < Math.min(MAX_EPISODES, limit || MAX_EPISODES)) wanted.push({ season: s.n, ep });
     }
   }
   const items = new Array(wanted.length);
@@ -467,7 +468,8 @@ async function resolveLink(link) {
   if (!media) return null;
   if (media.type === 'tubi') {
     if (media.kind === 'series') {
-      const { items } = await tubiSeries(media.id, media.season || 'first');
+      // Only the first episode is read, not the rest of its season.
+      const { items } = await tubiSeries(media.id, media.season || 'first', 1);
       if (!items.length) throw new Error('That Tubi series has no episodes here.');
       return strip(items[0]);
     }

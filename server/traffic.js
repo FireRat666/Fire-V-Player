@@ -83,7 +83,11 @@ class Traffic {
         if (chunk && typeof chunk !== 'function') bytes += typeof chunk === 'string' ? Buffer.byteLength(chunk, typeof encoding === 'string' ? encoding : undefined) : chunk.length;
         return end.call(this, chunk, encoding, cb);
       };
-      res.on('finish', () => {
+      // A stream the viewer leaves (a relayed station) closes without finishing: counted then.
+      let counted = false;
+      const count = () => {
+        if (counted) return;
+        counted = true;
         // Missing pages and errors are folded, paths are cut short, and past MAX_FILE_KEYS paths
         // the rest share one entry, so requests for made-up addresses can't grow the list.
         let key;
@@ -99,7 +103,9 @@ class Traffic {
         entry.bytes += bytes;
         if (res.statusCode === 304) entry.notModified++;
         this.files.set(key, entry);
-      });
+      };
+      res.on('finish', count);
+      res.on('close', count);
       next();
     };
   }

@@ -2614,7 +2614,11 @@ var FirePlaylistPanel = class {
       this.setStatus('Opening the browser...', 0);
       // This opening's own token: a Close (or a newer opening) meanwhile takes it away.
       const token = this.browseOpening = {};
-      await this.core.setupScript(null, 'site-browser');
+      try {
+        await this.withTimeout(this.core.setupScript(null, 'site-browser'), 20000, 'Loading the browser');
+      } catch (e) {
+        console.warn('[PlaylistPanel]', e && e.message || e);
+      }
       if (this.browseOpening !== token) return;
       this.browseOpening = false;
       if (this.destroyed) return;

@@ -107,12 +107,25 @@ var FireSiteBrowser = (() => {
   }
   window.__fvpSetVolume = function (v) {
     v = Math.max(0, Math.min(1, Number(v)));
-    if (!isFinite(v) || v === level) return;
+    if (!isFinite(v)) return;
     level = v;
     made.forEach(apply);
     var els = document.querySelectorAll('audio,video');
     for (var i = 0; i < els.length; i++) apply(els[i]);
   };
+  // An audio or video element gets the level as it's put on the page, before it can play (one
+  // that autoplays starts without play()), and again whenever it starts.
+  function applyIn(node) {
+    if (!node || node.nodeType !== 1) return;
+    if (node instanceof HTMLMediaElement) apply(node);
+    if (node.querySelectorAll) { var els = node.querySelectorAll('audio,video'); for (var i = 0; i < els.length; i++) apply(els[i]); }
+  }
+  try {
+    new MutationObserver(function (list) {
+      for (var i = 0; i < list.length; i++) for (var j = 0; j < list[i].addedNodes.length; j++) applyIn(list[i].addedNodes[j]);
+    }).observe(document.documentElement, { childList: true, subtree: true });
+  } catch (e) {}
+  document.addEventListener('play', function (e) { if (e.target instanceof HTMLMediaElement) apply(e.target); }, true);
   // A site that changes page without loading one (Tubi) sets the new title a moment later.
   var last = '', timer = 0;
   function checkPage() {

@@ -103,7 +103,21 @@ async function resolveVideoLink(app, ws, v) {
  * @param {boolean} [isYoutubeWebsite] - Whether the request originated from the web search.
  * @returns {Promise<void>}
  */
-async function addToPlaylist(app, ws, v, skipUpdate, isYoutubeWebsite) {
+/**
+ * Runs `job` after this client's earlier ones, so videos it adds one after another (a list's
+ * episodes) go into the playlist in the order it sent them, however long each lookup takes.
+ */
+function inOrder(ws, job) {
+  const run = (ws.addTail || Promise.resolve()).then(job);
+  ws.addTail = run.catch(() => {});
+  return run;
+}
+
+function addToPlaylist(app, ws, v, skipUpdate, isYoutubeWebsite) {
+  return inOrder(ws, () => addNow(app, ws, v, skipUpdate, isYoutubeWebsite));
+}
+
+async function addNow(app, ws, v, skipUpdate, isYoutubeWebsite) {
   const player = app.videoPlayers[ws.i];
   if (player) {
     // Locked, in playlist mode: someone else's video waits for the host to approve it.
@@ -111,7 +125,7 @@ async function addToPlaylist(app, ws, v, skipUpdate, isYoutubeWebsite) {
       await suggestVideo(app, ws, v, isYoutubeWebsite);
       return;
     }
-    app.onlyIfHost(ws, async () => {
+    await app.onlyIfHost(ws, async () => {
       let resolvedV;
       try {
         resolvedV = await resolveVideoData(app, ws, v);
@@ -393,10 +407,33 @@ async function removePlaylistItem(app, ws, index) {
  */
 async function loadPlaylistSource(ws, id) {
   const list = await lists.loadAny(id, MAX_PLAYLIST_IMPORT);
-  const allowed = list.items.filter(item => !media.detect(item.link) || media.allowedFor(ws, item.link));
+  const links = list.items.filter(item => !media.detect(item.link) || media.allowedFor(ws, item.link));
+  // A Tubi or Archive item that came without a rating is checked as one being added is
+  // (media.screenMature), a few at a time; one that is for adults, or can't be checked, is left out.
+  const allowed = media.allowsMature(ws) ? links : (await screenUnrated(ws, links)).filter(Boolean);
   // Titles for adults are left out where the world doesn't allow them (see media.filterMature).
   const { items } = media.filterMature(ws, allowed);
   return { title: list.title, items, skipped: list.items.length - items.length + (list.dropped || 0), truncated: !!list.truncated };
+}
+
+/** A list's items, each unrated Tubi or Archive one checked (null where it's left out). */
+async function screenUnrated(ws, items) {
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const k = next++;
+      const item = items[k];
+      if (!item || typeof item.mature === 'boolean' || !media.needsRating(item.link)) { out[k] = item; continue; }
+      try {
+        out[k] = await media.screenMature(ws, item);
+      } catch (e) {
+        out[k] = null;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: 4 }, worker));
+  return out;
 }
 
 /** A short note about the links of a list that were left out, or ''. */

@@ -1297,8 +1297,9 @@ class App {
           console.error(`[ERROR] Action by ${App.who(ws.u)} in ${ws.i} failed:`, err);
           try { this.send(ws, Commands.ERROR, { message: "That didn't work. Try again." }); } catch (e) { /* socket gone */ }
         };
+        // The action's promise, for a caller that waits for it (nothing when it isn't allowed).
         try {
-          Promise.resolve(callback()).catch(failed);
+          return Promise.resolve(callback()).catch(failed);
         } catch (err) {
           failed(err);
         }

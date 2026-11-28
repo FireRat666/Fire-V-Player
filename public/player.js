@@ -1445,10 +1445,13 @@ const YT_PERMANENT_ERRORS = [2, 100, 101, 150, 153];
       // Told once, when this screen has loaded the track: the room starts it when every screen has
       // (see App.holdForReady). Karaoke's countdown doesn't wait for it, which does no harm.
       let readySent = false;
+      // The start this hold is for: a report meant for an earlier start of the same track (a
+      // restarted song) isn't counted for this one (see App.trackReady).
+      const start = this.playerData ? Number(this.playerData.lastStartTime) : NaN;
       const ready = () => {
         if (readySent || !video.link) return;
         readySent = true;
-        this.core.sendMessage({ path: Commands.TRACK_READY, data: { link: video.link } });
+        this.core.sendMessage({ path: Commands.TRACK_READY, data: Object.assign({ link: video.link }, Number.isFinite(start) ? { start } : {}) });
       };
       // Held at its start once it plays (see onYouTubeState, and below). A video that hasn't
       // started loading is left to load: paused then, YouTube may never load it at all.

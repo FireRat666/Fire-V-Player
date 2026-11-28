@@ -354,7 +354,12 @@ class VideoElementSource extends BaseMediaSource {
         const type = body.type === 'mpegts' ? 'mpegts' : body.audio ? 'file' : 'hls';
         this.load(opts, { type, live: !!body.live, noReferrer: !!body.noReferrer }, el, body.url);
       })
-      .catch(err => { if (!this.destroyed) opts.onError(err.message); });
+      .catch(err => {
+        if (this.destroyed) return;
+        // A station whose stream couldn't be found says so on its card, not "Tuning in...".
+        if (this.radioCard) this.radioCard.show(false, false, true);
+        opts.onError(err.message);
+      });
   }
 
   /** Starts loading `url` into the video element, as the media's type needs. */

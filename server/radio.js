@@ -48,6 +48,10 @@ const MAX_RELAY_MS = 8 * 60 * 60 * 1000;
 const AUDIO_TYPE = /^(audio\/|application\/ogg|video\/mp2t|application\/octet-stream)/i;
 /** A playlist's types, which are sent as audio/... too. */
 const PLAYLIST_TYPE = /mpegurl|scpls|xspf|x-pls/i;
+/** HLS's types (an .m3u8), which an HLS station's stream is sent as. */
+const HLS_TYPE = /^(application|audio)\/(vnd\.apple\.mpegurl|x-mpegurl|mpegurl)$/i;
+/** What answersWithSound gives for an HLS stream (it plays with hls.js, not as sound). */
+const HLS = 'application/vnd.apple.mpegurl';
 
 const cache = new TtlCache({ maxEntries: 500 });
 const relays = { total: 0, byIp: new Map() };
@@ -282,7 +286,9 @@ async function sniff(link) {
 
 /**
  * The type a stream answers at `url` with, to a browser, when it's sound ('' when it answers with
- * something else). It throws when the station can't be reached at all, which isn't kept.
+ * something else), or HLS when it's an HLS stream (by its type and its first lines, whatever its
+ * address: a station's may have no .m3u8). A PLS, XSPF or plain .m3u list isn't either. It throws
+ * when the station can't be reached at all, which isn't kept.
  */
 async function answersWithSound(url) {
   const controller = new AbortController();
@@ -291,6 +297,21 @@ async function answersWithSound(url) {
     // The https probe must stay on https: one redirected to http couldn't play there either.
     const res = await lists().fetchPublic(url, { signal: controller.signal, httpsOnly: /^https:/i.test(url), headers: { 'User-Agent': UA, 'Accept': '*/*', 'Accept-Encoding': 'identity' } });
     const type = String(res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    if (res.ok && HLS_TYPE.test(type)) {
+      // An HLS playlist has #EXT-X- tags; a radio .m3u (the same types) doesn't.
+      let head = '';
+      try {
+        const reader = res.body.getReader();
+        while (head.length < 2048) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          head += Buffer.from(value).toString('latin1');
+        }
+        try { await reader.cancel(); } catch (e) {}
+      } catch (e) {}
+      controller.abort();
+      return /^\s*#EXTM3U[\s\S]*#EXT-X-/.test(head) ? HLS : '';
+    }
     controller.abort();
     try { await res.body?.cancel(); } catch (e) {}
     return res.ok && AUDIO_TYPE.test(type) && !PLAYLIST_TYPE.test(type) ? type : '';
@@ -339,12 +360,14 @@ async function httpsVersion(url) {
 async function streamFor(link) {
   const s = await station(link);
   for (const url of s.streams.slice(0, 3)) {
-    // A station that streams HLS (some on Radio Browser) plays as an HLS stream, over https only.
-    if (/\.m3u8($|\?)/i.test(url)) {
-      if (/^https:/i.test(url)) return { url, live: true };
-      continue;
-    }
+    // A station that streams HLS (some on Radio Browser) plays as an HLS stream, over https only:
+    // one on http plays from its https address when it has one there, and not at all otherwise
+    // (the relay passes on sound, not a playlist and its pieces).
+    const m3u8 = /\.m3u8($|\?)/i.test(url);
+    if (m3u8 && /^https:/i.test(url)) return { url, live: true };
     const https = await httpsVersion(url);
+    if (https && https.type === HLS) return { url: https.url, live: true };
+    if (m3u8) continue;
     if (https) return /^video\/mp2t$/i.test(https.type) ? { url: https.url, live: true, type: 'mpegts' } : { url: https.url, live: true, audio: true };
   }
   if (!relayOn()) throw new Error("This station only streams over http, which can't play here (only https streams can). Try another station.");

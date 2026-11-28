@@ -554,7 +554,8 @@ async function loadList(source) {
   // A list's videos go into the playlist as they are, and a series isn't one video (its link in a
   // search result is looked up when added, which picks its first episode).
   const videos = list.items.filter(item => !/^https:\/\/tubitv\.com\/series\//.test(item.link));
-  return { title: list.title, items: videos.map(strip) };
+  // partial: some of a series' episodes are listed without their details (see readTubiSeries).
+  return { title: list.title, items: videos.map(strip), partial: !!list.partial };
 }
 
 module.exports = {

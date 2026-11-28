@@ -1006,14 +1006,17 @@ class App {
   }
 
   /**
-   * A screen has loaded the track the room is waiting on (see holdForReady).
+   * A screen has loaded the track the room is waiting on (see holdForReady). `start` is the start
+   * time the screen was told for it: a report for an earlier start of the same track (a restarted
+   * song) doesn't count for this wait. A screen that sends none (an older page) counts by link.
    * @param {Object} ws - The screen's WebSocket.
-   * @param {{link: string}} data
+   * @param {{link: string, start?: number}} data
    */
   trackReady(ws, data) {
     const player = this.videoPlayers[ws.i];
     const gate = player && player.readyGate;
     if (!gate || !data || data.link !== gate.link || !App.isScreenSocket(ws)) return;
+    if (data.start != null && Number(data.start) !== gate.start) return;
     // From a space page, only for the world's video player, which reports there.
     if (ws.type === 'space' && data.native !== true) return;
     gate.waiting.delete(App.viewerKey(ws));

@@ -14,7 +14,8 @@
     "Save for Everyone": "Für alle speichern",
     "Search YouTube, Internet Archive, Tubi, NASA+ or ESO: pick the source from the drop-down beside the box. Or paste a link.": "Suche auf YouTube, Internet Archive, Tubi, NASA+ oder ESO: Wähle die Quelle im Dropdown neben dem Feld. Oder füge einen Link ein.",
     "Search YouTube, Internet Archive, Tubi, NASA+, ESO or a screen share by its room code: pick the source from the drop-down beside the box. Or paste a link.": "Suche auf YouTube, Internet Archive, Tubi, NASA+, ESO oder nach einer Bildschirmfreigabe über ihren Raumcode: Wähle die Quelle im Dropdown neben dem Feld. Oder füge einen Link ein.",
-    "Close Browser": "Browser schließen"
+    "Close Browser": "Browser schließen",
+    "Looking up \"{title}\"...": "Suche nach \"{title}\"..."
   },
   "fr": {
     "Save for Me": "Enregistrer pour moi",
@@ -33,7 +34,8 @@
     "someone": "誰か",
     "loading...": "読み込み中...",
     "mine": "自分の",
-    "Browse": "閲覧"
+    "Browse": "閲覧",
+    "That station can't play here.": "このラジオ局はここでは再生できません。"
   },
   "es": {
     "Season {n}": "Temporada {n}",
@@ -120,7 +122,19 @@
     "Go back from live (everyone):": "Retroceder desde el directo (todos):",
     "Refresh List": "Actualizar lista",
     "Search YouTube, Internet Archive, Tubi, NASA+ or ESO: pick the source from the drop-down beside the box. Or paste a link.": "Busca en YouTube, Internet Archive, Tubi, NASA+ o ESO: elige la fuente en el desplegable junto al cuadro. O pega un enlace.",
-    "Search YouTube, Internet Archive, Tubi, NASA+, ESO or a screen share by its room code: pick the source from the drop-down beside the box. Or paste a link.": "Busca en YouTube, Internet Archive, Tubi, NASA+, ESO o una pantalla compartida por su código de sala: elige la fuente en el desplegable junto al cuadro. O pega un enlace."
+    "Search YouTube, Internet Archive, Tubi, NASA+, ESO or a screen share by its room code: pick the source from the drop-down beside the box. Or paste a link.": "Busca en YouTube, Internet Archive, Tubi, NASA+, ESO o una pantalla compartida por su código de sala: elige la fuente en el desplegable junto al cuadro. O pega un enlace.",
+    "Play Now": "Reproducir ahora",
+    "Playing \"{title}\"": "Reproduciendo \"{title}\"",
+    "\"{title}\" can't play here.": "\"{title}\" no se puede reproducir aquí.",
+    "Only the host can play something now.": "Solo el anfitrión puede reproducir algo ahora.",
+    "Nothing playing": "Nada en reproducción",
+    "Now playing": "Reproduciendo ahora",
+    "That station can't play here.": "Esa estación no se puede reproducir aquí.",
+    "Shoutcast is open beside the panel. Press Play on a station there to add it.": "Shoutcast está abierto junto al panel. Pulsa Reproducir en una estación para añadirla.",
+    "The website can't play this station itself, but the Fire Player can: add it with the bar above.": "El sitio web no puede reproducir esta estación, pero el Fire Player sí: añádela con la barra de arriba.",
+    "The website can't play this station itself. Checking whether the Fire Player can...": "El sitio web no puede reproducir esta estación. Comprobando si el Fire Player puede...",
+    "With Shoutcast, internet-radio.com or Tubi picked, opens its site beside the panel. Play a station, or open a movie or series, and it offers to add it.": "Con Shoutcast, internet-radio.com o Tubi elegido, abre su sitio junto al panel. Reproduce una estación, o abre una película o serie, y ofrece añadirla.",
+    "internet-radio.com is open beside the panel. Press Play on a station there, or open a station's page, to add it.": "internet-radio.com está abierto junto al panel. Pulsa Reproducir en una estación, o abre la página de una estación, para añadirla."
   },
   "pt": {
     "Accent": "Cor de destaque",
@@ -193,6 +207,15 @@
     "No saved lists. Paste a YouTube playlist or a list of links into + Search & Add (or More > + Add by link) and choose ★ Save for Everyone or ☆ Save for Me.": "Nenhuma lista salva. Cole uma playlist do YouTube ou uma lista de links em + Buscar (ou Mais > + Adicionar por link) e escolha ★ Salvar para todos ou ☆ Salvar para mim.",
     "Go back from live (everyone):": "Voltar do ponto ao vivo (todos):",
     "Search YouTube, Internet Archive, Tubi, NASA+ or ESO: pick the source from the drop-down beside the box. Or paste a link.": "Busque no YouTube, Internet Archive, Tubi, NASA+ ou ESO: escolha a fonte no menu ao lado da caixa. Ou cole um link.",
-    "Search YouTube, Internet Archive, Tubi, NASA+, ESO or a screen share by its room code: pick the source from the drop-down beside the box. Or paste a link.": "Busque no YouTube, Internet Archive, Tubi, NASA+, ESO ou um compartilhamento de tela pelo código da sala: escolha a fonte no menu ao lado da caixa. Ou cole um link."
+    "Search YouTube, Internet Archive, Tubi, NASA+, ESO or a screen share by its room code: pick the source from the drop-down beside the box. Or paste a link.": "Busque no YouTube, Internet Archive, Tubi, NASA+, ESO ou um compartilhamento de tela pelo código da sala: escolha a fonte no menu ao lado da caixa. Ou cole um link.",
+    "Looking up \"{title}\"...": "Procurando \"{title}\"...",
+    "Season {n}": "Temporada {n}",
+    "Playing \"{title}\"": "Reproduzindo \"{title}\"",
+    "Asking the host to add \"{title}\"...": "Pedindo ao anfitrião para adicionar \"{title}\"...",
+    "\"{title}\" can't play here.": "\"{title}\" não pode ser reproduzido aqui.",
+    "That station can't play here.": "Essa estação não pode ser reproduzida aqui.",
+    "The website can't play this station itself, but the Fire Player can: add it with the bar above.": "O site não consegue reproduzir esta estação, mas o Fire Player consegue: adicione-a com a barra acima.",
+    "The website can't play this station itself. Checking whether the Fire Player can...": "O site não consegue reproduzir esta estação. Verificando se o Fire Player consegue...",
+    "With Shoutcast, internet-radio.com or Tubi picked, opens its site beside the panel. Play a station, or open a movie or series, and it offers to add it.": "Com Shoutcast, internet-radio.com ou Tubi escolhido, abre o site ao lado do painel. Reproduza uma estação, ou abra um filme ou série, e ele oferece adicioná-lo."
   }
 }

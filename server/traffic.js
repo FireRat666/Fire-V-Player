@@ -22,6 +22,11 @@ class Traffic {
     this.reset();
     /** Sockets open now, to read how much each wrote since the last summary. */
     this.sockets = new Set();
+    /**
+     * Responses still being sent (a relayed station can last hours): each summary counts what they
+     * sent since the last one, so a long stream isn't counted all at once when it ends.
+     */
+    this.open = new Set();
   }
 
   reset() {
@@ -72,15 +77,17 @@ class Traffic {
   middleware() {
     return (req, res, next) => {
       if (req.method !== 'GET' && req.method !== 'HEAD') return next();
-      let bytes = 0;
+      // bytes: sent so far; reported: how many of them a summary has counted already.
+      const rec = { req, res, bytes: 0, reported: 0 };
+      this.open.add(rec);
       const write = res.write;
       const end = res.end;
       res.write = function (chunk, encoding, cb) {
-        if (chunk) bytes += typeof chunk === 'string' ? Buffer.byteLength(chunk, typeof encoding === 'string' ? encoding : undefined) : chunk.length;
+        if (chunk) rec.bytes += typeof chunk === 'string' ? Buffer.byteLength(chunk, typeof encoding === 'string' ? encoding : undefined) : chunk.length;
         return write.call(this, chunk, encoding, cb);
       };
       res.end = function (chunk, encoding, cb) {
-        if (chunk && typeof chunk !== 'function') bytes += typeof chunk === 'string' ? Buffer.byteLength(chunk, typeof encoding === 'string' ? encoding : undefined) : chunk.length;
+        if (chunk && typeof chunk !== 'function') rec.bytes += typeof chunk === 'string' ? Buffer.byteLength(chunk, typeof encoding === 'string' ? encoding : undefined) : chunk.length;
         return end.call(this, chunk, encoding, cb);
       };
       // A stream the viewer leaves (a relayed station) closes without finishing: counted then.
@@ -88,21 +95,8 @@ class Traffic {
       const count = () => {
         if (counted) return;
         counted = true;
-        // Missing pages and errors are folded, paths are cut short, and past MAX_FILE_KEYS paths
-        // the rest share one entry, so requests for made-up addresses can't grow the list.
-        let key;
-        if (res.statusCode === 404) key = '(not found)';
-        else if (res.statusCode >= 400) key = '(error)';
-        else {
-          key = req.path.slice(0, 80);
-          if (!this.files.has(key) && this.pathKeys >= MAX_FILE_KEYS) key = '(other)';
-          else if (!this.files.has(key)) this.pathKeys++;
-        }
-        const entry = this.files.get(key) || { count: 0, bytes: 0, notModified: 0 };
-        entry.count++;
-        entry.bytes += bytes;
-        if (res.statusCode === 304) entry.notModified++;
-        this.files.set(key, entry);
+        this.open.delete(rec);
+        this.countFile(rec, true);
       };
       res.on('finish', count);
       res.on('close', count);
@@ -110,15 +104,45 @@ class Traffic {
     };
   }
 
+  /**
+   * Counts what a response has sent since it was last counted, under its path; `done` (it has
+   * finished or closed) counts it as a request too.
+   */
+  countFile(rec, done) {
+    const { req, res } = rec;
+    // Missing pages and errors are folded, paths are cut short, and past MAX_FILE_KEYS paths
+    // the rest share one entry, so requests for made-up addresses can't grow the list.
+    let key;
+    if (res.statusCode === 404) key = '(not found)';
+    else if (res.statusCode >= 400) key = '(error)';
+    else {
+      key = req.path.slice(0, 80);
+      if (!this.files.has(key) && this.pathKeys >= MAX_FILE_KEYS) key = '(other)';
+      else if (!this.files.has(key)) this.pathKeys++;
+    }
+    const sent = rec.bytes - rec.reported;
+    rec.reported = rec.bytes;
+    if (!done && !sent) return;
+    const entry = this.files.get(key) || { count: 0, bytes: 0, notModified: 0 };
+    entry.bytes += sent;
+    if (done) {
+      entry.count++;
+      if (res.statusCode === 304) entry.notModified++;
+    }
+    this.files.set(key, entry);
+  }
+
   /** Logs what was sent since the last summary, then starts counting again. */
   report() {
     this.sockets.forEach(s => this.take(s));
+    // What responses still being sent have sent so far (the rest is counted when they end).
+    this.open.forEach(rec => this.countFile(rec, false));
     const minutes = Math.round((Date.now() - this.startedAt) / 60000);
     const raw = [...this.messages.values()].reduce((sum, e) => sum + e.bytes, 0);
     const fileBytes = [...this.files.values()].reduce((sum, e) => sum + e.bytes, 0);
     const requests = [...this.files.values()].reduce((sum, e) => sum + e.count, 0);
     const notModified = [...this.files.values()].reduce((sum, e) => sum + e.notModified, 0);
-    if (!raw && !requests && !this.wireOut && !this.wireIn && !this.connections) {
+    if (!raw && !requests && !fileBytes && !this.wireOut && !this.wireIn && !this.connections) {
       this.reset();
       return;
     }

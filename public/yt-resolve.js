@@ -12,7 +12,7 @@
  *   { type: 'resolve', n, id, maxHeight }
  * Messages out (window.O.sendMessage), all with from: 'yt-resolve':
  *   { type: 'ready' }                                                once, when it can take requests
- *   { type: 'result', n, ok: true, m, title, height, durMs }
+ *   { type: 'result', n, ok: true, m, title, height, durMs, cues }   cues: its captions, [startMs, durMs, text] each
  *   { type: 'result', n, ok: false, reason, unplayable, live }
  */
 (function () {
@@ -264,6 +264,34 @@
     });
   }
 
+  // The video's captions, as [startMs, durMs, text] lines: an English track when there is one (one
+  // made by people before YouTube's automatic one), else the first made by people, else any. None
+  // is fine: the video plays without. Kept small, as they go over to the world in one message.
+  var MAX_CUES = 4000, MAX_CUE_TEXT = 300, MAX_CUE_CHARS = 300000, CAPTIONS_TIMEOUT_MS = 6000;
+  function captions(json) {
+    var list = (((json && json.captions) || {}).playerCaptionsTracklistRenderer || {}).captionTracks || [];
+    var en = list.filter(function (t) { return /^en/i.test(String(t.languageCode || '')); });
+    var own = function (ts) { return ts.filter(function (t) { return t.kind !== 'asr'; })[0]; };
+    var pick = own(en) || en[0] || own(list) || list[0];
+    var url = pick && String(pick.baseUrl || '');
+    if (!url || !/^(https:\/\/www\.youtube\.com)?\/api\/timedtext\?/.test(url)) return Promise.resolve([]);
+    var got = fetch(url + '&fmt=json3', { credentials: 'omit' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (js) {
+        var cues = [], chars = 0;
+        ((js && js.events) || []).forEach(function (e) {
+          if (!e || !e.segs || cues.length >= MAX_CUES || chars > MAX_CUE_CHARS) return;
+          var text = e.segs.map(function (s) { return String((s && s.utf8) || ''); }).join('').replace(/[ \t]*\n[ \t]*/g, '\n').trim().slice(0, MAX_CUE_TEXT);
+          if (!text) return;
+          chars += text.length;
+          cues.push([Math.max(0, Number(e.tStartMs) || 0), Math.max(0, Number(e.dDurationMs) || 0), text]);
+        });
+        return cues;
+      });
+    var late = new Promise(function (r) { setTimeout(function () { r([]); }, CAPTIONS_TIMEOUT_MS); });
+    return Promise.race([got, late]).catch(function () { return []; });
+  }
+
   function fail(n, reason, extra) {
     var msg = { type: 'result', n: n, ok: false, reason: reason };
     if (extra) Object.keys(extra).forEach(function (k) { msg[k] = extra[k]; });
@@ -291,11 +319,11 @@
         fail(n, tall ? "It's a vertical video (a Short)." : 'YouTube gave no H.264 and AAC streams for it.', { shorts: tall });
         return;
       }
-      return Promise.all([firstVideo(videoChoices(formats, maxHeight)), readIndex(a)]).then(function (idx) {
+      return Promise.all([firstVideo(videoChoices(formats, maxHeight)), readIndex(a), captions(json)]).then(function (idx) {
         v = idx[0].f;
         var spec = { v: track(v, idx[0].sidx, true), a: track(a, idx[1], false), durMs: Number(v.approxDurationMs) || Number(a.approxDurationMs) || 0 };
         return packToFit(spec).then(function (m) {
-          send({ type: 'result', n: n, ok: true, m: m, title: details.title || '', height: labelOf(v), durMs: spec.durMs });
+          send({ type: 'result', n: n, ok: true, m: m, title: details.title || '', height: labelOf(v), durMs: spec.durMs, cues: idx[2] });
         });
       });
     }).catch(function (e) {

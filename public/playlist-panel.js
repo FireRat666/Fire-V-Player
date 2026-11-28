@@ -2687,9 +2687,19 @@ var FirePlaylistPanel = class {
 
   // A message from the browser window's page: the page it moved to, or a station played there.
   onBrowseMessage(msg) {
-    if (msg.type === 'add') { this.addBrowseOffer(false); return; }
-    if (msg.type === 'now') { this.addBrowseOffer(true); return; }
-    if (msg.type === 'extra') { this.showEpisodes(this.browseOffer && this.browseOffer.link); return; }
+    // The bar's buttons act only on the offer they were shown for: one pressed as the offer changed
+    // (another page, or a station played meanwhile), or a message that doesn't name the offer, is
+    // ignored. The panel's own buttons are the ones to trust; the bar is the same offer on the page.
+    if (msg.type === 'add' || msg.type === 'now' || msg.type === 'extra') {
+      const o = this.browseOffer;
+      if (!o || msg.link !== o.link || msg.token !== o.token) {
+        if (o) this.setStatus('That offer changed. Press it again.');
+        return;
+      }
+      if (msg.type === 'extra') this.showEpisodes(o.link);
+      else this.addBrowseOffer(msg.type === 'now');
+      return;
+    }
     if (msg.type === 'station' && msg.site === 'internetradio') {
       const name = String(msg.name || '').trim().slice(0, 120) || this.tr('Radio station');
       const id = String(msg.id || '');
@@ -2756,6 +2766,8 @@ var FirePlaylistPanel = class {
 
   // Shows what Browse found, in the panel and as a bar on the page, or hides it (null).
   setBrowseOffer(offer) {
+    // Each offer shown gets its own token, which the bar's buttons send back (see onBrowseMessage).
+    if (offer && !offer.token) offer.token = Math.random().toString(36).slice(2, 12);
     this.browseOffer = offer;
     if (this.siteBrowser) {
       // A station the server found can't play here (only over http, with the relay off) has no buttons.
@@ -2773,7 +2785,9 @@ var FirePlaylistPanel = class {
         add: !ready || offer.kind === 'series' ? '' : this.tr('Add to Playlist'),
         extra: offer.kind === 'series' ? this.tr('Pick Episodes') : '',
         note,
-        what: offer.kind
+        what: offer.kind,
+        link: offer.link,
+        token: offer.token
       } : null);
     }
     this.renderSoon();
@@ -2790,8 +2804,7 @@ var FirePlaylistPanel = class {
     if (o.check === 'checking') { this.setStatus("The website can't play this station itself. Checking whether the Fire Player can..."); return; }
     if (now && !this.isHost()) { this.setStatus('Only the host can play something now.'); return; }
     if (!now && !this.canAdd() && !this.addWaits()) { this.setStatus('The player is locked: only the host can add videos.'); return; }
-    // Done with the site: it closes (Browse opens it again for more).
-    this.closeBrowse();
+    if (!this.core.connected()) { this.setStatus('Not connected to the server. Reconnecting...', 4000); return; }
     let what = o.link;
     if (o.kind === 'video' && window.isBanter && typeof this.core.tubiResolver === 'function') {
       this.setBrowseOffer(null);
@@ -2803,15 +2816,16 @@ var FirePlaylistPanel = class {
       } catch (e) {}
       if (this.destroyed) return;
     }
-    if (now) {
-      this.send(Commands.ADD_AND_PLAY, what);
-      this.setStatus(this.tr('Playing "{title}"', { title: o.title }));
-    } else {
-      this.send(Commands.ADD_TO_PLAYLIST, what);
-      this.setStatus(this.addWaits() ? this.tr('Asking the host to add "{title}"...', { title: o.title }) : this.tr('Adding "{title}"...', { title: o.title }));
+    if (!this.send(now ? Commands.ADD_AND_PLAY : Commands.ADD_TO_PLAYLIST, what)) {
+      // Not sent (the connection dropped): the offer stays, to press again once it's back.
+      if (!this.browseOffer && this.siteBrowser) this.setBrowseOffer(o);
+      this.setStatus('Not connected to the server. Reconnecting...', 4000);
+      return;
     }
-    // A page opened during the lookup may have put up its own offer since: that one stays.
-    if (this.browseOffer === o) this.setBrowseOffer(null);
+    // Sent, so done with the site: it closes (Browse opens it again for more).
+    this.closeBrowse();
+    if (now) this.setStatus(this.tr('Playing "{title}"', { title: o.title }));
+    else this.setStatus(this.addWaits() ? this.tr('Asking the host to add "{title}"...', { title: o.title }) : this.tr('Adding "{title}"...', { title: o.title }));
   }
 
   // A Tubi series' episodes, in the Lists tab: each one to add, play or play next, or all of them.
@@ -3229,7 +3243,8 @@ var FirePlaylistPanel = class {
       return;
     }
     const items = Array.isArray(data.items) ? data.items : [];
-    this.listData.set(data.id, { state: 'ready', at: Date.now(), title: data.title || '', items, skipped: data.skipped || 0, truncated: !!data.truncated });
+    // partial: some of it is missing (a Tubi series' episodes not read in time), so it's asked for again rather than kept fresh.
+    this.listData.set(data.id, { state: 'ready', at: Date.now(), title: data.title || '', items, skipped: data.skipped || 0, truncated: !!data.truncated, partial: !!data.partial });
     // A saved list keeps its real name for next time.
     const mine = data.title && this.userLists.find(l => l.id === data.id);
     if (mine && mine.label !== data.title) { mine.label = data.title; this.saveUserLists(); }

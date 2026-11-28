@@ -35,6 +35,8 @@ const MAX_LIST_BYTES = 256 * 1024;
 const CONCURRENCY = 4;
 /** How long a loaded list is kept: short, so an edited file shows on the next load. */
 const LIST_TTL = 5 * 60 * 1000;
+/** A Tubi series listed with some episodes' details missing is kept only this long (see streaming.js). */
+const PARTIAL_LIST_TTL = 60 * 1000;
 /** How long a YouTube video's title and length are kept. */
 const VIDEO_TTL = 6 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 10000;
@@ -55,6 +57,11 @@ class TtlCache {
     value.catch(() => { if (this.map.get(key) && this.map.get(key).value === value) this.map.delete(key); });
     if (this.map.size > this.max) this.map.delete(this.map.keys().next().value);
     return value;
+  }
+  /** Keeps `key` for at most `ttl` from now (a list loaded with some of it missing). */
+  shorten(key, ttl) {
+    const hit = this.map.get(key);
+    if (hit) hit.expires = Math.min(hit.expires, Date.now() + ttl);
   }
 }
 const listCache = new TtlCache(100);
@@ -363,6 +370,14 @@ function dispositionName(res) {
   return stripExtension(name);
 }
 
+/** Whether bytes are binary (sound, video), not text: control bytes other than tabs and line ends. */
+function looksBinary(bytes) {
+  if (!bytes.length) return false;
+  let odd = 0;
+  for (const b of bytes) if (b === 0 || (b < 32 && b !== 9 && b !== 10 && b !== 13 && b !== 12)) odd++;
+  return odd / bytes.length > 0.02;
+}
+
 /** A list file's text, refusing media, web pages and anything over MAX_LIST_BYTES. */
 async function fetchListText(url) {
   const res = await fetchPublic(url);
@@ -386,6 +401,10 @@ async function fetchListText(url) {
   const reader = res.body.getReader();
   const chunks = [];
   let total = 0;
+  // A generic binary type is sent for text files (Google Drive's downloads) and for streams with
+  // no file name (a radio station): its first bytes say which. A stream isn't read on as a list,
+  // so loadList can take it for a station (its "media file" error).
+  let checked = !/^application\/octet-stream/.test(type);
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -395,7 +414,15 @@ async function fetchListText(url) {
       throw new ListError('That list file is too big (256 KB at most).');
     }
     chunks.push(value);
+    if (!checked && total >= 512) {
+      checked = true;
+      if (looksBinary(Buffer.concat(chunks).subarray(0, 512))) {
+        try { await reader.cancel(); } catch (e) {}
+        throw new ListError('That link is a media file, not a list of links.');
+      }
+    }
   }
+  if (!checked && looksBinary(Buffer.concat(chunks))) throw new ListError('That link is a media file, not a list of links.');
   const text = Buffer.concat(chunks).toString('utf8');
   if (/^\s*<(!doctype|html)/i.test(text)) throw new ListError('That link opens a web page, not a text file of links. Share it publicly, or use its direct or download link.');
   return { text, name: dispositionName(res), type };
@@ -619,13 +646,14 @@ function loadList(src, limit = MAX_ITEMS) {
   const source = listSource(src);
   if (!source) return Promise.reject(new ListError('That link is not a playlist, a list file of links, a Google Doc, a Drive folder or an archive.org item.'));
   limit = Math.max(1, Math.min(MAX_ITEMS, limit));
-  return listCache.remember(`list:${limit}:${src}`, LIST_TTL, async () => {
+  const key = `list:${limit}:${src}`;
+  const loaded = listCache.remember(key, LIST_TTL, async () => {
     if (source.kind === 'drivefolder') return { dropped: 0, ...(await driveFolder(source.id, limit)) };
     if (source.kind === 'archive') return { dropped: 0, ...(await archiveItem(source.id, limit)) };
     if (source.kind === 'streaming' || source.kind === 'loc' || source.kind === 'eso') {
       const list = source.kind === 'loc' ? await loc.loadList(source) : source.kind === 'eso' ? await eso.loadList(source) : await streaming.loadList(source);
       if (!list.items.length) throw new ListError('That list has nothing in it that can play here.');
-      return { title: list.title, items: list.items.slice(0, limit), truncated: list.items.length > limit, dropped: 0 };
+      return { title: list.title, items: list.items.slice(0, limit), truncated: list.items.length > limit, dropped: 0, partial: !!list.partial };
     }
     let fetched;
     try {
@@ -650,6 +678,9 @@ function loadList(src, limit = MAX_ITEMS) {
     if (!items.length) throw new ListError('None of the links in that file can be played.');
     return { title: clean(parsed.title || name || source.name, 120) || 'Playlist', items, truncated: truncated || parsed.entries.length > MAX_ITEMS, dropped };
   });
+  // A list with some of it missing is loaded again soon, not kept for LIST_TTL.
+  loaded.then(list => { if (list && list.partial) listCache.shorten(key, PARTIAL_LIST_TTL); }, () => {});
+  return loaded;
 }
 
 /**

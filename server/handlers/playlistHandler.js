@@ -413,7 +413,7 @@ async function loadPlaylistSource(ws, id) {
   const allowed = media.allowsMature(ws) ? links : (await screenUnrated(ws, links)).filter(Boolean);
   // Titles for adults are left out where the world doesn't allow them (see media.filterMature).
   const { items } = media.filterMature(ws, allowed);
-  return { title: list.title, items, skipped: list.items.length - items.length + (list.dropped || 0), truncated: !!list.truncated };
+  return { title: list.title, items, skipped: list.items.length - items.length + (list.dropped || 0), truncated: !!list.truncated, partial: !!list.partial };
 }
 
 /** A list's items, each unrated Tubi or Archive one checked (null where it's left out). */
@@ -583,7 +583,7 @@ async function previewList(app, ws, data) {
   ws.listPreviews++;
   try {
     const list = await loadPlaylistSource(ws, id);
-    reply({ title: list.title, items: list.items, skipped: list.skipped, truncated: list.truncated });
+    reply({ title: list.title, items: list.items, skipped: list.skipped, truncated: list.truncated, partial: list.partial });
   } catch (error) {
     console.error(`Error previewing playlist ${id}:`, error.message);
     reply({ error: lists.errorMessage(error) });

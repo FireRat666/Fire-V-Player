@@ -117,7 +117,7 @@ var FireYouTubeResolver = (() => {
      * Looks a video up for this viewer: the master playlist to play, or why it can't.
      * @param {string} id - The 11-character video id.
      * @param {number} maxHeight - The sharpest quality wanted (1080, 720, 480, 360 or 240).
-     * @returns {Promise<{ok: true, url: string, height: number, title: string}|{ok: false, reason: string, unplayable?: boolean, live?: boolean, shorts?: boolean}>}
+     * @returns {Promise<{ok: true, url: string, height: number, title: string, cues: Array<[number, number, string]>}|{ok: false, reason: string, unplayable?: boolean, live?: boolean, shorts?: boolean}>}
      */
     async resolve(id, maxHeight) {
       const key = `${id}@${maxHeight}`;
@@ -144,7 +144,10 @@ var FireYouTubeResolver = (() => {
         return { ok: false, reason: String(msg.reason || ''), unplayable: !!msg.unplayable, live: !!msg.live, shorts: !!msg.shorts };
       }
       const url = `${this.core.getProtocol()}://${this.core.hostUrl}/yt-hls/master.m3u8?m=${msg.m}`;
-      const answer = { ok: true, url, height: Number(msg.height) || 0, title: String(msg.title || '') };
+      // Its captions, [startMs, durMs, text] each (see yt-resolve.js), for the world's player to show.
+      const cues = (Array.isArray(msg.cues) ? msg.cues : []).filter(c => Array.isArray(c) && Number.isFinite(Number(c[0])) && Number.isFinite(Number(c[1])) && typeof c[2] === 'string')
+        .map(c => [Number(c[0]), Number(c[1]), c[2].slice(0, 300)]).sort((x, y) => x[0] - y[0]);
+      const answer = { ok: true, url, height: Number(msg.height) || 0, title: String(msg.title || ''), cues };
       console.log(`[YouTubeNative] ${id}: ${answer.height}p, looked up in ${Math.round(performance.now() - started)} ms.`);
       this.cache.set(key, { at: Date.now(), answer });
       return answer;

@@ -317,7 +317,7 @@ var FireNativeScreen = (() => {
       const home = this.findHome();
       const go = this.go = await core.makeObject('FireVPlayer_VideoScreen', { parent: home || undefined, position: t.position, rotation: t.rotation, scale: t.scale });
       if (this.destroyed) { core.destroyObject(go); return; }
-      this.overlayTimer = setInterval(() => this.updateOverlay(), OVERLAY_TICK_MS);
+      this.overlayTimer = setInterval(() => { this.updateOverlay(); this.updateCaptions(); }, OVERLAY_TICK_MS);
       this.updateOverlay();
       // The lookup failed: the browser plays it, and these words go.
       const toBrowser = (why) => {
@@ -358,6 +358,8 @@ var FireNativeScreen = (() => {
         }
         this.height = found.height;
         url = found.url;
+        // Its captions, shown over the picture while the viewer has captions on (see updateCaptions).
+        this.cues = Array.isArray(found.cues) ? found.cues : [];
       }
       const [w, h] = this.size();
       // The plane's renderer has to exist before the video player, which draws onto its material.
@@ -643,11 +645,13 @@ var FireNativeScreen = (() => {
       if (this.isPreview()) return;
       clearTimeout(this.readyTimer);
       const standalone = typeof this.core.isStandaloneDevice === 'function' && this.core.isStandaloneDevice();
+      // The start this is for (see App.trackReady): a restart of the same song is a new wait.
+      const start = this.core.player ? Number(this.core.player.lastStartTime) : NaN;
       this.readyTimer = setTimeout(() => {
         if (this.destroyed || !this.prepared || this.isPreview()) return;
         const track = this.currentTrack();
         if (!track || track.link !== this.link) return;
-        this.core.sendMessage({ path: Commands.TRACK_READY, data: { link: this.link, native: true } });
+        this.core.sendMessage({ path: Commands.TRACK_READY, data: Object.assign({ link: this.link, native: true }, Number.isFinite(start) ? { start } : {}) });
       }, standalone ? SETTLE_STANDALONE_MS : SETTLE_MS);
     }
 
@@ -755,6 +759,72 @@ var FireNativeScreen = (() => {
       if (this.destroyed) return null;
       this.overlay = { go, ui, root, top, big, bottom, h: H };
       return this.overlay;
+    }
+
+    /**
+     * A YouTube video's captions, at the bottom of the picture: the line for now, while the viewer
+     * has captions on (core.captions, the panel's CC) and no words cover the screen (loading, a
+     * countdown). The world's video player has no captions of its own, so the lookup brings them
+     * (see yt-resolve.js), and each viewer's own choice shows or hides them.
+     */
+    updateCaptions() {
+      if (this.destroyed || !this.go || this.captionsFailed) return;
+      const cues = this.cues || [];
+      let text = '';
+      if (cues.length && this.core.captions !== false && this.prepared && !this.overlayState()) {
+        const t = this.localTime() * 1000;
+        // The last line started by now that hasn't ended (lines are in order of their start).
+        let lo = 0, hi = cues.length - 1, at = -1;
+        while (lo <= hi) { const mid = (lo + hi) >> 1; if (cues[mid][0] <= t) { at = mid; lo = mid + 1; } else hi = mid - 1; }
+        for (let i = at; i >= 0 && i > at - 4; i--) {
+          if (t < cues[i][0] + Math.max(cues[i][1], 500)) { text = cues[i][2]; break; }
+        }
+      }
+      if (text === this.captionText) return;
+      if (!text && !this.captionPanel) { this.captionText = text; return; }
+      if (this.captionBuilding) return; // the next tick picks it up
+      this.captionText = text;
+      this.captionBuilding = true;
+      this.buildCaptions().then(c => {
+        if (!c || this.destroyed) return;
+        const now = this.captionText;
+        try { if (c.label.text !== now) c.label.text = now; } catch (e) {}
+        try {
+          if (typeof c.go.SetActive === 'function') c.go.SetActive(!!now);
+          else c.root.SetStyles({ display: now ? 'flex' : 'none' });
+        } catch (e) {}
+      }).catch(e => {
+        console.warn("[NativeScreen] Couldn't show captions:", e);
+        this.captionsFailed = true;
+      }).finally(() => { this.captionBuilding = false; });
+    }
+
+    /** The panel captions show on, made the first time a line is shown: the picture's size, just in front of it. */
+    async buildCaptions() {
+      if (this.captionPanel) return this.captionPanel;
+      const UIClass = BS.UI || BS.BanterUI;
+      if (typeof UIClass !== 'function' || !this.go) return null;
+      const [w, h] = this.size();
+      const W = OVERLAY_W, H = Math.round(OVERLAY_W * h / w);
+      const s = w / (W / 100);
+      const go = await this.core.makeObject('FireVPlayer_VideoScreenCaptions', {
+        parent: this.go, position: new BS.Vector3(0, 0, -0.008), scale: new BS.Vector3(s, s, s)
+      });
+      if (this.destroyed) { this.core.destroyObject(go); return null; }
+      const made = new UIClass(new BS.Vector2(W, H), false);
+      const ui = (await go.AddComponent(made)) || made;
+      if (this.destroyed) return null;
+      if (typeof ui.SetBackgroundColor === 'function') ui.SetBackgroundColor(new BS.Vector4(0, 0, 0, 0));
+      const root = await ui.CreateVisualElement();
+      root.SetStyles({ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', width: '100%', height: '100%', backgroundColor: 'rgba(0, 0, 0, 0)' });
+      const label = await ui.CreateLabel(undefined, root);
+      label.SetStyles({ color: '#ffffff', backgroundColor: 'rgba(0, 0, 0, 0.75)', textAlign: 'center', whiteSpace: 'normal', maxWidth: '86%',
+        fontSize: `${Math.round(H * 0.05)}px`, paddingLeft: `${Math.round(H * 0.015)}px`, paddingRight: `${Math.round(H * 0.015)}px`,
+        paddingTop: `${Math.round(H * 0.006)}px`, paddingBottom: `${Math.round(H * 0.006)}px`, marginBottom: `${Math.round(H * 0.06)}px` });
+      label.text = '';
+      if (this.destroyed) return null;
+      this.captionPanel = { go, ui, root, label };
+      return this.captionPanel;
     }
 
     /** Shows or hides the words over the screen (moves them out of sight, so they're kept for the next track). */

@@ -14,11 +14,12 @@
  *   { type: 'page', url, title }                 each time the page's address changes
  *   { type: 'station', id, name, genre }         a Shoutcast station was played
  *   { type: 'station', site: 'internetradio', id | stream, name }  an internet-radio.com one was
- *   { type: 'add', what }                        the page's Add button ('page' or 'station')
- *   { type: 'now', what }                        the page's Play Now button (the host)
+ *   { type: 'add', what, link, token }           the page's Add button ('page' or 'station'), for
+ *                                                the offer it was shown for (its link and token)
+ *   { type: 'now', what, link, token }           the page's Play Now button (the host)
  *   { type: 'alert', text }                      the site's alert(), shown on the page as a note
  * Messages in (BS Browser "postmessage" actions, as bsmessage events):
- *   { type: 'offer', text, now, add, extra, note }  shows the bar (now, add, extra: button labels; no text
+ *   { type: 'offer', text, now, add, extra, note, link, token }  shows the bar (now, add, extra: button labels; no text
  *                                                hides it); note: what Shoutcast's failing player says
  * @module public/site-browser
  */
@@ -199,9 +200,11 @@ var FireSiteBrowser = (() => {
     label.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
     label.textContent = o.text;
     bar.appendChild(label);
-    if (o.now) bar.appendChild(button(o.now, '#2e7d32', function () { send({ type: 'now', what: o.what || 'page' }); }));
-    if (o.add) bar.appendChild(button(o.add, o.now ? '#1565c0' : '#2e7d32', function () { send({ type: 'add', what: o.what || 'page' }); }));
-    if (o.extra) bar.appendChild(button(o.extra, '#6a1b9a', function () { send({ type: 'extra', what: o.what || 'page' }); }));
+    // Each button names the offer it was shown for, so the panel ignores one pressed as it changed.
+    var said = function (type) { return { type: type, what: o.what || 'page', link: String(o.link || ''), token: String(o.token || '') }; };
+    if (o.now) bar.appendChild(button(o.now, '#2e7d32', function () { send(said('now')); }));
+    if (o.add) bar.appendChild(button(o.add, o.now ? '#1565c0' : '#2e7d32', function () { send(said('add')); }));
+    if (o.extra) bar.appendChild(button(o.extra, '#6a1b9a', function () { send(said('extra')); }));
     bar.appendChild(button('\\u2715', '#455a64', function () { offer(null); }));
     (document.body || document.documentElement).appendChild(bar);
   }

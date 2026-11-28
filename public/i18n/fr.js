@@ -211,6 +211,7 @@ FVP_STRINGS["fr"] = {
   "Teal": "Sarcelle",
   "That is not a video link.": "Ce n'est pas un lien vidéo.",
   "That link isn't a playlist or video this player can use: {error}": "Ce lien n'est pas une playlist ou une vidéo que ce lecteur peut utiliser : {error}",
+  "That offer changed. Press it again.": "Cette offre a changé. Appuyez encore.",
   "That station can't play here.": "Cette station ne peut pas jouer ici.",
   "That's a playlist: {name}{size}. Replace the playlist, add it all to the end, or save it to Lists (for everyone here, or just for you)?": "C'est une playlist : {name}{size}. Remplacez la liste de lecture, ajoutez-la à la fin ou enregistrez-la dans Listes (pour tout le monde ici, ou juste pour vous)?",
   "The browser is in front of the panel.": "Le navigateur est devant le panneau.",

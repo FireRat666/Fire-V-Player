@@ -126,7 +126,8 @@ function isMatureMeta(meta) {
   const list = value => [].concat(value || []).map(String);
   const subjects = list(meta.subject).flatMap(s => s.split(/[;,]/));
   if (subjects.some(s => ADULT_SUBJECTS.test(s))) return true;
-  const named = list(meta.title).concat(subjects).join(' ');
+  // Runs of spaces count as one, so "stag  film" reads as "stag film".
+  const named = list(meta.title).concat(subjects).join(' ').replace(/\s+/g, ' ');
   if (ADULT_TITLE_WORDS.test(named)) return true;
   // Its HTML's entities decoded (&nbsp; between "stag" and "film" included), so its words match.
   const description = decodeEntities(list(meta.description).join(' ').replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ');

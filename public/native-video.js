@@ -2,7 +2,9 @@
  * @fileoverview Native in-world 3D video screen adapter for Banter / Unity.
  * Substitutes an embedded web browser with a native Unity `BanterVideoPlayer` component
  * rendered directly onto a 3D Plane mesh, bypassing CORS/cross-origin iframe barriers
- * while synchronizing playback with the server.
+ * while synchronizing playback with the server. A Bilibili video takes the same place as a web page
+ * of its own (Bilibili's embed page in a BS Browser, run by a script on it: see PageVideo), synced
+ * the same way.
  * @module public/native-video
  */
 
@@ -65,6 +67,184 @@ var FireNativeScreen = (() => {
   const START_CHECK_MS = 3000, START_KICKS = 2;
 
   /**
+   * Put on Bilibili's embed page (player.bilibili.com/player.html) when it's the screen's page (see
+   * PageVideo). It runs once per page (window.__fvpBili), so the injection can repeat. The page's
+   * own player object (window.player) does the playing: what's wanted (play, volume, a seek) comes
+   * from set(), and the page reports its time and state every half second (O.sendMessage). Its
+   * title, controls, comments and end screen are hidden, and a cover takes every click, so nobody's
+   * click pauses or seeks one screen only; a click on the cover is a gesture that lets it play.
+   */
+  const BILIBILI_SCRIPT = `(function () {
+  if (window.__fvpBili) return;
+  var want = { play: false, volume: 1, seek: 0, seekN: 0 }, seekN = 0, blocked = '';
+  function send(o) {
+    o.from = 'fvp-bili';
+    try { if (window.O && typeof window.O.sendMessage === 'function') window.O.sendMessage('app', JSON.stringify(o)); } catch (e) {}
+  }
+  function player() { var p = window.player; return p && typeof p.play === 'function' && typeof p.getCurrentTime === 'function' ? p : null; }
+  function video() { return document.querySelector('video'); }
+  function paused(p, v) { try { return typeof p.isPaused === 'function' ? !!p.isPaused() : v.paused; } catch (e) { return v.paused; } }
+  function apply() {
+    var p = player(), v = video();
+    if (!p || !v) return;
+    try { if (Math.abs(Number(p.getVolume()) - want.volume) > 0.001) p.setVolume(want.volume); } catch (e) {}
+    if (want.seekN > seekN) { seekN = want.seekN; try { p.seek(want.seek); } catch (e) {} }
+    var now = paused(p, v);
+    if (want.play && now && !v.ended) {
+      try {
+        var r = p.play();
+        if (r && typeof r.then === 'function') r.then(function () { blocked = ''; }, function (e) { blocked = String((e && e.name) || e); });
+      } catch (e) { blocked = String((e && e.name) || e); }
+    } else if (!want.play && !now) {
+      try { p.pause(); } catch (e) {}
+    }
+  }
+  function report() {
+    var p = player(), v = video();
+    var dur = 0, t = 0;
+    try { dur = Number(p && p.getDuration()) || 0; t = Number(p && p.getCurrentTime()) || 0; } catch (e) {}
+    send({ type: 'state', ready: !!(p && v && (v.readyState >= 2 || dur > 0)), t: t, dur: dur,
+      paused: !p || !v || paused(p, v), ended: !!(v && v.ended), blocked: blocked });
+  }
+  function dress() {
+    if (!document.head || !document.body) return false;
+    var css = document.createElement('style');
+    css.textContent = '.bpx-player-top-wrap,.bpx-player-control-wrap,.bpx-player-state-wrap,.bpx-player-ending-wrap,'
+      + '.bpx-player-toast-wrap,.bpx-player-sending-area,.bpx-player-row-dm-wrap,.bpx-player-adv-dm-wrap,'
+      + '.bpx-player-bas-dm-wrap,.bpx-player-cmd-dm-wrap,.bpx-player-share-panel,.bpx-player-relation-wrap,'
+      + '.bpx-player-enter-button{display:none!important}';
+    document.head.appendChild(css);
+    var cover = document.createElement('div');
+    cover.style.cssText = 'position:fixed;left:0;top:0;right:0;bottom:0;z-index:2147483647;background:transparent';
+    ['click', 'dblclick', 'mousedown', 'mouseup', 'pointerdown', 'pointerup', 'touchstart', 'touchend', 'contextmenu', 'wheel'].forEach(function (n) {
+      cover.addEventListener(n, function (e) { e.preventDefault(); e.stopPropagation(); if (n === 'click') apply(); }, true);
+    });
+    document.body.appendChild(cover);
+    return true;
+  }
+  window.__fvpBili = { set: function (w) { if (w && typeof w === 'object') want = w; apply(); report(); } };
+  var dressed = dress();
+  setInterval(function () { if (!dressed) dressed = dress(); apply(); report(); }, 500);
+  send({ type: 'hello' });
+})();`;
+
+  /** Bilibili's embed page for a detected video, paused at its start (PageVideo starts it). */
+  function bilibiliEmbed(media) {
+    const id = String(media.id || '');
+    const key = /^av/i.test(id) ? `aid=${id.slice(2)}` : `bvid=${encodeURIComponent(id)}`;
+    return `https://player.bilibili.com/player.html?${key}&p=${media.part || 1}&autoplay=0&danmaku=0&high_quality=1`;
+  }
+
+  /**
+   * A web page's video as the world's video player would be (time, volume, PlayToggle, and the
+   * state readState reads), for a video that plays as the screen's own page: a Bilibili video, in
+   * Bilibili's embed page in a BS Browser, run by BILIBILI_SCRIPT. The page is sent what's wanted
+   * every couple of seconds as well as on each change, so a reloaded page catches up.
+   */
+  class PageVideo {
+    constructor(go, component, volume, play) {
+      this.go = go;
+      this.component = component;
+      this.want = { play: !!play, volume: Number(volume) || 0, seek: 0, seekN: 0 };
+      this.reported = { ready: false, t: 0, dur: 0, paused: true, ended: false };
+      this.t = 0;
+      this.seekAt = -Infinity;
+      this.scriptIn = false;
+      this.clickedAt = -Infinity;
+      this.hellos = 0;
+      go.On('browser-message', e => this.onMessage(e));
+      this.tick();
+    }
+
+    get time() { return this.t; }
+    set time(t) {
+      this.t = Math.max(0, Number(t) || 0);
+      this.want.seek = this.t;
+      this.want.seekN++;
+      this.seekAt = performance.now();
+      this.push();
+    }
+    get volume() { return this.want.volume; }
+    set volume(v) {
+      this.want.volume = Math.max(0, Math.min(1, Number(v) || 0));
+      this.push();
+    }
+    /** Plays if it says it's paused, and pauses if it says it's playing (as the world's player does). */
+    PlayToggle() {
+      this.want.play = !this.read('isPlaying');
+      this.push();
+    }
+    WatchProperties() {}
+    /** What readState asks for: isPlaying, isPrepared or duration. */
+    read(name) {
+      const r = this.reported;
+      if (name === 'isPlaying') return r.ready && !r.paused && !r.ended;
+      if (name === 'isPrepared') return r.ready;
+      if (name === 'duration') return r.dur;
+      return undefined;
+    }
+    /** The page's picture as a texture second screens (and so the Video Walls) can show. */
+    textureId() {
+      const id = this.component && this.component.unityId;
+      return id != null && id !== '' ? `asset_browser_${id}` : null;
+    }
+
+    run(scripts) {
+      if (this.destroyed) return;
+      const actions = scripts.map(s => ({ actionType: 'runscript', strParam1: s }));
+      try { this.component.RunActions(JSON.stringify({ actions })); } catch (e) {}
+    }
+    setScript() { return `window.__fvpBili&&window.__fvpBili.set(${JSON.stringify(this.want)})`; }
+    push() { this.run([this.setScript()]); }
+
+    /** The whole script until the page says it has it, then what's wanted (and whether it's lost it). */
+    tick() {
+      if (this.destroyed) return;
+      const scripts = [];
+      if (!this.scriptIn) scripts.push(BILIBILI_SCRIPT);
+      scripts.push(`window.__fvpBili?window.__fvpBili.set(${JSON.stringify(this.want)}):(window.O&&O.sendMessage&&O.sendMessage('app','{"from":"fvp-bili","type":"gone"}'))`);
+      this.run(scripts);
+      this.timer = setTimeout(() => this.tick(), this.scriptIn ? 2000 : 1000);
+    }
+
+    onMessage(e) {
+      let msg = e && e.detail;
+      if (typeof msg === 'string') { try { msg = JSON.parse(msg); } catch (err) { return; } }
+      if (!msg || typeof msg !== 'object' || msg.from !== 'fvp-bili' || this.destroyed) return;
+      if (msg.type === 'hello') {
+        this.scriptIn = true;
+        this.push();
+        // A page loaded again (not the first): it starts over, so the screen goes to where the world is.
+        if (this.hellos++ && typeof this.onFresh === 'function') this.onFresh();
+        return;
+      }
+      if (msg.type === 'gone') { this.scriptIn = false; return; }
+      if (msg.type !== 'state') return;
+      const r = this.reported;
+      r.ready = msg.ready === true;
+      r.dur = Number(msg.dur) > 0 ? Number(msg.dur) : 0;
+      r.paused = msg.paused !== false;
+      r.ended = msg.ended === true;
+      // Its time, except a report from before a seek of ours reached it.
+      const t = Number(msg.t);
+      if (Number.isFinite(t) && (performance.now() - this.seekAt > 1500 || Math.abs(t - this.want.seek) < 1.5)) this.t = Math.max(0, t);
+      // The browser wants a gesture before it plays sound: a click on the page's cover is one (at
+      // most every few seconds, while it should be playing and isn't).
+      if (msg.blocked && this.want.play && r.paused && performance.now() - this.clickedAt > 4000) {
+        this.clickedAt = performance.now();
+        console.log(`[NativeScreen] The page couldn't start playing (${msg.blocked}), so it gets a click.`);
+        const [w, h] = [Number(this.component.pageWidth) || 1280, Number(this.component.pageHeight) || 720];
+        try { this.component.RunActions(JSON.stringify({ actions: [{ actionType: 'click2d', numParam1: Math.round(w / 2), numParam2: Math.round(h / 2) }] })); } catch (err) {}
+      }
+    }
+
+    destroy() {
+      this.destroyed = true;
+      clearTimeout(this.timer);
+    }
+  }
+
+  /**
    * Controller class managing the lifecycle of an in-world native video screen.
    */
   return class {
@@ -77,6 +257,10 @@ var FireNativeScreen = (() => {
       this.link = link;
       // A YouTube video plays from the HLS playlists this viewer's own lookup gives (see create).
       this.youtubeId = typeof MediaSources !== 'undefined' ? MediaSources.youtubeId(link) || null : null;
+      // A Bilibili video plays as the screen's own page instead: Bilibili's embed page in a BS
+      // Browser, run by a script on it (see PageVideo).
+      const detected = typeof MediaSources !== 'undefined' ? MediaSources.detect(link) : null;
+      this.bilibili = detected && detected.type === 'bilibili' ? detected : null;
       this.destroyed = false;
       this.prepared = false;
       // The viewer's Auto Sync choice (off unless they turn it on, as on the browser screen). Off,
@@ -113,6 +297,8 @@ var FireNativeScreen = (() => {
      * @returns {[number, number]} Width and height in meters.
      */
     size() {
+      // A page is the browser screen's size (see core.js browserScale).
+      if (this.bilibili) return [SCREEN_WIDTH_M, SCREEN_WIDTH_M * 9 / 16];
       const parts = String(this.core.params['native-screen-size'] || '').trim().split(/\s+/).map(Number);
       return parts.length === 2 && parts.every(n => n > 0) ? parts : DEFAULT_SIZE;
     }
@@ -123,7 +309,8 @@ var FireNativeScreen = (() => {
      */
     async create() {
       const core = this.core;
-      if (!core.inWorld() || !(BS.VideoPlayer || BS.BanterVideoPlayer)) throw new Error('No BS SDK scene or video player.');
+      if (!core.inWorld()) throw new Error('No BS SDK scene.');
+      if (this.bilibili ? !(BS.Browser || BS.BanterBrowser) : !(BS.VideoPlayer || BS.BanterVideoPlayer)) throw new Error('No BS SDK video player or browser.');
       // In the browser screen's place, under the world's video home if it has one (see HOME_NAME).
       // Made first, so its words ("Loading...") show while a YouTube video is looked up.
       const t = core.screenTransform();
@@ -139,6 +326,10 @@ var FireNativeScreen = (() => {
         this.showOverlay(false);
         core.playFileInBrowser(this.link, why);
       };
+      if (this.bilibili) {
+        await this.createPage(go);
+        return;
+      }
       // YouTube: this viewer's own streams first. Each viewer looks a video up for themselves, as
       // YouTube ties the addresses to whoever asked; the room shares only the link and the time.
       let url = this.link;
@@ -183,12 +374,68 @@ var FireNativeScreen = (() => {
       // poll() does (see readState).
       const P = BS.PN || BS.PropertyName;
       try { vp.WatchProperties([P.time]); } catch (e) {}
-      this.state = { isPrepared: false, isPlaying: false, duration: 0 };
-      this.lastRaw = vp.time;
       if (!this.youtubeId) this.startedAt = performance.now();
+      this.startPolling();
+      console.log(`[NativeScreen] Playing ${this.link}${this.youtubeId ? ` (${this.height}p)` : ''} on the world's video player.`);
+    }
+
+    /** Starts reading the player's state, and Auto Sync's checks. */
+    startPolling() {
+      this.state = { isPrepared: false, isPlaying: false, duration: 0 };
+      this.lastRaw = this.vp.time;
       this.pollTimer = setInterval(() => this.poll(), POLL_MS);
       this.syncTimer = setInterval(() => { if (this.autoSync && !this.wantPaused) this.requestSync(false); }, SYNC_EVERY_MS);
-      console.log(`[NativeScreen] Playing ${this.link}${this.youtubeId ? ` (${this.height}p)` : ''} on the world's video player.`);
+    }
+
+    /**
+     * A Bilibili video: Bilibili's embed page in a BS Browser where the browser screen would be, the
+     * same size (the player page's browser is gone meanwhile, so it's the only one). A script on the
+     * page plays it (see PageVideo), so it syncs, pauses, seeks and takes the volume like a file on
+     * the world's video player. Its picture is the browser's texture, for second screens and the
+     * Video Walls. A page that doesn't load in time goes to the player page instead (core.js
+     * playFileInBrowser), where Bilibili plays in a frame.
+     * @param {Object} go - This screen's object.
+     */
+    async createPage(go) {
+      const core = this.core;
+      const [w, h] = core.screenPageSize();
+      const holder = this.pageGo = await core.makeObject('FireVPlayer_ScreenPage', {
+        parent: go, position: new BS.Vector3(0, 0, 0), rotation: new BS.Vector3(0, 0, 0), scale: this.pageScale(w), layer: LAYER_UI
+      });
+      if (this.destroyed) return;
+      const url = bilibiliEmbed(this.bilibili);
+      const mips = core.params['mip-maps'];
+      const component = await core.addComponent(holder, core.bsComponent('Browser',
+        { url, pageWidth: w, pageHeight: h, mipMaps: mips, pixelsPerUnit: SCREEN_PIXELS_PER_M },
+        'BanterBrowser', [url, mips, SCREEN_PIXELS_PER_M, w, h, null]));
+      if (this.destroyed) return;
+      // As the browser screen's: the same volume everywhere, and core.js applyAudio places it.
+      if ('rolloffMode' in component || core.modernSdk()) component.rolloffMode = 0;
+      this.pageSize = [w, h];
+      this.vp = new PageVideo(holder, component, this.unityVolume(), !this.wantPaused && !this.held());
+      this.vp.onFresh = () => { if (!this.destroyed) this.requestSync(true); };
+      this.startedAt = performance.now();
+      this.startPolling();
+      core.applyAudio(true);
+      console.log(`[NativeScreen] Playing ${this.link} as the screen's own page (Bilibili's player).`);
+    }
+
+    /** The page's scale under this screen's object: the browser screen's, without the snippet's own scale. */
+    pageScale(width) {
+      const k = SCREEN_WIDTH_M * SCREEN_PIXELS_PER_M / width;
+      return new BS.Vector3(k, k, 1);
+    }
+
+    /** A Bilibili page takes the viewer's new screen resolution, keeping its size in the world. */
+    applyResolution() {
+      const component = this.vp && this.vp.component;
+      if (!this.bilibili || !component) return;
+      const [w, h] = this.core.screenPageSize();
+      if (this.pageSize && this.pageSize[0] === w) return;
+      this.pageSize = [w, h];
+      component.pageWidth = w;
+      component.pageHeight = h;
+      try { if (this.pageGo && typeof this.pageGo.SetLocalScale === 'function') this.pageGo.SetLocalScale(this.pageScale(w)); } catch (e) {}
     }
 
     /**
@@ -215,8 +462,9 @@ var FireNativeScreen = (() => {
     async readState() {
       const vp = this.vp;
       const P = BS.PN || BS.PropertyName;
-      if (!vp || !P) return;
+      if (!vp || (!P && typeof vp.read !== 'function')) return;
       const get = (name) => {
+        if (typeof vp.read === 'function') return Promise.resolve(vp.read(name)); // a page's video (PageVideo)
         if (typeof vp.GetProperty !== 'function') return Promise.resolve(vp[name]);
         // No answer (an error or a timeout) leaves that value as it was: the component's own field
         // is stale, so it isn't used as a reading.
@@ -338,6 +586,7 @@ var FireNativeScreen = (() => {
      * @returns {string|null}
      */
     textureId() {
+      if (this.vp && typeof this.vp.textureId === 'function') return this.prepared ? this.vp.textureId() : null;
       const id = this.vp && this.vp.unityId;
       return this.prepared && id != null && id !== '' ? `asset_video_${id}` : null;
     }
@@ -823,7 +1072,8 @@ var FireNativeScreen = (() => {
       clearTimeout(this.readyTimer);
       clearInterval(this.overlayTimer);
       clearTimeout(this.startTimer);
-      // Destroying the object destroys the video player with it.
+      if (this.vp && typeof this.vp.destroy === 'function') this.vp.destroy();
+      // Destroying the object destroys the video player (or a page's browser) with it.
       if (this.go) this.core.destroyObject(this.go);
       this.go = null;
       this.vp = null;

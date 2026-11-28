@@ -1261,8 +1261,10 @@ class SdqSource extends BaseMediaSource {
 }
 
 /**
- * Player adapter for a Bilibili video, in Bilibili's own embed player (player.bilibili.com). That
- * player takes no commands from the page around it, only where to start (t=) and whether to start
+ * Player adapter for a Bilibili video, in Bilibili's own embed player (player.bilibili.com), in a
+ * frame on this page: on the 2D page, and in a world when Bilibili's page couldn't be the screen
+ * itself (in a world it normally is, run by a script on it: see native-video.js PageVideo). In a
+ * frame, the player takes no commands from the page around it, only where to start (t=) and whether to start
  * muted, in its address. So this keeps the video's time itself: pausing takes the embed away and
  * shows the video's picture, and playing, seeking and muting load it again at the time it should
  * be at. Its sound can't be turned down, only muted (volume 0 mutes it). A cover over it keeps a

@@ -358,8 +358,16 @@ var Core = class {
   // a time: the other is destroyed, so it isn't running in the background.
   wantsNativeScreen(link) {
     if (!link || !window.isBanter || typeof FireNativeScreen === 'undefined' || !window.MediaSources) return false;
-    if (!this.inWorld() || !(BS.VideoPlayer || BS.BanterVideoPlayer)) return false;
+    if (!this.inWorld()) return false;
     const media = MediaSources.detect(link);
+    // A Bilibili video plays as the screen's own page (Bilibili's embed page, run by a script on
+    // it: see native-video.js PageVideo), so its volume, pause and seek work. Only where the world
+    // allows titles for adults (Bilibili has no ratings); elsewhere the player page says why not.
+    if (media && media.type === 'bilibili') {
+      return this.allowMature === true && (typeof BS.Browser === 'function' || typeof BS.BanterBrowser === 'function')
+        && !(this.browserFiles && this.browserFiles.has(link));
+    }
+    if (!(BS.VideoPlayer || BS.BanterVideoPlayer)) return false;
     if (media && media.type === 'youtube') return this.wantsNativeYouTube(link);
     // Files come from anywhere, so only where the world's owner allows them (as in the browser).
     if (!media || media.type !== 'file' || this.allowUntrusted !== true) return false;
@@ -383,8 +391,11 @@ var Core = class {
     if (!link) return;
     (this.browserFiles = this.browserFiles || new Set()).add(link);
     const youtube = !!(window.MediaSources && MediaSources.youtubeId(link));
+    const bilibili = !!(window.MediaSources && MediaSources.detect(link) && MediaSources.detect(link).type === 'bilibili');
     console.log(`[Core] The world's video player couldn't start ${link}${why ? ` (${why})` : ''}, so it plays in the browser.`);
-    if (youtube) {
+    if (bilibili) {
+      this.showToast("Bilibili's player didn't load as the screen, so it plays inside the player page instead, where its volume can't be turned down.", 7000);
+    } else if (youtube) {
       // Live streams always go this way, so they get no toast.
       if (why !== 'live') this.showToast(`This video can't play on the world's video player${why === 'shorts' ? " (it's a Short)" : ''}, so it plays in the browser instead.`, 6000);
     } else {
@@ -1135,6 +1146,8 @@ var Core = class {
     // A YouTube video on the world's player starts again at the quality the new size wants.
     const native = this.nativeScreen;
     if (native && native.youtubeId && native.maxHeight && native.maxHeight !== this.youtubeMaxHeight()) this.rebuildNativeScreen();
+    // A Bilibili page on the screen takes the new size itself (see native-video.js).
+    if (native && native.bilibili) native.applyResolution();
     const browser = this.browser;
     if (browser && browser.surface) {
       // The space page is the page: it's resized, and the screen keeps its size in metres.

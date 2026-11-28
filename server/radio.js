@@ -139,9 +139,9 @@ function looksLikeRadio(text, type) {
   const parsed = parsePlaylist(text);
   if (!parsed.streams.length) return false;
   if (parsed.format !== 'm3u') return true;
-  // Video links make it a list of videos; a station's own addresses, radio links and sound files
-  // (a live .mp3 stream, often given twice) don't (see isStationStream).
-  if (!parsed.streams.every(s => isStationStream(s.url))) return false;
+  // Links the player knows (videos, and sound files too: an .m3u of songs is a playlist, as a file
+  // name alone doesn't show a stream is live) make it a list, not a station.
+  if (parsed.streams.some(s => MediaSources.detect(s.url) && MediaSources.detect(s.url).type !== 'radio')) return false;
   return /mpegurl|scpls/i.test(type || '') || parsed.streams.length <= 10;
 }
 
@@ -406,10 +406,12 @@ async function streamFor(link) {
 async function relayType(url) {
   const key = `relaytype:${url}`;
   try {
-    // As the relay fetches (it follows redirects to http too).
-    const type = await cache.remember(key, HTTPS_TTL_MS, () => answersWithSound(url, RELAY_UA, false));
-    // No sound this time may be a passing failure (a 503): asked again in a minute, not an hour.
-    if (!type) cache.set(key, '', RETRY_TTL_MS);
+    // As the relay fetches (it follows redirects to http too). No sound from a fresh check may be
+    // a passing failure (a 503): it's asked again in a minute, not an hour. Reading that answer
+    // back doesn't put the next check off.
+    let fresh = false;
+    const type = await cache.remember(key, HTTPS_TTL_MS, () => { fresh = true; return answersWithSound(url, RELAY_UA, false); });
+    if (!type && fresh) cache.set(key, '', RETRY_TTL_MS);
     return type;
   } catch (e) {
     return '';
